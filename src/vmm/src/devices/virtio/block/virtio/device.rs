@@ -210,6 +210,8 @@ pub struct VirtioBlockConfig {
     #[serde(default)]
     #[serde(rename = "io_engine")]
     pub file_engine_type: FileEngineType,
+
+    pub mmio_optimized: bool,
 }
 
 impl TryFrom<&BlockDeviceConfig> for VirtioBlockConfig {
@@ -227,6 +229,7 @@ impl TryFrom<&BlockDeviceConfig> for VirtioBlockConfig {
                 path_on_host: value.path_on_host.as_ref().unwrap().clone(),
                 rate_limiter: value.rate_limiter,
                 file_engine_type: value.file_engine_type.unwrap_or_default(),
+                mmio_optimized: value.mmio_optimized,
             })
         } else {
             Err(VirtioBlockError::Config)
@@ -248,6 +251,7 @@ impl From<VirtioBlockConfig> for BlockDeviceConfig {
             file_engine_type: Some(value.file_engine_type),
 
             socket: None,
+            mmio_optimized: true,
         }
     }
 }
@@ -279,6 +283,8 @@ pub struct VirtioBlock {
     pub rate_limiter: RateLimiter,
     pub is_io_engine_throttled: bool,
     pub metrics: Arc<BlockDeviceMetrics>,
+
+    pub mmio_optimized: bool,
 }
 
 macro_rules! unwrap_async_file_engine_or_return {
@@ -325,10 +331,12 @@ impl VirtioBlock {
 
         let queues = BLOCK_QUEUE_SIZES.iter().map(|&s| Queue::new(s)).collect();
 
+        let config_space = disk_properties.virtio_block_config_space();
+
         Ok(VirtioBlock {
             avail_features,
             acked_features: 0u64,
-            config_space: disk_properties.virtio_block_config_space(),
+            config_space,
             activate_evt: EventFd::new(libc::EFD_NONBLOCK).map_err(VirtioBlockError::EventFd)?,
 
             queues,
@@ -346,6 +354,7 @@ impl VirtioBlock {
             rate_limiter,
             is_io_engine_throttled: false,
             metrics: BlockMetricsPerDevice::alloc(config.drive_id),
+            mmio_optimized: config.mmio_optimized,
         })
     }
 
@@ -361,6 +370,7 @@ impl VirtioBlock {
             cache_type: self.cache_type,
             rate_limiter: rl.into_option(),
             file_engine_type: self.file_engine_type(),
+            mmio_optimized: self.mmio_optimized,
         }
     }
 
@@ -667,6 +677,38 @@ impl VirtioDevice for VirtioBlock {
 
     fn is_activated(&self) -> bool {
         self.device_state.is_activated()
+    }
+
+    fn configure_mmio_memory(&self, mmio_memory: &mut [u8]) {
+        let mmio_memory_u32: &mut [u32] = unsafe {
+            std::slice::from_raw_parts_mut(mmio_memory.as_mut_ptr().cast(), mmio_memory.len() / 4)
+        };
+
+        // MagicValue
+        mmio_memory_u32[0] = 0x7472_6976;
+        // Device version number
+        mmio_memory_u32[1] = 2;
+        // Virtio Subsystem Device ID
+        mmio_memory_u32[2] = TYPE_BLOCK;
+        // Virtio Subsystem Vendor ID
+        mmio_memory_u32[3] = 0;
+        // Maximum virtual queue size
+        mmio_memory_u32[13] = 256;
+        // interrupt status
+        mmio_memory_u32[24] = 1;
+        // detvice status
+        mmio_memory_u32[28] = 0;
+        // configuraton generation
+        mmio_memory_u32[63] = 0;
+
+        // copy config
+        let config_u32: &[u32] = unsafe {
+            std::slice::from_raw_parts(
+                self.config_space.as_ptr().cast(),
+                self.config_space.len() / 4,
+            )
+        };
+        mmio_memory_u32[64..64 + config_u32.len()].copy_from_slice(config_u32);
     }
 }
 

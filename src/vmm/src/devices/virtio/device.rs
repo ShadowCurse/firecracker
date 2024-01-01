@@ -179,6 +179,8 @@ pub trait VirtioDevice: AsAny + Send {
     fn reset(&mut self) -> Option<(EventFd, Vec<EventFd>)> {
         None
     }
+
+    fn configure_mmio_memory(&self, _mmio_memory: &mut [u8]) {}
 }
 
 impl fmt::Debug for dyn VirtioDevice {

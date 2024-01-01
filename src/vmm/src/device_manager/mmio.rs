@@ -176,6 +176,7 @@ impl MMIODeviceManager {
         device_id: String,
         mmio_device: MmioTransport,
         device_info: &MMIODeviceInfo,
+        mmio_optimization: bool,
     ) -> Result<(), MmioError> {
         // Our virtio devices are currently hardcoded to use a single IRQ.
         // Validate that requirement.
@@ -195,6 +196,20 @@ impl MMIODeviceManager {
             }
             vm.register_irqfd(locked_device.interrupt_evt(), device_info.irqs[0])
                 .map_err(MmioError::RegisterIrqFd)?;
+
+            if mmio_optimization {
+                let memory_region = kvm_bindings::kvm_userspace_memory_region {
+                    // Add 2 because guest memory can have up 2 regions (on x86_64)
+                    slot: 2 + self.bus.len() as u32,
+                    guest_phys_addr: device_info.addr,
+                    memory_size: device_info.len,
+                    userspace_addr: mmio_device.mmio_memory.as_ptr() as u64,
+                    flags: kvm_bindings::KVM_MEM_READONLY,
+                };
+                if let Err(e) = unsafe { vm.set_user_memory_region(memory_region) } {
+                    println!("error setting block mmio mem: {e}");
+                }
+            }
         }
 
         self.register_mmio_device(
@@ -234,9 +249,10 @@ impl MMIODeviceManager {
         device_id: String,
         mmio_device: MmioTransport,
         _cmdline: &mut kernel_cmdline::Cmdline,
+        mmio_optimization: bool,
     ) -> Result<MMIODeviceInfo, MmioError> {
         let device_info = self.allocate_mmio_resources(resource_allocator, 1)?;
-        self.register_mmio_virtio(vm, device_id, mmio_device, &device_info)?;
+        self.register_mmio_virtio(vm, device_id, mmio_device, &device_info, mmio_optimization)?;
         #[cfg(target_arch = "x86_64")]
         {
             Self::add_virtio_device_to_cmdline(_cmdline, &device_info)?;

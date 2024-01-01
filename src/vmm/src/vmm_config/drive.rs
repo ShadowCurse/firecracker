@@ -62,6 +62,8 @@ pub struct BlockDeviceConfig {
     // VhostUserBlock specific fields
     /// Path to the vhost-user socket.
     pub socket: Option<String>,
+
+    pub mmio_optimized: bool,
 }
 
 /// Only provided fields will be updated. I.e. if any optional fields
