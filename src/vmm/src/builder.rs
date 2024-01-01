@@ -40,9 +40,10 @@ use crate::cpu_config::templates::{
 use crate::device_manager::acpi::ACPIDeviceManager;
 #[cfg(target_arch = "x86_64")]
 use crate::device_manager::legacy::PortIODeviceManager;
-use crate::device_manager::mmio::MMIODeviceManager;
+use crate::device_manager::mmio::{MMIODeviceInfo, MMIODeviceManager};
+use crate::device_manager::persist::MMIODevManagerConstructorArgs;
 use crate::device_manager::persist::{
-    ACPIDeviceManagerConstructorArgs, ACPIDeviceManagerRestoreError, MMIODevManagerConstructorArgs,
+    ACPIDeviceManagerConstructorArgs, ACPIDeviceManagerRestoreError,
 };
 use crate::device_manager::resources::ResourceAllocator;
 use crate::devices::acpi::vmgenid::{VmGenId, VmGenIdError};
@@ -176,7 +177,7 @@ fn create_vmm_and_vcpus(
     let resource_allocator = ResourceAllocator::new()?;
 
     // Instantiate the MMIO device manager.
-    let mmio_device_manager = MMIODeviceManager::new();
+    let mmio_device_manager = MMIODeviceManager::new(&vm.fd());
 
     // Instantiate ACPI device manager.
     let acpi_device_manager = ACPIDeviceManager::new();
@@ -867,7 +868,7 @@ fn attach_virtio_device<T: 'static + VirtioDevice + MutEventSubscriber + Debug>(
     device: Arc<Mutex<T>>,
     cmdline: &mut LoaderKernelCmdline,
     is_vhost_user: bool,
-) -> Result<(), StartMicrovmError> {
+) -> Result<MMIODeviceInfo, StartMicrovmError> {
     use self::StartMicrovmError::*;
 
     event_manager.add_subscriber(device.clone());
@@ -883,7 +884,6 @@ fn attach_virtio_device<T: 'static + VirtioDevice + MutEventSubscriber + Debug>(
             cmdline,
         )
         .map_err(RegisterMmioDevice)
-        .map(|_| ())
 }
 
 pub(crate) fn attach_boot_timer_device(
@@ -931,7 +931,8 @@ fn attach_entropy_device(
         entropy_device.clone(),
         cmdline,
         false,
-    )
+    )?;
+    Ok(())
 }
 
 fn attach_block_devices<'a, I: Iterator<Item = &'a Arc<Mutex<Block>>> + Debug>(
@@ -977,7 +978,11 @@ fn attach_net_devices<'a, I: Iterator<Item = &'a Arc<Mutex<Net>>> + Debug>(
     event_manager: &mut EventManager,
 ) -> Result<(), StartMicrovmError> {
     for net_device in net_devices {
-        let id = net_device.lock().expect("Poisoned lock").id().clone();
+        let id = {
+            let locked = net_device.lock().expect("Poisoned lock");
+            let id = locked.id().clone();
+            id
+        };
         // The device mutex mustn't be locked here otherwise it will deadlock.
         attach_virtio_device(event_manager, vmm, id, net_device.clone(), cmdline, false)?;
     }
@@ -992,7 +997,8 @@ fn attach_unixsock_vsock_device(
 ) -> Result<(), StartMicrovmError> {
     let id = String::from(unix_vsock.lock().expect("Poisoned lock").id());
     // The device mutex mustn't be locked here otherwise it will deadlock.
-    attach_virtio_device(event_manager, vmm, id, unix_vsock.clone(), cmdline, false)
+    attach_virtio_device(event_manager, vmm, id, unix_vsock.clone(), cmdline, false)?;
+    Ok(())
 }
 
 fn attach_balloon_device(
@@ -1003,7 +1009,8 @@ fn attach_balloon_device(
 ) -> Result<(), StartMicrovmError> {
     let id = String::from(balloon.lock().expect("Poisoned lock").id());
     // The device mutex mustn't be locked here otherwise it will deadlock.
-    attach_virtio_device(event_manager, vmm, id, balloon.clone(), cmdline, false)
+    attach_virtio_device(event_manager, vmm, id, balloon.clone(), cmdline, false)?;
+    Ok(())
 }
 
 // Adds `O_NONBLOCK` to the stdout flags.

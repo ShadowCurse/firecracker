@@ -210,6 +210,20 @@ impl VirtioDevice for Block {
             Self::VhostUser(b) => b.device_state.is_activated(),
         }
     }
+
+    fn mmio_optimized(&self) -> bool {
+        match self {
+            Self::Virtio(b) => b.mmio_mem.is_some(),
+            Self::VhostUser(_) => false,
+        }
+    }
+
+    fn configure_mmio_memory(&mut self, mem_ptr: *mut u8) {
+        match self {
+            Self::Virtio(b) => b.configure_mmio_memory(mem_ptr),
+            Self::VhostUser(_) => {}
+        }
+    }
 }
 
 impl MutEventSubscriber for Block {

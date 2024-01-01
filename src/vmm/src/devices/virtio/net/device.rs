@@ -263,6 +263,7 @@ pub struct Net {
 
     tx_buffer: IoVecBuffer,
     pub(crate) rx_buffer: RxBuffers,
+    pub mmio_optimized: bool,
 }
 
 impl Net {
@@ -273,6 +274,7 @@ impl Net {
         guest_mac: Option<MacAddr>,
         rx_rate_limiter: RateLimiter,
         tx_rate_limiter: RateLimiter,
+        mmio_optimized: bool,
     ) -> Result<Self, NetError> {
         let mut avail_features = 1 << VIRTIO_NET_F_GUEST_CSUM
             | 1 << VIRTIO_NET_F_CSUM
@@ -321,6 +323,7 @@ impl Net {
             metrics: NetMetricsPerDevice::alloc(id),
             tx_buffer: Default::default(),
             rx_buffer: RxBuffers::new()?,
+            mmio_optimized,
         })
     }
 
@@ -331,6 +334,7 @@ impl Net {
         guest_mac: Option<MacAddr>,
         rx_rate_limiter: RateLimiter,
         tx_rate_limiter: RateLimiter,
+        mmio_optimized: bool,
     ) -> Result<Self, NetError> {
         let tap = Tap::open_named(tap_if_name).map_err(NetError::TapOpen)?;
 
@@ -338,7 +342,14 @@ impl Net {
         tap.set_vnet_hdr_size(vnet_hdr_size)
             .map_err(NetError::TapSetVnetHdrSize)?;
 
-        Self::new_with_tap(id, tap, guest_mac, rx_rate_limiter, tx_rate_limiter)
+        Self::new_with_tap(
+            id,
+            tap,
+            guest_mac,
+            rx_rate_limiter,
+            tx_rate_limiter,
+            mmio_optimized,
+        )
     }
 
     /// Provides the ID of this net device.
@@ -1023,6 +1034,44 @@ impl VirtioDevice for Net {
 
     fn is_activated(&self) -> bool {
         self.device_state.is_activated()
+    }
+
+    fn mmio_optimized(&self) -> bool {
+        self.mmio_optimized
+    }
+
+    fn configure_mmio_memory(&mut self, mem_ptr: *mut u8) {
+        unsafe {
+            log::info!("Net: configure_mmio_memory: ptr: {:p}", mem_ptr,);
+            let mem_u32_ptr: *mut u32 = mem_ptr.cast();
+
+            // MagicValue
+            mem_u32_ptr.add(0).write_volatile(0x7472_6976);
+            // Device version number
+            mem_u32_ptr.add(1).write_volatile(2);
+            // Virtio Subsystem Device ID
+            mem_u32_ptr.add(2).write_volatile(TYPE_NET);
+            // Virtio Subsystem Vendor ID
+            mem_u32_ptr.add(3).write_volatile(0);
+            // Maximum virtual queue size
+            mem_u32_ptr
+                .add(13)
+                .write_volatile(NET_QUEUE_MAX_SIZE as u32);
+            // interrupt status
+            mem_u32_ptr.add(24).write_volatile(1);
+            // detvice status
+            mem_u32_ptr.add(28).write_volatile(0);
+            // configuraton generation
+            mem_u32_ptr.add(63).write_volatile(0);
+
+            // copy config
+            let config_slice = self.config_space.as_slice();
+            std::ptr::copy_nonoverlapping(
+                config_slice.as_ptr(),
+                mem_ptr.add(256),
+                config_slice.len(),
+            );
+        }
     }
 }
 

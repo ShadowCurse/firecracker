@@ -27,6 +27,13 @@ pub struct NetworkInterfaceConfig {
     pub rx_rate_limiter: Option<RateLimiterConfig>,
     /// Rate Limiter for transmitted packages.
     pub tx_rate_limiter: Option<RateLimiterConfig>,
+
+    #[serde(default = "mmio_optimized_default")]
+    pub mmio_optimized: bool,
+}
+
+fn mmio_optimized_default() -> bool {
+    true
 }
 
 impl From<&Net> for NetworkInterfaceConfig {
@@ -39,6 +46,7 @@ impl From<&Net> for NetworkInterfaceConfig {
             guest_mac: net.guest_mac().copied(),
             rx_rate_limiter: rx_rl.into_option(),
             tx_rate_limiter: tx_rl.into_option(),
+            mmio_optimized: false,
         }
     }
 }
@@ -161,6 +169,7 @@ impl NetBuilder {
             cfg.guest_mac,
             rx_rate_limiter.unwrap_or_default(),
             tx_rate_limiter.unwrap_or_default(),
+            cfg.mmio_optimized,
         )
         .map_err(NetworkInterfaceError::CreateNetworkDevice)
     }

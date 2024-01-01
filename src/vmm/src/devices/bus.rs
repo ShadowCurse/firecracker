@@ -172,7 +172,14 @@ impl BusDevice {
             #[cfg(target_arch = "aarch64")]
             Self::RTCDevice(x) => x.bus_read(offset, data),
             Self::BootTimer(x) => x.bus_read(offset, data),
-            Self::MmioTransport(x) => x.bus_read(offset, data),
+            Self::MmioTransport(x) => {
+                if x.mmio_memory_ptr.is_some() {
+                    println!("should not do reads: ofsset: {offset}, data: {data:?}");
+                    panic!();
+                } else {
+                    x.bus_read(offset, data)
+                }
+            }
             Self::Serial(x) => x.bus_read(offset, data),
             #[cfg(test)]
             Self::Dummy(x) => x.bus_read(offset, data),
@@ -187,7 +194,13 @@ impl BusDevice {
             #[cfg(target_arch = "aarch64")]
             Self::RTCDevice(x) => x.bus_write(offset, data),
             Self::BootTimer(x) => x.bus_write(offset, data),
-            Self::MmioTransport(x) => x.bus_write(offset, data),
+            Self::MmioTransport(x) => {
+                if x.mmio_memory_ptr.is_some() {
+                    x.write_mem(offset, data)
+                } else {
+                    x.bus_write(offset, data)
+                }
+            }
             Self::Serial(x) => x.bus_write(offset, data),
             #[cfg(test)]
             Self::Dummy(x) => x.bus_write(offset, data),
@@ -218,6 +231,10 @@ impl Bus {
         Bus {
             devices: BTreeMap::new(),
         }
+    }
+
+    pub fn len(&self) -> usize {
+        self.devices.len()
     }
 
     fn first_before(&self, addr: u64) -> Option<(BusRange, &Mutex<BusDevice>)> {
