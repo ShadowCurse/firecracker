@@ -213,6 +213,7 @@ impl Persist<'_> for MmioTransport {
             constructor_args.mem,
             constructor_args.device,
             constructor_args.is_vhost_user,
+            false,
         );
         transport.features_select = state.features_select;
         transport.acked_features_select = state.acked_features_select;
