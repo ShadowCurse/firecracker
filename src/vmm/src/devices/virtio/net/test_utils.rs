@@ -47,6 +47,7 @@ pub fn default_net() -> Net {
         Some(guest_mac),
         RateLimiter::default(),
         RateLimiter::default(),
+        false,
     )
     .unwrap();
     net.configure_mmds_network_stack(
@@ -70,6 +71,7 @@ pub fn default_net_no_mmds() -> Net {
         Some(guest_mac),
         RateLimiter::default(),
         RateLimiter::default(),
+        false,
     )
     .unwrap();
     enable(&net.tap);

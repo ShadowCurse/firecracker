@@ -144,6 +144,7 @@ pub struct Net {
     pub(crate) metrics: Arc<NetDeviceMetrics>,
 
     tx_buffer: IoVecBuffer,
+    pub mmio_optimized: bool,
 }
 
 impl Net {
@@ -154,6 +155,7 @@ impl Net {
         guest_mac: Option<MacAddr>,
         rx_rate_limiter: RateLimiter,
         tx_rate_limiter: RateLimiter,
+        mmio_optimized: bool,
     ) -> Result<Self, NetError> {
         let mut avail_features = 1 << VIRTIO_NET_F_GUEST_CSUM
             | 1 << VIRTIO_NET_F_CSUM
@@ -202,6 +204,7 @@ impl Net {
             mmds_ns: None,
             metrics: NetMetricsPerDevice::alloc(id),
             tx_buffer: Default::default(),
+            mmio_optimized,
         })
     }
 
@@ -212,6 +215,7 @@ impl Net {
         guest_mac: Option<MacAddr>,
         rx_rate_limiter: RateLimiter,
         tx_rate_limiter: RateLimiter,
+        mmio_optimized: bool,
     ) -> Result<Self, NetError> {
         let tap = Tap::open_named(tap_if_name).map_err(NetError::TapOpen)?;
 
@@ -219,7 +223,7 @@ impl Net {
         tap.set_vnet_hdr_size(vnet_hdr_size)
             .map_err(NetError::TapSetVnetHdrSize)?;
 
-        Self::new_with_tap(id, tap, guest_mac, rx_rate_limiter, tx_rate_limiter)
+        Self::new_with_tap(id, tap, guest_mac, rx_rate_limiter, tx_rate_limiter, mmio_optimized)
     }
 
     /// Provides the ID of this net device.
@@ -925,6 +929,33 @@ impl VirtioDevice for Net {
 
     fn is_activated(&self) -> bool {
         self.device_state.is_activated()
+    }
+
+    fn configure_mmio_memory(&mut self, mmio_memory: &mut [u8]) {
+        let mmio_memory_u32: &mut [u32] = unsafe {
+            std::slice::from_raw_parts_mut(mmio_memory.as_mut_ptr().cast(), mmio_memory.len() / 4)
+        };
+
+        // MagicValue
+        mmio_memory_u32[0] = 0x7472_6976;
+        // Device version number
+        mmio_memory_u32[1] = 2;
+        // Virtio Subsystem Device ID
+        mmio_memory_u32[2] = TYPE_NET;
+        // Virtio Subsystem Vendor ID
+        mmio_memory_u32[3] = 0;
+        // Maximum virtual queue size
+        mmio_memory_u32[13] = 256;
+        // interrupt status
+        mmio_memory_u32[24] = 1;
+        // detvice status
+        mmio_memory_u32[28] = 0;
+        // configuraton generation
+        mmio_memory_u32[63] = 0;
+
+        // copy config
+        let config_slice = self.config_space.as_slice();
+        mmio_memory[64 * 4..64 * 4 + config_slice.len()].copy_from_slice(config_slice);
     }
 }
 

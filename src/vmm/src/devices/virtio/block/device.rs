@@ -124,6 +124,13 @@ impl Block {
             Self::VhostUser(_) => true,
         }
     }
+
+    pub fn mmio_optimization(&self) -> bool {
+        match self {
+            Self::Virtio(b) => b.mmio_mem.is_some(),
+            Self::VhostUser(_) => false,
+        }
+    }
 }
 
 impl VirtioDevice for Block {
@@ -205,6 +212,13 @@ impl VirtioDevice for Block {
         match self {
             Self::Virtio(b) => b.device_state.is_activated(),
             Self::VhostUser(b) => b.device_state.is_activated(),
+        }
+    }
+
+    fn configure_mmio_memory(&mut self, mmio_memory: &mut [u8]) {
+        match self {
+            Self::Virtio(b) => b.configure_mmio_memory(mmio_memory),
+            Self::VhostUser(b) => {}
         }
     }
 }
