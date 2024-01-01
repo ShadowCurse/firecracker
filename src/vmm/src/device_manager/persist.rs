@@ -412,7 +412,7 @@ impl<'a> Persist<'a> for MMIODeviceManager {
         constructor_args: Self::ConstructorArgs,
         state: &Self::State,
     ) -> Result<Self, Self::Error> {
-        let mut dev_manager = MMIODeviceManager::new();
+        let mut dev_manager = MMIODeviceManager::new(constructor_args.vm);
         let mem = constructor_args.mem;
         let vm = constructor_args.vm;
 

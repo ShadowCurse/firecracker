@@ -84,6 +84,8 @@ impl IrqTrigger {
     }
 }
 
+pub const MMIO_DEVICE_SIZE: u64 = 300;
+
 /// Trait for virtio devices to be driven by a virtio transport.
 ///
 /// The lifecycle of a virtio device is to be moved to a virtio transport, which will then query the
@@ -188,6 +190,12 @@ pub trait VirtioDevice: AsAny + Send {
         }
         Ok(())
     }
+
+    fn mmio_optimized(&self) -> bool {
+        false
+    }
+
+    fn configure_mmio_memory(&mut self, _mem_ptr: *mut u8) {}
 }
 
 impl fmt::Debug for dyn VirtioDevice {

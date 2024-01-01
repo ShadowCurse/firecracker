@@ -325,7 +325,8 @@ pub struct VmState {
 
 #[cfg(target_arch = "x86_64")]
 impl Vm {
-    const DEFAULT_CAPABILITIES: [u32; 14] = [
+    const DEFAULT_CAPABILITIES: [u32; 15] = [
+        kvm_bindings::KVM_CAP_READONLY_MEM,
         kvm_bindings::KVM_CAP_IRQCHIP,
         kvm_bindings::KVM_CAP_IOEVENTFD,
         kvm_bindings::KVM_CAP_IRQFD,

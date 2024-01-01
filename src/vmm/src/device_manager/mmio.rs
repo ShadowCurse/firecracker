@@ -22,14 +22,14 @@ use vm_allocator::AllocPolicy;
 use super::resources::ResourceAllocator;
 #[cfg(target_arch = "aarch64")]
 use crate::arch::aarch64::DeviceInfoForFDT;
-use crate::arch::DeviceType;
 use crate::arch::DeviceType::Virtio;
+use crate::arch::{DeviceType, MMIO_MEM_START};
 #[cfg(target_arch = "aarch64")]
 use crate::devices::legacy::RTCDevice;
 use crate::devices::pseudo::BootTimer;
 use crate::devices::virtio::balloon::Balloon;
 use crate::devices::virtio::block::device::Block;
-use crate::devices::virtio::device::VirtioDevice;
+use crate::devices::virtio::device::{VirtioDevice, MMIO_DEVICE_SIZE};
 use crate::devices::virtio::mmio::MmioTransport;
 use crate::devices::virtio::net::Net;
 use crate::devices::virtio::rng::Entropy;
@@ -81,6 +81,8 @@ pub struct MMIODeviceInfo {
     pub len: u64,
     /// Used Irq line(s) for the device.
     pub irqs: Vec<u32>,
+    /// Userspace ptr to the mmio region assigne to this device.
+    pub user_addr: u64,
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -131,16 +133,44 @@ pub struct MMIODeviceManager {
     // devices in the order they were added.
     #[cfg(target_arch = "x86_64")]
     pub(crate) dsdt_data: Vec<u8>,
+
+    // One page of mmio region which will contain mmio optimizied devices.
+    mmio_memory: Vec<u8>,
 }
 
 impl MMIODeviceManager {
     /// Create a new DeviceManager handling mmio devices (virtio net, block).
-    pub fn new() -> MMIODeviceManager {
+    pub fn new(vm: &VmFd) -> MMIODeviceManager {
+        let layout = std::alloc::Layout::array::<u8>(0x1000)
+            .unwrap()
+            .align_to(0x1000)
+            .unwrap();
+        let mmio_memory: Vec<u8> = unsafe {
+            let mem = std::alloc::alloc(layout).cast::<u8>();
+            if mem.is_null() {
+                println!("error allocating mem");
+            }
+            Vec::from_raw_parts(mem, 0x1000, 0x1000)
+        };
+
+        let memory_region = kvm_bindings::kvm_userspace_memory_region {
+            slot: 3,
+            guest_phys_addr: MMIO_MEM_START,
+            memory_size: 0x1000,
+            userspace_addr: mmio_memory.as_ptr() as u64,
+            flags: kvm_bindings::KVM_MEM_READONLY,
+        };
+        if let Err(e) = unsafe { vm.set_user_memory_region(memory_region) } {
+            panic!("error setting block mmio mem: {e}");
+        }
+
         MMIODeviceManager {
             bus: crate::devices::Bus::new(),
             id_to_dev_info: HashMap::new(),
             #[cfg(target_arch = "x86_64")]
             dsdt_data: vec![],
+
+            mmio_memory,
         }
     }
 
@@ -159,6 +189,25 @@ impl MMIODeviceManager {
             )?,
             len: MMIO_LEN,
             irqs,
+            user_addr: 0,
+        };
+        Ok(device_info)
+    }
+
+    /// Allocates resources for a new device to be added.
+    fn allocate_first_page_mmio_resources(
+        &mut self,
+        resource_allocator: &mut ResourceAllocator,
+        irq_count: u32,
+    ) -> Result<MMIODeviceInfo, MmioError> {
+        let irqs = resource_allocator.allocate_gsi(irq_count)?;
+        let addr = resource_allocator.allocate_first_page_mmio_memory(MMIO_DEVICE_SIZE, 4);
+        let user_addr = (&self.mmio_memory[(addr - MMIO_MEM_START) as usize]) as *const u8 as u64;
+        let device_info = MMIODeviceInfo {
+            addr,
+            len: MMIO_DEVICE_SIZE,
+            irqs,
+            user_addr,
         };
         Ok(device_info)
     }
@@ -182,7 +231,7 @@ impl MMIODeviceManager {
         &mut self,
         vm: &VmFd,
         device_id: String,
-        mmio_device: MmioTransport,
+        mut mmio_device: MmioTransport,
         device_info: &MMIODeviceInfo,
     ) -> Result<(), MmioError> {
         // Our virtio devices are currently hardcoded to use a single IRQ.
@@ -206,6 +255,11 @@ impl MMIODeviceManager {
                 device_info.irqs[0],
             )
             .map_err(MmioError::RegisterIrqFd)?;
+        }
+
+        let mmio_optimized = mmio_device.locked_device().mmio_optimized();
+        if mmio_optimized {
+            mmio_device.set_mmio_memory(device_info);
         }
 
         self.register_mmio_device(
@@ -246,8 +300,22 @@ impl MMIODeviceManager {
         mmio_device: MmioTransport,
         _cmdline: &mut kernel_cmdline::Cmdline,
     ) -> Result<MMIODeviceInfo, MmioError> {
-        let device_info = self.allocate_mmio_resources(resource_allocator, 1)?;
+        let device_type = mmio_device.locked_device().device_type();
+        let mmio_optimized = mmio_device.locked_device().mmio_optimized();
+
+        let device_info = if !mmio_optimized {
+            self.allocate_mmio_resources(resource_allocator, 1)?
+        } else {
+            self.allocate_first_page_mmio_resources(resource_allocator, 1)?
+        };
+        log::info!(
+            "Device type: {} with mmio_size: {}, device_info: {:?}",
+            device_type,
+            MMIO_DEVICE_SIZE,
+            device_info
+        );
         self.register_mmio_virtio(vm, device_id, mmio_device, &device_info)?;
+
         #[cfg(target_arch = "x86_64")]
         {
             Self::add_virtio_device_to_cmdline(_cmdline, &device_info)?;

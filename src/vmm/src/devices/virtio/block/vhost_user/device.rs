@@ -100,6 +100,7 @@ impl From<VhostUserBlockConfig> for BlockDeviceConfig {
             file_engine_type: None,
 
             socket: Some(value.socket),
+            mmio_optimized: false,
         }
     }
 }
