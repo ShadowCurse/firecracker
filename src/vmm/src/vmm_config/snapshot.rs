@@ -25,7 +25,7 @@ pub enum SnapshotType {
 /// 1) A file that contains the guest memory to be loaded,
 /// 2) An UDS where a custom page-fault handler process is listening for the UFFD set up by
 ///    Firecracker to handle its guest memory page faults.
-#[derive(Debug, PartialEq, Eq, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MemBackendType {
     /// Guest memory contents will be loaded from a file.
     File,
@@ -34,7 +34,7 @@ pub enum MemBackendType {
 }
 
 /// Stores the configuration that will be used for creating a snapshot.
-#[derive(Debug, PartialEq, Eq, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateSnapshotParams {
     /// This marks the type of snapshot we want to create.
@@ -63,7 +63,7 @@ pub struct LoadSnapshotParams {
 }
 
 /// Stores the configuration for loading a snapshot that is provided by the user.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LoadSnapshotConfig {
     /// Path to the file that contains the microVM state to be loaded.
@@ -85,7 +85,7 @@ pub struct LoadSnapshotConfig {
 }
 
 /// Stores the configuration used for managing snapshot memory.
-#[derive(Debug, PartialEq, Eq, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MemBackendConfig {
     /// Path to the backend used to handle the guest memory.

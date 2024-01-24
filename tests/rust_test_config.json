@@ -1,0 +1,9 @@
+{
+  "firecracker_path": "../../build/cargo_target/x86_64-unknown-linux-musl/release/firecracker",
+  "kernel_path": "../../build/img/x86_64/vmlinux-5.10.223",
+  "rootfs_path": "../../build/img/x86_64/ubuntu-22.04.ext4",
+  "rootfs_ssh_key_path": "../../build/img/x86_64/ubuntu-22.04.id_rsa",
+  "server_ip": null,
+  "server_ssh_key_path": null,
+  "vms": 2
+}

@@ -64,27 +64,27 @@ pub enum ResourcesError {
 #[derive(Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct VmmConfig {
     #[serde(rename = "balloon")]
-    balloon_device: Option<BalloonDeviceConfig>,
+    pub balloon_device: Option<BalloonDeviceConfig>,
     #[serde(rename = "drives")]
-    block_devices: Vec<BlockDeviceConfig>,
+    pub block_devices: Vec<BlockDeviceConfig>,
     #[serde(rename = "boot-source")]
-    boot_source: BootSourceConfig,
+    pub boot_source: BootSourceConfig,
     #[serde(rename = "cpu-config")]
-    cpu_config: Option<PathBuf>,
+    pub cpu_config: Option<PathBuf>,
     #[serde(rename = "logger")]
-    logger: Option<crate::logger::LoggerConfig>,
+    pub logger: Option<crate::logger::LoggerConfig>,
     #[serde(rename = "machine-config")]
-    machine_config: Option<MachineConfig>,
+    pub machine_config: Option<MachineConfig>,
     #[serde(rename = "metrics")]
-    metrics: Option<MetricsConfig>,
+    pub metrics: Option<MetricsConfig>,
     #[serde(rename = "mmds-config")]
-    mmds_config: Option<MmdsConfig>,
+    pub mmds_config: Option<MmdsConfig>,
     #[serde(rename = "network-interfaces", default)]
-    net_devices: Vec<NetworkInterfaceConfig>,
+    pub net_devices: Vec<NetworkInterfaceConfig>,
     #[serde(rename = "vsock")]
-    vsock_device: Option<VsockDeviceConfig>,
+    pub vsock_device: Option<VsockDeviceConfig>,
     #[serde(rename = "entropy")]
-    entropy_device: Option<EntropyDeviceConfig>,
+    pub entropy_device: Option<EntropyDeviceConfig>,
 }
 
 /// A data structure that encapsulates the device configurations

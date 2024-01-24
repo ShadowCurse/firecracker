@@ -654,6 +654,7 @@ unapply_performance_tweaks() {
 cmd_test() {
     do_ab_test=0
     do_build=1
+    do_rust_test=0
     # Parse any command line args.
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -674,6 +675,9 @@ cmd_test() {
                 ;;
             "--no-build")
                 do_build=0
+                ;;
+            "--rust")
+                do_rust_test=1
                 ;;
             "--")               { shift; break;     } ;;
             *)
@@ -726,6 +730,10 @@ cmd_test() {
 
     if [ $do_ab_test -eq 1 ]; then
       test_script="./tools/ab_test.py"
+    fi
+
+    if [ $do_rust_test -eq 1 ]; then
+      test_script="./tests/run_rust_tests.sh"
     fi
 
     # Testing (running Firecracker via the jailer) needs root access,
