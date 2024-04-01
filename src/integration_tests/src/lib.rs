@@ -10,7 +10,22 @@ use std::time::Duration;
 use std::{path::PathBuf, process::Command};
 
 use rand::random;
+use serde::{Deserialize, Serialize};
+use vmm::cpu_config::templates::CustomCpuTemplate;
+use vmm::logger::LoggerConfig;
 use vmm::resources::VmmConfig;
+use vmm::vmm_config::balloon::{
+    BalloonDeviceConfig, BalloonUpdateConfig, BalloonUpdateStatsConfig,
+};
+use vmm::vmm_config::boot_source::BootSourceConfig;
+use vmm::vmm_config::drive::BlockDeviceConfig;
+use vmm::vmm_config::entropy::EntropyDeviceConfig;
+use vmm::vmm_config::machine_config::{MachineConfig, MachineConfigUpdate};
+use vmm::vmm_config::metrics::MetricsConfig;
+use vmm::vmm_config::mmds::MmdsConfig;
+use vmm::vmm_config::net::NetworkInterfaceConfig;
+use vmm::vmm_config::snapshot::{CreateSnapshotParams, LoadSnapshotConfig};
+use vmm::vmm_config::vsock::VsockDeviceConfig;
 
 #[cfg(test)]
 pub mod block;
@@ -104,6 +119,20 @@ impl Deref for ResultDir {
     fn deref(&self) -> &Self::Target {
         &self.path
     }
+}
+
+// Copied from firecracker/api_server
+#[derive(Debug, Deserialize, Serialize)]
+pub enum ActionType {
+    FlushMetrics,
+    InstanceStart,
+    SendCtrlAltDel,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActionBody {
+    pub action_type: ActionType,
 }
 
 #[derive(Debug)]
@@ -234,6 +263,175 @@ impl Fc {
     pub fn stdout(&self) -> String {
         let stdout_data = self.stdout_data.lock().unwrap();
         String::from_utf8(stdout_data.clone()).unwrap()
+    }
+
+    /// Calls `curl` with parameters
+    /// `request_type` can be `PUT`, `PATCH`
+    fn send_curl_request(
+        &self,
+        request_type: &str,
+        request_destination: &str,
+        data: &str,
+    ) -> Result<(), std::io::Error> {
+        let mut command = Command::new("curl");
+        command.args([
+            "-X",
+            request_type,
+            "--unix-socket",
+            self.socket_path.to_str().unwrap(),
+            "--data",
+            data,
+            &format!("http://localhost/{request_destination}"),
+        ]);
+        command.stdout(Stdio::piped());
+        command.stderr(Stdio::piped());
+
+        let mut proccess_handle = command.spawn()?;
+        let exit_status = proccess_handle.wait()?;
+
+        if !exit_status.success() {
+            let mut stdout = proccess_handle.stdout.take().unwrap();
+            let mut stderr = proccess_handle.stdout.take().unwrap();
+
+            let mut stdout_str = String::new();
+            stdout.read_to_string(&mut stdout_str)?;
+
+            let mut stderr_str = String::new();
+            stderr.read_to_string(&mut stderr_str)?;
+
+            eprintln!("api_put_logger error stdout: {stdout_str}");
+            eprintln!("api_put_logger error stderr: {stderr_str}");
+        }
+        Ok(())
+    }
+
+    pub fn api_put_action(&self, data: &ActionBody) -> Result<(), std::io::Error> {
+        let json = serde_json::to_string(&data).unwrap();
+        self.send_curl_request("PUT", "actions", &json)
+    }
+
+    pub fn api_put_ballon(&self, data: &BalloonDeviceConfig) -> Result<(), std::io::Error> {
+        let json = serde_json::to_string(&data).unwrap();
+        self.send_curl_request("PUT", "balloon", &json)
+    }
+
+    pub fn api_patch_ballon_update(
+        &self,
+        data: &BalloonUpdateConfig,
+    ) -> Result<(), std::io::Error> {
+        let json = serde_json::to_string(&data).unwrap();
+        self.send_curl_request("PATCH", "balloon", &json)
+    }
+
+    pub fn api_patch_ballon_update_stats(
+        &self,
+        data: &BalloonUpdateStatsConfig,
+    ) -> Result<(), std::io::Error> {
+        let json = serde_json::to_string(&data).unwrap();
+        self.send_curl_request("PATCH", "balloon", &json)
+    }
+
+    pub fn api_put_boot_source(&self, data: &BootSourceConfig) -> Result<(), std::io::Error> {
+        let json = serde_json::to_string(&data).unwrap();
+        self.send_curl_request("PUT", "boot-source", &json)
+    }
+
+    pub fn api_put_cpu_config(&self, data: &CustomCpuTemplate) -> Result<(), std::io::Error> {
+        let json = serde_json::to_string(&data).unwrap();
+        self.send_curl_request("PUT", "cpu-config", &json)
+    }
+
+    pub fn api_put_drive(&self, data: &BlockDeviceConfig) -> Result<(), std::io::Error> {
+        let json = serde_json::to_string(&data).unwrap();
+        let destination = format!("drives/{}", data.drive_id);
+        self.send_curl_request("PUT", &destination, &json)
+    }
+
+    pub fn api_put_entropy(&self, data: &EntropyDeviceConfig) -> Result<(), std::io::Error> {
+        let json = serde_json::to_string(&data).unwrap();
+        self.send_curl_request("PUT", "entropy", &json)
+    }
+
+    pub fn api_get_instance_info(&self) -> Result<(), std::io::Error> {
+        // let json = serde_json::to_string(&data).unwrap();
+        // self.send_curl_request("PUT", "entropy", &json)
+        Ok(())
+    }
+
+    pub fn api_put_logger(&self, data: &LoggerConfig) -> Result<(), std::io::Error> {
+        let json = serde_json::to_string(&data).unwrap();
+        self.send_curl_request("PUT", "logger", &json)
+    }
+
+    pub fn api_put_machine_config(&self, data: &MachineConfig) -> Result<(), std::io::Error> {
+        let json = serde_json::to_string(&data).unwrap();
+        self.send_curl_request("PUT", "machine-config", &json)
+    }
+
+    pub fn api_patch_machine_config(
+        &self,
+        data: &MachineConfigUpdate,
+    ) -> Result<(), std::io::Error> {
+        let json = serde_json::to_string(&data).unwrap();
+        self.send_curl_request("PATCH", "machine-config", &json)
+    }
+
+    pub fn api_put_metrics(&self, data: &MetricsConfig) -> Result<(), std::io::Error> {
+        let json = serde_json::to_string(&data).unwrap();
+        self.send_curl_request("PUT", "metrics", &json)
+    }
+
+    pub fn api_get_mmds(&self) -> Result<(), std::io::Error> {
+        // let json = serde_json::to_string(&data).unwrap();
+        // self.send_curl_request("PUT", "metrics", &json)
+        Ok(())
+    }
+
+    pub fn api_put_mmds(&self, _data: &MmdsConfig) -> Result<(), std::io::Error> {
+        // let json = serde_json::to_string(&data).unwrap();
+        // self.send_curl_request("PUT", "metrics", &json)
+        Ok(())
+    }
+
+    pub fn api_put_mmds_config(&self, data: &MmdsConfig) -> Result<(), std::io::Error> {
+        let json = serde_json::to_string(&data).unwrap();
+        self.send_curl_request("PUT", "", &json)
+    }
+
+    pub fn api_put_network(&self, data: &NetworkInterfaceConfig) -> Result<(), std::io::Error> {
+        let json = serde_json::to_string(&data).unwrap();
+        let destination = format!("network-interfaces/{}", data.iface_id);
+        self.send_curl_request("PUT", &destination, &json)
+    }
+
+    pub fn api_patch_network(&self, data: &NetworkInterfaceConfig) -> Result<(), std::io::Error> {
+        let json = serde_json::to_string(&data).unwrap();
+        let destination = format!("network-interfaces/{}", data.iface_id);
+        self.send_curl_request("PATCH", &destination, &json)
+    }
+
+    pub fn api_put_snapshot_create(
+        &self,
+        data: &CreateSnapshotParams,
+    ) -> Result<(), std::io::Error> {
+        let json = serde_json::to_string(&data).unwrap();
+        self.send_curl_request("PUT", "snapshot", &json)
+    }
+
+    pub fn api_put_snapshot_load(&self, data: &LoadSnapshotConfig) -> Result<(), std::io::Error> {
+        let json = serde_json::to_string(&data).unwrap();
+        self.send_curl_request("PUT", "snapshot", &json)
+    }
+
+    pub fn api_get_version(&self) -> Result<(), std::io::Error> {
+        // let json = serde_json::to_string(&data).unwrap();
+        // self.send_curl_request("PUT", "", &json)
+        Ok(())
+    }
+
+    pub fn api_put_vsock(&self, data: &VsockDeviceConfig) -> Result<(), std::io::Error> {
+        let json = serde_json::to_string(&data).unwrap();
+        self.send_curl_request("PUT", "vsock", &json)
     }
 }
 
