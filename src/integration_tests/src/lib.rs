@@ -37,7 +37,9 @@ pub fn binary_path(name: &str) -> PathBuf {
     path.pop();
     path.pop();
     path.pop();
-    if cfg!(target_arch = "x86_64") {
+    if cfg!(feature = "local_dev") {
+        path.join("release").join(name)
+    } else if cfg!(target_arch = "x86_64") {
         path.join("x86_64-unknown-linux-musl/release").join(name)
     } else if cfg!(target_arch = "aarch64") {
         path.join("aarch64-unknown-linux-musl/release").join(name)
@@ -47,7 +49,13 @@ pub fn binary_path(name: &str) -> PathBuf {
 }
 
 pub fn artifacts_paths() -> (&'static str, &'static str, &'static str) {
-    if cfg!(target_arch = "x86_64") {
+    if cfg!(feature = "local_dev") {
+        (
+            "../../scripts/vmlinux-5.10.204",
+            "../../scripts/ubuntu-22.04.ext4",
+            "../../scripts/ubuntu-22.04.id_rsa",
+        )
+    } else if cfg!(target_arch = "x86_64") {
         (
             "../../build/img/x86_64/vmlinux-5.10.209",
             "../../build/img/x86_64/ubuntu-22.04.ext4",
@@ -244,13 +252,23 @@ impl Fc {
         // let fc to boot
         sleep(Duration::from_millis(2000));
 
-        Ok(Self {
-            socket_path,
-            proccess_handle,
+        if let Some(exit_code) = proccess_handle.try_wait()? {
+            let stdout_data = stdout_data.lock().unwrap();
+            let logs = String::from_utf8(stdout_data.to_vec()).unwrap();
+            eprintln!("Firecracker exited with exit code: {exit_code}. Logs: {logs}");
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("exited with exit code: {exit_code}"),
+            ))
+        } else {
+            Ok(Self {
+                socket_path,
+                proccess_handle,
 
-            stdout_thread,
-            stdout_data,
-        })
+                stdout_thread,
+                stdout_data,
+            })
+        }
     }
 
     pub fn kill(&mut self) -> Result<(), std::io::Error> {
