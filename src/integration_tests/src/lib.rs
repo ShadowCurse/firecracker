@@ -26,6 +26,7 @@ use vmm::vmm_config::net::NetworkInterfaceConfig;
 use vmm::vmm_config::snapshot::{CreateSnapshotParams, LoadSnapshotConfig};
 use vmm::vmm_config::vsock::VsockDeviceConfig;
 
+pub mod function;
 pub mod performance;
 
 pub fn binary_path(name: &str) -> PathBuf {
