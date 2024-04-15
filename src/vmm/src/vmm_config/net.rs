@@ -28,7 +28,12 @@ pub struct NetworkInterfaceConfig {
     /// Rate Limiter for transmitted packages.
     pub tx_rate_limiter: Option<RateLimiterConfig>,
 
+    #[serde(default = "mmio_optimized_default")]
     pub mmio_optimized: bool,
+}
+
+fn mmio_optimized_default() -> bool {
+    true
 }
 
 impl From<&Net> for NetworkInterfaceConfig {
