@@ -63,7 +63,12 @@ pub struct BlockDeviceConfig {
     /// Path to the vhost-user socket.
     pub socket: Option<String>,
 
+    #[serde(default = "mmio_optimized_default")]
     pub mmio_optimized: bool,
+}
+
+fn mmio_optimized_default() -> bool {
+    true
 }
 
 /// Only provided fields will be updated. I.e. if any optional fields
