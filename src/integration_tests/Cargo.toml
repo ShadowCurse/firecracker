@@ -7,6 +7,10 @@ license = "Apache-2.0"
 
 [lib]
 
+[features]
+default = []
+local_dev = []
+
 [dependencies]
 rand = "0.8.5"
 tempfile = "3.9.0"
