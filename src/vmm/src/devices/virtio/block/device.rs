@@ -130,7 +130,7 @@ impl Block {
 
     pub fn mmio_optimization(&self) -> bool {
         match self {
-            Self::Virtio(b) => b.mmio_optimized,
+            Self::Virtio(b) => b.mmio_mem.is_some(),
             Self::VhostUser(_) => false,
         }
     }
