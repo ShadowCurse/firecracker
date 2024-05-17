@@ -580,6 +580,14 @@ impl VirtioBlock {
             let mmio_memory_u32 = mm.as_mut_slice_u32();
             // interrupt status
             mmio_memory_u32[24] = 2;
+
+            let config_u32: &[u32] = unsafe {
+                std::slice::from_raw_parts(
+                    self.config_space.as_ptr().cast(),
+                    self.config_space.len() / 4,
+                )
+            };
+            mmio_memory_u32[64..64 + config_u32.len()].copy_from_slice(config_u32);
         }
 
         // Kick the driver to pick up the changes.
