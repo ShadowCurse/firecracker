@@ -710,19 +710,12 @@ impl VirtioDevice for VirtioBlock {
         self.device_state.is_activated()
     }
 
-    fn configure_mmio_memory(&self, mmio_memory: &mut [u8]) {
-        let mut_self: *mut Self = unsafe { std::mem::transmute(self) };
-        let mut_self: &mut Self = unsafe { std::mem::transmute(mut_self) };
-        if let Some(ref mut mm) = mut_self.mmio_mem {
-            mm.mmio_memory_ptr = mmio_memory.as_mut_ptr() as usize;
-            mm.mmio_memory_ptr = mmio_memory.len();
-        } else {
-            panic!("MmioMem should be present if we configure mmio_region");
-        }
+    fn configure_mmio_memory(&mut self, mmio_memory: &mut [u8]) {
+        let mm = self.mmio_mem.as_mut().expect("MmioMem should be present if we configure mmio_region");
+        mm.mmio_memory_ptr = mmio_memory.as_mut_ptr() as usize;
+        mm.mmio_memory_len = mmio_memory.len();
 
-        let mmio_memory_u32: &mut [u32] = unsafe {
-            std::slice::from_raw_parts_mut(mmio_memory.as_mut_ptr().cast(), mmio_memory.len() / 4)
-        };
+        let mmio_memory_u32 = mm.as_mut_slice_u32();
 
         // MagicValue
         mmio_memory_u32[0] = 0x7472_6976;
