@@ -225,7 +225,7 @@ impl VirtioDevice for Block {
         }
     }
 
-    fn configure_mmio_memory(&self, mmio_memory: &mut [u8]) {
+    fn configure_mmio_memory(&mut self, mmio_memory: &mut [u8]) {
         match self {
             Self::Virtio(b) => b.configure_mmio_memory(mmio_memory),
             Self::VhostUser(b) => {}

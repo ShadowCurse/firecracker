@@ -891,7 +891,7 @@ impl VirtioDevice for Net {
         self.device_state.is_activated()
     }
 
-    fn configure_mmio_memory(&self, mmio_memory: &mut [u8]) {
+    fn configure_mmio_memory(&mut self, mmio_memory: &mut [u8]) {
         let mmio_memory_u32: &mut [u32] = unsafe {
             std::slice::from_raw_parts_mut(mmio_memory.as_mut_ptr().cast(), mmio_memory.len() / 4)
         };

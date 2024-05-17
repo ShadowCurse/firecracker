@@ -180,7 +180,7 @@ pub trait VirtioDevice: AsAny + Send {
         None
     }
 
-    fn configure_mmio_memory(&self, _mmio_memory: &mut [u8]) {}
+    fn configure_mmio_memory(&mut self, _mmio_memory: &mut [u8]) {}
 }
 
 impl fmt::Debug for dyn VirtioDevice {
