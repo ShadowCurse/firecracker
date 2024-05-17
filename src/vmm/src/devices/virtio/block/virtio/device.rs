@@ -256,6 +256,19 @@ impl From<VirtioBlockConfig> for BlockDeviceConfig {
     }
 }
 
+#[derive(Debug, Default)]
+pub struct MmioMem {
+    pub mmio_memory_ptr: usize,
+    pub mmio_memory_len: usize,
+}
+
+impl MmioMem {
+    pub fn as_mut_slice_u32(&self) -> &mut [u32] {
+        let ptr: *mut u8 = unsafe { std::mem::transmute(self.mmio_memory_ptr) };
+        unsafe { std::slice::from_raw_parts_mut(ptr.cast(), self.mmio_memory_len / 4) }
+    }
+}
+
 /// Virtio device for exposing block level read/write operations on a host file.
 #[derive(Debug)]
 pub struct VirtioBlock {
@@ -284,7 +297,10 @@ pub struct VirtioBlock {
     pub is_io_engine_throttled: bool,
     pub metrics: Arc<BlockDeviceMetrics>,
 
-    pub mmio_optimized: bool,
+    pub mmio_mem: Option<MmioMem>,
+    // pub mmio_optimized: bool,
+    // pub mmio_memory_ptr: *const u8,
+    // pub mmio_memory_len: usize,
 }
 
 macro_rules! unwrap_async_file_engine_or_return {
@@ -333,6 +349,12 @@ impl VirtioBlock {
 
         let config_space = disk_properties.virtio_block_config_space();
 
+        let mmio_mem = if config.mmio_optimized {
+            Some(MmioMem::default())
+        } else {
+            None
+        };
+
         Ok(VirtioBlock {
             avail_features,
             acked_features: 0u64,
@@ -354,7 +376,10 @@ impl VirtioBlock {
             rate_limiter,
             is_io_engine_throttled: false,
             metrics: BlockMetricsPerDevice::alloc(config.drive_id),
-            mmio_optimized: config.mmio_optimized,
+            mmio_mem,
+            // mmio_optimized: config.mmio_optimized,
+            // mmio_memory_ptr: std::ptr::null(),
+            // mmio_memory_len: 0,
         })
     }
 
@@ -370,7 +395,7 @@ impl VirtioBlock {
             cache_type: self.cache_type,
             rate_limiter: rl.into_option(),
             file_engine_type: self.file_engine_type(),
-            mmio_optimized: self.mmio_optimized,
+            mmio_optimized: self.mmio_mem.is_some(),
         }
     }
 
@@ -551,6 +576,12 @@ impl VirtioBlock {
         self.disk.update(disk_image_path, self.read_only)?;
         self.config_space = self.disk.virtio_block_config_space();
 
+        if let Some(ref mm) = self.mmio_mem {
+            let mmio_memory_u32 = mm.as_mut_slice_u32();
+            // interrupt status
+            mmio_memory_u32[24] = 2;
+        }
+
         // Kick the driver to pick up the changes.
         self.irq_trigger.trigger_irq(IrqType::Config).unwrap();
 
@@ -680,6 +711,15 @@ impl VirtioDevice for VirtioBlock {
     }
 
     fn configure_mmio_memory(&self, mmio_memory: &mut [u8]) {
+        let mut_self: *mut Self = unsafe { std::mem::transmute(self) };
+        let mut_self: &mut Self = unsafe { std::mem::transmute(mut_self) };
+        if let Some(ref mut mm) = mut_self.mmio_mem {
+            mm.mmio_memory_ptr = mmio_memory.as_mut_ptr() as usize;
+            mm.mmio_memory_ptr = mmio_memory.len();
+        } else {
+            panic!("MmioMem should be present if we configure mmio_region");
+        }
+
         let mmio_memory_u32: &mut [u32] = unsafe {
             std::slice::from_raw_parts_mut(mmio_memory.as_mut_ptr().cast(), mmio_memory.len() / 4)
         };

@@ -419,7 +419,14 @@ impl MmioTransport {
             0x38 => self.update_queue_field(|q| q.size = (data_u32 & 0xffff) as u16),
             0x44 => self.update_queue_field(|q| q.ready = data_u32 == 1),
             0x64 => {
-                self.interrupt_status.fetch_and(!data_u32, Ordering::SeqCst);
+                // self.interrupt_status.fetch_and(!data_u32, Ordering::SeqCst);
+                let memory_u32: &mut [u32] = unsafe {
+                    std::slice::from_raw_parts_mut(
+                        self.mmio_memory.as_mut_ptr().cast(),
+                        self.mmio_memory.len() / 4,
+                    )
+                };
+                memory_u32[24] = 1;
             }
             0x70 => {
                 self.set_device_status(data_u32);
