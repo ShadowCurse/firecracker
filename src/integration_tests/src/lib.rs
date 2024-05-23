@@ -49,13 +49,13 @@ pub fn binary_path(name: &str) -> PathBuf {
 pub fn artifacts_paths() -> (&'static str, &'static str, &'static str) {
     if cfg!(target_arch = "x86_64") {
         (
-            "../../build/img/x86_64/vmlinux-5.10.209",
+            "../../build/img/x86_64/vmlinux-5.10.210",
             "../../build/img/x86_64/ubuntu-22.04.ext4",
             "../../build/img/x86_64/ubuntu-22.04.id_rsa",
         )
     } else if cfg!(target_arch = "aarch64") {
         (
-            "../../build/img/aarch64/vmlinux-5.10.209",
+            "../../build/img/aarch64/vmlinux-5.10.210",
             "../../build/img/aarch64/ubuntu-22.04.ext4",
             "../../build/img/aarch64/ubuntu-22.04.id_rsa",
         )
