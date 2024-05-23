@@ -84,10 +84,12 @@ impl MmioTransport {
             Vec::from_raw_parts(mem, 0x1000, 0x1000)
         };
 
-        device
-            .lock()
-            .unwrap()
-            .configure_mmio_memory(&mut mmio_memory);
+        if mmio_optimization {
+            device
+                .lock()
+                .unwrap()
+                .configure_mmio_memory(&mut mmio_memory);
+        }
 
         MmioTransport {
             device,
