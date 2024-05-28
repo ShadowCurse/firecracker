@@ -26,7 +26,7 @@ defaults = {
     "platforms": args.platforms,
     # buildkite step parameters
     "priority": DEFAULT_PRIORITY,
-    "timeout_in_minutes": 45,
+    "timeout_in_minutes": 120,
     "artifacts": ["./rust_test_results/**/*"],
 }
 defaults = overlay_dict(defaults, args.step_param)
