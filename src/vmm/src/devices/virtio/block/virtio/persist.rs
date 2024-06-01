@@ -141,7 +141,6 @@ impl Persist<'_> for VirtioBlock {
             avail_features,
             acked_features,
             config_space: disk_properties.virtio_block_config_space(),
-            activate_evt: EventFd::new(libc::EFD_NONBLOCK).map_err(VirtioBlockError::EventFd)?,
 
             queues,
             queue_evts,

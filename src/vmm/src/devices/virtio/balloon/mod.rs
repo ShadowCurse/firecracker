@@ -7,7 +7,7 @@ pub mod device;
 mod event_handler;
 pub mod metrics;
 pub mod persist;
-pub mod test_utils;
+// pub mod test_utils;
 mod util;
 
 use log::error;

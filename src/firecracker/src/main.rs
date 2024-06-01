@@ -14,7 +14,9 @@ use std::sync::{Arc, Mutex};
 use std::{io, panic};
 
 use api_server_adapter::ApiServerError;
-use event_manager::SubscriberOps;
+use event_manager::BufferedEventManager as EventManager;
+use event_manager::RegisterEvents;
+// use event_manager::SubscriberOps;
 use seccomp::FilterError;
 use seccompiler::BpfThreadMap;
 use utils::arg_parser::{ArgParser, Argument};
@@ -30,7 +32,7 @@ use vmm::signal_handler::register_signal_handlers;
 use vmm::snapshot::{Snapshot, SnapshotError};
 use vmm::vmm_config::instance_info::{InstanceInfo, VmState};
 use vmm::vmm_config::metrics::{init_metrics, MetricsConfig, MetricsConfigError};
-use vmm::{EventManager, FcExitCode, HTTP_MAX_PAYLOAD_SIZE};
+use vmm::{FcExitCode, HTTP_MAX_PAYLOAD_SIZE};
 
 use crate::seccomp::SeccompConfig;
 
@@ -597,11 +599,15 @@ fn run_without_api(
     mmds_size_limit: usize,
     metadata_json: Option<&str>,
 ) -> Result<(), RunWithoutApiError> {
-    let mut event_manager = EventManager::new().expect("Unable to create EventManager");
+    let mut event_manager = EventManager::new(true).expect("Unable to create EventManager");
 
     // Create the firecracker metrics object responsible for periodically printing metrics.
     let firecracker_metrics = Arc::new(Mutex::new(metrics::PeriodicMetrics::new()));
-    event_manager.add_subscriber(firecracker_metrics.clone());
+    firecracker_metrics
+        .lock()
+        .unwrap()
+        .register(&mut event_manager);
+    // event_manager.add_subscriber(firecracker_metrics.clone());
 
     // Build the microVm. We can ignore VmResources since it's not used without api.
     let (_, vmm) = build_microvm_from_json(
@@ -625,7 +631,7 @@ fn run_without_api(
     // Run the EventManager that drives everything in the microVM.
     loop {
         event_manager
-            .run()
+            .wait(None)
             .expect("Failed to start the event manager");
 
         match vmm.lock().unwrap().shutdown_exit_code() {

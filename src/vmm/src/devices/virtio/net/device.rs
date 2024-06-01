@@ -136,7 +136,6 @@ pub struct Net {
     pub(crate) guest_mac: Option<MacAddr>,
 
     pub(crate) device_state: DeviceState,
-    pub(crate) activate_evt: EventFd,
 
     /// The MMDS stack corresponding to this interface.
     /// Only if MMDS transport has been associated with it.
@@ -194,7 +193,6 @@ impl Net {
             config_space,
             guest_mac,
             device_state: DeviceState::Inactive,
-            activate_evt: EventFd::new(libc::EFD_NONBLOCK).map_err(NetError::EventFd)?,
             mmds_ns: None,
             metrics: NetMetricsPerDevice::alloc(id),
         })
@@ -874,10 +872,6 @@ impl VirtioDevice for Net {
             }
         }
 
-        if self.activate_evt.write(1).is_err() {
-            error!("Net: Cannot write to activate_evt");
-            return Err(super::super::ActivateError::BadActivate);
-        }
         self.device_state = DeviceState::Activated(mem);
         Ok(())
     }

@@ -1,132 +1,68 @@
 // Copyright 2020 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use event_manager::{EventOps, Events, MutEventSubscriber};
+use std::os::fd::AsRawFd;
+
+use log::info;
 use utils::epoll::EventSet;
 
-use crate::devices::virtio::device::VirtioDevice;
 use crate::devices::virtio::net::device::Net;
 use crate::devices::virtio::net::{RX_INDEX, TX_INDEX};
-use crate::logger::{error, warn, IncMetric};
 
-impl Net {
-    const PROCESS_ACTIVATE: u32 = 0;
-    const PROCESS_VIRTQ_RX: u32 = 1;
-    const PROCESS_VIRTQ_TX: u32 = 2;
-    const PROCESS_TAP_RX: u32 = 3;
-    const PROCESS_RX_RATE_LIMITER: u32 = 4;
-    const PROCESS_TX_RATE_LIMITER: u32 = 5;
+impl event_manager::RegisterEvents for Net {
+    fn register(&mut self, event_manager: &mut event_manager::BufferedEventManager) {
+        info!("Registering {}", std::any::type_name::<Self>());
+        let self_ptr = self as *const Self;
 
-    fn register_runtime_events(&self, ops: &mut EventOps) {
-        if let Err(err) = ops.add(Events::with_data(
-            &self.queue_evts[RX_INDEX],
-            Self::PROCESS_VIRTQ_RX,
-            EventSet::IN,
-        )) {
-            error!("Failed to register rx queue event: {}", err);
-        }
-        if let Err(err) = ops.add(Events::with_data(
-            &self.queue_evts[TX_INDEX],
-            Self::PROCESS_VIRTQ_TX,
-            EventSet::IN,
-        )) {
-            error!("Failed to register tx queue event: {}", err);
-        }
-        if let Err(err) = ops.add(Events::with_data(
-            &self.rx_rate_limiter,
-            Self::PROCESS_RX_RATE_LIMITER,
-            EventSet::IN,
-        )) {
-            error!("Failed to register rx queue event: {}", err);
-        }
-        if let Err(err) = ops.add(Events::with_data(
-            &self.tx_rate_limiter,
-            Self::PROCESS_TX_RATE_LIMITER,
-            EventSet::IN,
-        )) {
-            error!("Failed to register tx queue event: {}", err);
-        }
-        if let Err(err) = ops.add(Events::with_data(
-            &self.tap,
-            Self::PROCESS_TAP_RX,
-            EventSet::IN | EventSet::EDGE_TRIGGERED,
-        )) {
-            error!("Failed to register tap event: {}", err);
-        }
-    }
+        let action = Box::new(
+            move |_event_manager: &mut event_manager::EventManager, _event_set: EventSet| {
+                let self_mut_ref: &mut Self = unsafe { std::mem::transmute(self_ptr) };
+                self_mut_ref.process_rx_queue_event();
+            },
+        );
+        event_manager
+            .add(self.queue_evts[RX_INDEX].as_raw_fd(), EventSet::IN, action)
+            .expect("failed to register event");
 
-    fn register_activate_event(&self, ops: &mut EventOps) {
-        if let Err(err) = ops.add(Events::with_data(
-            &self.activate_evt,
-            Self::PROCESS_ACTIVATE,
-            EventSet::IN,
-        )) {
-            error!("Failed to register activate event: {}", err);
-        }
-    }
+        let action = Box::new(
+            move |_event_manager: &mut event_manager::EventManager, _event_set: EventSet| {
+                let self_mut_ref: &mut Self = unsafe { std::mem::transmute(self_ptr) };
+                self_mut_ref.process_tx_queue_event();
+            },
+        );
+        event_manager
+            .add(self.queue_evts[TX_INDEX].as_raw_fd(), EventSet::IN, action)
+            .expect("failed to register event");
 
-    fn process_activate_event(&self, ops: &mut EventOps) {
-        if let Err(err) = self.activate_evt.read() {
-            error!("Failed to consume net activate event: {:?}", err);
-        }
-        self.register_runtime_events(ops);
-        if let Err(err) = ops.remove(Events::with_data(
-            &self.activate_evt,
-            Self::PROCESS_ACTIVATE,
-            EventSet::IN,
-        )) {
-            error!("Failed to un-register activate event: {}", err);
-        }
-    }
-}
+        let action = Box::new(
+            move |_event_manager: &mut event_manager::EventManager, _event_set: EventSet| {
+                let self_mut_ref: &mut Self = unsafe { std::mem::transmute(self_ptr) };
+                self_mut_ref.process_tap_rx_event();
+            },
+        );
+        event_manager
+            .add(self.tap.as_raw_fd(), EventSet::IN, action)
+            .expect("failed to register event");
 
-impl MutEventSubscriber for Net {
-    fn process(&mut self, event: Events, ops: &mut EventOps) {
-        let source = event.data();
-        let event_set = event.event_set();
+        let action = Box::new(
+            move |_event_manager: &mut event_manager::EventManager, _event_set: EventSet| {
+                let self_mut_ref: &mut Self = unsafe { std::mem::transmute(self_ptr) };
+                self_mut_ref.process_rx_rate_limiter_event();
+            },
+        );
+        event_manager
+            .add(self.rx_rate_limiter.as_raw_fd(), EventSet::IN, action)
+            .expect("failed to register event");
 
-        // TODO: also check for errors. Pending high level discussions on how we want
-        // to handle errors in devices.
-        let supported_events = EventSet::IN;
-        if !supported_events.contains(event_set) {
-            warn!(
-                "Received unknown event: {:?} from source: {:?}",
-                event_set, source
-            );
-            return;
-        }
-
-        if self.is_activated() {
-            match source {
-                Self::PROCESS_ACTIVATE => self.process_activate_event(ops),
-                Self::PROCESS_VIRTQ_RX => self.process_rx_queue_event(),
-                Self::PROCESS_VIRTQ_TX => self.process_tx_queue_event(),
-                Self::PROCESS_TAP_RX => self.process_tap_rx_event(),
-                Self::PROCESS_RX_RATE_LIMITER => self.process_rx_rate_limiter_event(),
-                Self::PROCESS_TX_RATE_LIMITER => self.process_tx_rate_limiter_event(),
-                _ => {
-                    warn!("Net: Spurious event received: {:?}", source);
-                    self.metrics.event_fails.inc();
-                }
-            }
-        } else {
-            warn!(
-                "Net: The device is not yet activated. Spurious event received: {:?}",
-                source
-            );
-        }
-    }
-
-    fn init(&mut self, ops: &mut EventOps) {
-        // This function can be called during different points in the device lifetime:
-        //  - shortly after device creation,
-        //  - on device activation (is-activated already true at this point),
-        //  - on device restore from snapshot.
-        if self.is_activated() {
-            self.register_runtime_events(ops);
-        } else {
-            self.register_activate_event(ops);
-        }
+        let action = Box::new(
+            move |_event_manager: &mut event_manager::EventManager, _event_set: EventSet| {
+                let self_mut_ref: &mut Self = unsafe { std::mem::transmute(self_ptr) };
+                self_mut_ref.process_tx_rate_limiter_event();
+            },
+        );
+        event_manager
+            .add(self.tx_rate_limiter.as_raw_fd(), EventSet::IN, action)
+            .expect("failed to register event");
     }
 }
 

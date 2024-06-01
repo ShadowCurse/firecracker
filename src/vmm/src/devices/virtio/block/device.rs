@@ -4,7 +4,8 @@
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 
-use event_manager::{EventOps, Events, MutEventSubscriber};
+use log::info;
+// use event_manager::{EventOps, Events, MutEventSubscriber};
 use utils::eventfd::EventFd;
 
 use super::persist::{BlockConstructorArgs, BlockState};
@@ -219,18 +220,12 @@ impl VirtioDevice for Block {
     }
 }
 
-impl MutEventSubscriber for Block {
-    fn process(&mut self, event: Events, ops: &mut EventOps) {
+impl event_manager::RegisterEvents for Block {
+    fn register(&mut self, event_manager: &mut event_manager::BufferedEventManager) {
+        info!("Registering {}", std::any::type_name::<Self>());
         match self {
-            Self::Virtio(b) => b.process(event, ops),
-            Self::VhostUser(b) => b.process(event, ops),
-        }
-    }
-
-    fn init(&mut self, ops: &mut EventOps) {
-        match self {
-            Self::Virtio(b) => b.init(ops),
-            Self::VhostUser(b) => b.init(ops),
+            Self::Virtio(b) => b.register(event_manager),
+            Self::VhostUser(_) => {}
         }
     }
 }

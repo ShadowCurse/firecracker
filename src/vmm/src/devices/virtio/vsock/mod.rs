@@ -17,7 +17,7 @@ mod event_handler;
 pub mod metrics;
 mod packet;
 pub mod persist;
-pub mod test_utils;
+// pub mod test_utils;
 mod unix;
 
 use std::os::unix::io::AsRawFd;

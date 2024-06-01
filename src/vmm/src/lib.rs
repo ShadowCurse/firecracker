@@ -104,7 +104,7 @@ pub mod signal_handler;
 /// Serialization and deserialization facilities
 pub mod snapshot;
 /// Utility functions for integration and benchmark testing
-pub mod utilities;
+// pub mod utilities;
 /// Wrappers over structures used to configure the VMM.
 pub mod vmm_config;
 /// Module with virtual state structs.
@@ -122,7 +122,7 @@ use device_manager::acpi::ACPIDeviceManager;
 use device_manager::resources::ResourceAllocator;
 #[cfg(target_arch = "x86_64")]
 use devices::acpi::vmgenid::VmGenIdError;
-use event_manager::{EventManager as BaseEventManager, EventOps, Events, MutEventSubscriber};
+// use event_manager::{EventManager as BaseEventManager, EventOps, Events, MutEventSubscriber};
 use seccompiler::BpfProgram;
 use userfaultfd::Uffd;
 use utils::epoll::EventSet;
@@ -156,7 +156,7 @@ pub use crate::vstate::vcpu::{Vcpu, VcpuConfig, VcpuEvent, VcpuHandle, VcpuRespo
 pub use crate::vstate::vm::Vm;
 
 /// Shorthand type for the EventManager flavour used by Firecracker.
-pub type EventManager = BaseEventManager<Arc<Mutex<dyn MutEventSubscriber>>>;
+// pub type EventManager = BaseEventManager<Arc<Mutex<dyn MutEventSubscriber>>>;
 
 // Since the exit code names e.g. `SIGBUS` are most appropriate yet trigger a test error with the
 // clippy lint `upper_case_acronyms` we have disabled this lint for this enum.
@@ -924,13 +924,24 @@ impl Drop for Vmm {
     }
 }
 
-impl MutEventSubscriber for Vmm {
-    /// Handle a read event (EPOLLIN).
-    fn process(&mut self, event: Events, _: &mut EventOps) {
-        let source = event.fd();
-        let event_set = event.event_set();
+impl event_manager::RegisterEvents for Vmm {
+    fn register(&mut self, event_manager: &mut event_manager::BufferedEventManager) {
+        let self_ptr = self as *const Self;
+        let action = Box::new(
+            move |_event_manager: &mut event_manager::EventManager, event_set: EventSet| {
+                let self_mut_ref: &mut Self = unsafe { std::mem::transmute(self_ptr) };
+                self_mut_ref.process(event_set);
+            },
+        );
+        event_manager
+            .add(self.vcpus_exit_evt.as_raw_fd(), EventSet::IN, action)
+            .expect("failed to register event");
+    }
+}
 
-        if source == self.vcpus_exit_evt.as_raw_fd() && event_set == EventSet::IN {
+impl Vmm {
+    fn process(&mut self, event_set: EventSet) {
+        if event_set == EventSet::IN {
             // Exit event handling should never do anything more than call 'self.stop()'.
             let _ = self.vcpus_exit_evt.read();
 
@@ -959,10 +970,47 @@ impl MutEventSubscriber for Vmm {
             error!("Spurious EventManager event for handler: Vmm");
         }
     }
-
-    fn init(&mut self, ops: &mut EventOps) {
-        if let Err(err) = ops.add(Events::new(&self.vcpus_exit_evt, EventSet::IN)) {
-            error!("Failed to register vmm exit event: {}", err);
-        }
-    }
 }
+
+// impl MutEventSubscriber for Vmm {
+//     /// Handle a read event (EPOLLIN).
+//     fn process(&mut self, event: Events, _: &mut EventOps) {
+//         let source = event.fd();
+//         let event_set = event.event_set();
+//
+//         if source == self.vcpus_exit_evt.as_raw_fd() && event_set == EventSet::IN {
+//             // Exit event handling should never do anything more than call 'self.stop()'.
+//             let _ = self.vcpus_exit_evt.read();
+//
+//             let exit_code = 'exit_code: {
+//                 // Query each vcpu for their exit_code.
+//                 for handle in &self.vcpus_handles {
+//                     // Drain all vcpu responses that are pending from this vcpu until we find an
+//                     // exit status.
+//                     for response in handle.response_receiver().try_iter() {
+//                         if let VcpuResponse::Exited(status) = response {
+//                             // It could be that some vcpus exited successfully while others
+//                             // errored out. Thus make sure that error exits from one vcpu always
+//                             // takes precedence over "ok" exits
+//                             if status != FcExitCode::Ok {
+//                                 break 'exit_code status;
+//                             }
+//                         }
+//                     }
+//                 }
+//
+//                 // No CPUs exited with error status code, report "Ok"
+//                 FcExitCode::Ok
+//             };
+//             self.stop(exit_code);
+//         } else {
+//             error!("Spurious EventManager event for handler: Vmm");
+//         }
+//     }
+//
+//     fn init(&mut self, ops: &mut EventOps) {
+//         if let Err(err) = ops.add(Events::new(&self.vcpus_exit_evt, EventSet::IN)) {
+//             error!("Failed to register vmm exit event: {}", err);
+//         }
+//     }
+// }

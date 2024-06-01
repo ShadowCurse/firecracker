@@ -9,7 +9,7 @@ use std::fmt::Debug;
 use std::io::{self, Seek, SeekFrom};
 use std::sync::{Arc, Mutex};
 
-use event_manager::{MutEventSubscriber, SubscriberOps};
+// use event_manager::{MutEventSubscriber, SubscriberOps};
 use libc::EFD_NONBLOCK;
 use linux_loader::cmdline::Cmdline as LoaderKernelCmdline;
 #[cfg(target_arch = "x86_64")]
@@ -71,7 +71,10 @@ use crate::vmm_config::machine_config::{VmConfig, VmConfigError};
 use crate::vstate::memory::{GuestAddress, GuestMemory, GuestMemoryExtension, GuestMemoryMmap};
 use crate::vstate::vcpu::{Vcpu, VcpuConfig, VcpuError};
 use crate::vstate::vm::Vm;
-use crate::{device_manager, EventManager, Vmm, VmmError};
+use crate::{device_manager, Vmm, VmmError};
+
+use event_manager::BufferedEventManager as EventManager;
+use event_manager::RegisterEvents;
 
 /// Errors associated with starting the instance.
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
@@ -384,7 +387,8 @@ pub fn build_microvm_for_boot(
     .map_err(Internal)?;
 
     let vmm = Arc::new(Mutex::new(vmm));
-    event_manager.add_subscriber(vmm.clone());
+    // event_manager.add_subscriber(vmm.clone());
+    vmm.lock().unwrap().register(event_manager);
 
     Ok(vmm)
 }
@@ -561,7 +565,8 @@ pub fn build_microvm_from_snapshot(
     )?;
 
     let vmm = Arc::new(Mutex::new(vmm));
-    event_manager.add_subscriber(vmm.clone());
+    // event_manager.add_subscriber(vmm.clone());
+    vmm.lock().unwrap().register(event_manager);
 
     // Load seccomp filters for the VMM thread.
     // Keep this as the last step of the building process.
@@ -703,7 +708,8 @@ pub fn setup_serial_device(
         ),
         input: Some(input),
     })));
-    event_manager.add_subscriber(serial.clone());
+    // event_manager.add_subscriber(serial.clone());
+    serial.lock().unwrap().register(event_manager);
     Ok(serial)
 }
 
@@ -868,7 +874,7 @@ pub fn configure_system_for_boot(
 }
 
 /// Attaches a VirtioDevice device to the device manager and event manager.
-fn attach_virtio_device<T: 'static + VirtioDevice + MutEventSubscriber + Debug>(
+fn attach_virtio_device<T: 'static + VirtioDevice + event_manager::RegisterEvents + Debug>(
     event_manager: &mut EventManager,
     vmm: &mut Vmm,
     id: String,
@@ -878,7 +884,8 @@ fn attach_virtio_device<T: 'static + VirtioDevice + MutEventSubscriber + Debug>(
 ) -> Result<(), StartMicrovmError> {
     use self::StartMicrovmError::*;
 
-    event_manager.add_subscriber(device.clone());
+    device.lock().unwrap().register(event_manager);
+    // event_manager.add_subscriber(device.clone());
 
     // The device mutex mustn't be locked here otherwise it will deadlock.
     let device = MmioTransport::new(vmm.guest_memory().clone(), device, is_vhost_user);

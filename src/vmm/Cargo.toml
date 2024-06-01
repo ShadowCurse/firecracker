@@ -18,7 +18,7 @@ bitflags = "2.5.0"
 crc64 = "2.0.0"
 derive_more = { version = "0.99.17", default-features = false, features = ["from", "display"] }
 displaydoc = "0.2.4"
-event-manager = "0.4.0"
+event-manager = { git = "https://github.com/ShadowCurse/event-manager", branch = "new_event_manager" }
 kvm-bindings = { version = "0.8.0", features = ["fam-wrappers", "serde"] }
 kvm-ioctls = "0.17.0"
 lazy_static = "1.4.0"

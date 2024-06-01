@@ -50,7 +50,9 @@ pub struct Bus {
     devices: BTreeMap<BusRange, Arc<Mutex<BusDevice>>>,
 }
 
-use event_manager::{EventOps, Events, MutEventSubscriber};
+// use event_manager::{EventOps, Events, MutEventSubscriber};
+
+use log::info;
 
 #[cfg(target_arch = "aarch64")]
 use super::legacy::RTCDevice;
@@ -197,20 +199,30 @@ impl BusDevice {
     }
 }
 
-impl MutEventSubscriber for BusDevice {
-    fn process(&mut self, event: Events, ops: &mut EventOps) {
+impl event_manager::RegisterEvents for BusDevice {
+    fn register(&mut self, event_manager: &mut event_manager::BufferedEventManager) {
+        info!("Registering {}", std::any::type_name::<Self>());
         match self {
-            Self::Serial(serial) => serial.process(event, ops),
-            _ => panic!(),
-        }
-    }
-    fn init(&mut self, ops: &mut EventOps) {
-        match self {
-            Self::Serial(serial) => serial.init(ops),
+            Self::Serial(serial) => serial.register(event_manager),
             _ => panic!(),
         }
     }
 }
+
+// impl MutEventSubscriber for BusDevice {
+//     fn process(&mut self, event: Events, ops: &mut EventOps) {
+//         match self {
+//             Self::Serial(serial) => serial.process(event, ops),
+//             _ => panic!(),
+//         }
+//     }
+//     fn init(&mut self, ops: &mut EventOps) {
+//         match self {
+//             Self::Serial(serial) => serial.init(ops),
+//             _ => panic!(),
+//         }
+//     }
+// }
 
 impl Bus {
     /// Constructs an a bus with an empty address space.

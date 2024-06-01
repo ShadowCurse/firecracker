@@ -38,7 +38,6 @@ pub struct Entropy {
     // VirtIO fields
     avail_features: u64,
     acked_features: u64,
-    activate_event: EventFd,
 
     // Transport fields
     device_state: DeviceState,
@@ -60,7 +59,6 @@ impl Entropy {
         queues: Vec<Queue>,
         rate_limiter: RateLimiter,
     ) -> Result<Self, EntropyError> {
-        let activate_event = EventFd::new(libc::EFD_NONBLOCK)?;
         let queue_events = (0..RNG_NUM_QUEUES)
             .map(|_| EventFd::new(libc::EFD_NONBLOCK))
             .collect::<Result<Vec<EventFd>, io::Error>>()?;
@@ -69,7 +67,6 @@ impl Entropy {
         Ok(Self {
             avail_features: 1 << VIRTIO_F_VERSION_1,
             acked_features: 0u64,
-            activate_event,
             device_state: DeviceState::Inactive,
             queues,
             queue_events,
@@ -236,10 +233,6 @@ impl Entropy {
     pub(crate) fn set_activated(&mut self, mem: GuestMemoryMmap) {
         self.device_state = DeviceState::Activated(mem);
     }
-
-    pub(crate) fn activate_event(&self) -> &EventFd {
-        &self.activate_event
-    }
 }
 
 impl VirtioDevice for Entropy {
@@ -288,11 +281,6 @@ impl VirtioDevice for Entropy {
     }
 
     fn activate(&mut self, mem: GuestMemoryMmap) -> Result<(), ActivateError> {
-        self.activate_event.write(1).map_err(|err| {
-            error!("entropy: Cannot write to activate_evt: {err}");
-            METRICS.activate_fails.inc();
-            super::super::ActivateError::BadActivate
-        })?;
         self.device_state = DeviceState::Activated(mem);
         Ok(())
     }

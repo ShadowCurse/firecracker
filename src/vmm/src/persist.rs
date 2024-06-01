@@ -43,7 +43,9 @@ use crate::vstate::memory::{
 };
 use crate::vstate::vcpu::{VcpuSendEventError, VcpuState};
 use crate::vstate::vm::VmState;
-use crate::{mem_size_mib, vstate, EventManager, Vmm, VmmError};
+use crate::{mem_size_mib, vstate, Vmm, VmmError};
+
+use event_manager::BufferedEventManager as EventManager;
 
 /// Holds information related to the VM that is not part of VmState.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]

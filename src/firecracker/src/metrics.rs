@@ -4,10 +4,9 @@
 use std::os::unix::io::AsRawFd;
 use std::time::Duration;
 
-use event_manager::{EventOps, Events, MutEventSubscriber};
 use timerfd::{ClockId, SetTimeFlags, TimerFd, TimerState};
 use utils::epoll::EventSet;
-use vmm::logger::{error, warn, IncMetric, METRICS};
+use vmm::logger::{error, info, IncMetric, METRICS};
 
 /// Metrics reporting period.
 pub(crate) const WRITE_METRICS_PERIOD_MS: u64 = 60000;
@@ -59,35 +58,24 @@ impl PeriodicMetrics {
     }
 }
 
-impl MutEventSubscriber for PeriodicMetrics {
-    /// Handle a read event (EPOLLIN).
-    fn process(&mut self, event: Events, _: &mut EventOps) {
-        let source = event.fd();
-        let event_set = event.event_set();
-
-        // TODO: also check for errors. Pending high level discussions on how we want
-        // to handle errors in devices.
-        let supported_events = EventSet::IN;
-        if !supported_events.contains(event_set) {
-            warn!(
-                "Received unknown event: {:?} from source: {:?}",
-                event_set, source
-            );
-            return;
-        }
-
-        if source == self.write_metrics_event_fd.as_raw_fd() {
-            self.write_metrics_event_fd.read();
-            self.write_metrics();
-        } else {
-            error!("Spurious METRICS event!");
-        }
-    }
-
-    fn init(&mut self, ops: &mut EventOps) {
-        if let Err(err) = ops.add(Events::new(&self.write_metrics_event_fd, EventSet::IN)) {
-            error!("Failed to register metrics event: {}", err);
-        }
+impl event_manager::RegisterEvents for PeriodicMetrics {
+    fn register(&mut self, event_manager: &mut event_manager::BufferedEventManager) {
+        info!("Registering {}", std::any::type_name::<Self>());
+        let self_ptr = self as *const Self;
+        let action = Box::new(
+            move |_event_manager: &mut event_manager::EventManager, _event_set: EventSet| {
+                let self_mut_ref: &mut Self = unsafe { std::mem::transmute(self_ptr) };
+                self_mut_ref.write_metrics_event_fd.read();
+                self_mut_ref.write_metrics();
+            },
+        );
+        event_manager
+            .add(
+                self.write_metrics_event_fd.as_raw_fd(),
+                EventSet::IN,
+                action,
+            )
+            .expect("failed to register event");
     }
 }
 

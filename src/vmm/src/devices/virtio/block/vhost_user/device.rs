@@ -114,7 +114,6 @@ pub struct VhostUserBlockImpl<T: VhostUserHandleBackend> {
     pub avail_features: u64,
     pub acked_features: u64,
     pub config_space: Vec<u8>,
-    pub activate_evt: EventFd,
 
     // Transport related fields.
     pub queues: Vec<Queue>,
@@ -142,7 +141,6 @@ impl<T: VhostUserHandleBackend> std::fmt::Debug for VhostUserBlockImpl<T> {
             .field("avail_features", &self.avail_features)
             .field("acked_features", &self.acked_features)
             .field("config_space", &self.config_space)
-            .field("activate_evt", &self.activate_evt)
             .field("queues", &self.queues)
             .field("queue_evts", &self.queue_evts)
             .field("device_state", &self.device_state)
@@ -199,9 +197,6 @@ impl<T: VhostUserHandleBackend> VhostUserBlockImpl<T> {
                 vec![]
             };
 
-        let activate_evt =
-            EventFd::new(libc::EFD_NONBLOCK).map_err(VhostUserBlockError::EventFd)?;
-
         let queues = vec![Queue::new(QUEUE_SIZE)];
         let queue_evts = [EventFd::new(libc::EFD_NONBLOCK).map_err(VhostUserBlockError::EventFd)?;
             u64_to_usize(NUM_QUEUES)];
@@ -223,7 +218,6 @@ impl<T: VhostUserHandleBackend> VhostUserBlockImpl<T> {
             avail_features,
             acked_features,
             config_space,
-            activate_evt,
 
             queues,
             queue_evts,

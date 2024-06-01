@@ -17,7 +17,7 @@ bench = false
 
 [dependencies]
 displaydoc = "0.2.4"
-event-manager = "0.4.0"
+event-manager = { git = "https://github.com/ShadowCurse/event-manager", branch = "new_event_manager" }
 libc = "0.2.155"
 log-instrument = { path = "../log-instrument", optional = true }
 micro_http = { git = "https://github.com/firecracker-microvm/micro-http" }

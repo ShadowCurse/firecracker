@@ -2,10 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 pub mod device;
-pub mod event_handler;
 pub mod persist;
 
-use self::device::VhostUserBlock;
 use crate::devices::virtio::vhost_user::VhostUserError;
 
 /// Number of queues for the vhost-user block device.

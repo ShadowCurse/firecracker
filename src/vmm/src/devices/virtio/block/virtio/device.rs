@@ -259,7 +259,6 @@ pub struct VirtioBlock {
     pub avail_features: u64,
     pub acked_features: u64,
     pub config_space: Vec<u8>,
-    pub activate_evt: EventFd,
 
     // Transport related fields.
     pub queues: Vec<Queue>,
@@ -329,7 +328,6 @@ impl VirtioBlock {
             avail_features,
             acked_features: 0u64,
             config_space: disk_properties.virtio_block_config_space(),
-            activate_evt: EventFd::new(libc::EFD_NONBLOCK).map_err(VirtioBlockError::EventFd)?,
 
             queues,
             queue_evts,
@@ -657,10 +655,6 @@ impl VirtioDevice for VirtioBlock {
             }
         }
 
-        if self.activate_evt.write(1).is_err() {
-            error!("Block: Cannot write to activate_evt");
-            return Err(ActivateError::BadActivate);
-        }
         self.device_state = DeviceState::Activated(mem);
         Ok(())
     }

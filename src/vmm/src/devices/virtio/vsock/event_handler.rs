@@ -6,6 +6,7 @@
 // found in the THIRD-PARTY file.
 
 use std::fmt::Debug;
+use std::os::fd::AsRawFd;
 
 /// The vsock object implements the runtime logic of our vsock device:
 /// 1. Respond to TX queue events by wrapping virtio buffers into `VsockPacket`s, then sending
@@ -26,13 +27,11 @@ use std::fmt::Debug;
 ///   - forward the event to the backend; then
 ///   - again, attempt to fetch any incoming packets queued by the backend into virtio RX
 ///     buffers.
-use event_manager::{EventOps, Events, MutEventSubscriber};
-use log::{error, warn};
+use log::{error, info, warn};
 use utils::epoll::EventSet;
 
 use super::device::{Vsock, EVQ_INDEX, RXQ_INDEX, TXQ_INDEX};
 use super::VsockBackend;
-use crate::devices::virtio::device::VirtioDevice;
 use crate::devices::virtio::vsock::metrics::METRICS;
 use crate::logger::IncMetric;
 
@@ -40,12 +39,6 @@ impl<B> Vsock<B>
 where
     B: Debug + VsockBackend + 'static,
 {
-    const PROCESS_ACTIVATE: u32 = 0;
-    const PROCESS_RXQ: u32 = 1;
-    const PROCESS_TXQ: u32 = 2;
-    const PROCESS_EVQ: u32 = 3;
-    const PROCESS_NOTIFY_BACKEND: u32 = 4;
-
     pub fn handle_rxq_event(&mut self, evset: EventSet) -> bool {
         if evset != EventSet::IN {
             warn!("vsock: rxq unexpected event {:?}", evset);
@@ -116,102 +109,78 @@ where
         }
         raise_irq
     }
-
-    fn register_runtime_events(&self, ops: &mut EventOps) {
-        if let Err(err) = ops.add(Events::with_data(
-            &self.queue_events[RXQ_INDEX],
-            Self::PROCESS_RXQ,
-            EventSet::IN,
-        )) {
-            error!("Failed to register rx queue event: {}", err);
-        }
-        if let Err(err) = ops.add(Events::with_data(
-            &self.queue_events[TXQ_INDEX],
-            Self::PROCESS_TXQ,
-            EventSet::IN,
-        )) {
-            error!("Failed to register tx queue event: {}", err);
-        }
-        if let Err(err) = ops.add(Events::with_data(
-            &self.queue_events[EVQ_INDEX],
-            Self::PROCESS_EVQ,
-            EventSet::IN,
-        )) {
-            error!("Failed to register ev queue event: {}", err);
-        }
-        if let Err(err) = ops.add(Events::with_data(
-            &self.backend,
-            Self::PROCESS_NOTIFY_BACKEND,
-            self.backend.get_polled_evset(),
-        )) {
-            error!("Failed to register vsock backend event: {}", err);
-        }
-    }
-
-    fn register_activate_event(&self, ops: &mut EventOps) {
-        if let Err(err) = ops.add(Events::with_data(
-            &self.activate_evt,
-            Self::PROCESS_ACTIVATE,
-            EventSet::IN,
-        )) {
-            error!("Failed to register activate event: {}", err);
-        }
-    }
-
-    fn handle_activate_event(&self, ops: &mut EventOps) {
-        if let Err(err) = self.activate_evt.read() {
-            error!("Failed to consume net activate event: {:?}", err);
-        }
-        self.register_runtime_events(ops);
-        if let Err(err) = ops.remove(Events::with_data(
-            &self.activate_evt,
-            Self::PROCESS_ACTIVATE,
-            EventSet::IN,
-        )) {
-            error!("Failed to un-register activate event: {}", err);
-        }
-    }
 }
 
-impl<B> MutEventSubscriber for Vsock<B>
+impl<B> event_manager::RegisterEvents for Vsock<B>
 where
     B: Debug + VsockBackend + 'static,
 {
-    fn process(&mut self, event: Events, ops: &mut EventOps) {
-        let source = event.data();
-        let evset = event.event_set();
+    fn register(&mut self, event_manager: &mut event_manager::BufferedEventManager) {
+        info!("Registering {}", std::any::type_name::<Self>());
+        let self_ptr = self as *const Self;
+        let action = Box::new(
+            move |_event_manager: &mut event_manager::EventManager, event_set: EventSet| {
+                let self_mut_ref: &mut Self = unsafe { std::mem::transmute(self_ptr) };
+                if self_mut_ref.handle_rxq_event(event_set) {
+                    self_mut_ref.signal_used_queue().unwrap_or_default();
+                }
+            },
+        );
+        event_manager
+            .add(
+                self.queue_events[RXQ_INDEX].as_raw_fd(),
+                EventSet::IN,
+                action,
+            )
+            .expect("failed to register event");
 
-        if self.is_activated() {
-            let mut raise_irq = false;
-            match source {
-                Self::PROCESS_ACTIVATE => self.handle_activate_event(ops),
-                Self::PROCESS_RXQ => raise_irq = self.handle_rxq_event(evset),
-                Self::PROCESS_TXQ => raise_irq = self.handle_txq_event(evset),
-                Self::PROCESS_EVQ => raise_irq = self.handle_evq_event(evset),
-                Self::PROCESS_NOTIFY_BACKEND => raise_irq = self.notify_backend(evset),
-                _ => warn!("Unexpected vsock event received: {:?}", source),
-            }
-            if raise_irq {
-                self.signal_used_queue().unwrap_or_default();
-            }
-        } else {
-            warn!(
-                "Vsock: The device is not yet activated. Spurious event received: {:?}",
-                source
-            );
-        }
-    }
+        let action = Box::new(
+            move |_event_manager: &mut event_manager::EventManager, event_set: EventSet| {
+                let self_mut_ref: &mut Self = unsafe { std::mem::transmute(self_ptr) };
+                if self_mut_ref.handle_txq_event(event_set) {
+                    self_mut_ref.signal_used_queue().unwrap_or_default();
+                }
+            },
+        );
+        event_manager
+            .add(
+                self.queue_events[TXQ_INDEX].as_raw_fd(),
+                EventSet::IN,
+                action,
+            )
+            .expect("failed to register event");
 
-    fn init(&mut self, ops: &mut EventOps) {
-        // This function can be called during different points in the device lifetime:
-        //  - shortly after device creation,
-        //  - on device activation (is-activated already true at this point),
-        //  - on device restore from snapshot.
-        if self.is_activated() {
-            self.register_runtime_events(ops);
-        } else {
-            self.register_activate_event(ops);
-        }
+        let action = Box::new(
+            move |_event_manager: &mut event_manager::EventManager, event_set: EventSet| {
+                let self_mut_ref: &mut Self = unsafe { std::mem::transmute(self_ptr) };
+                if self_mut_ref.handle_evq_event(event_set) {
+                    self_mut_ref.signal_used_queue().unwrap_or_default();
+                }
+            },
+        );
+        event_manager
+            .add(
+                self.queue_events[EVQ_INDEX].as_raw_fd(),
+                EventSet::IN,
+                action,
+            )
+            .expect("failed to register event");
+
+        let action = Box::new(
+            move |_event_manager: &mut event_manager::EventManager, event_set: EventSet| {
+                let self_mut_ref: &mut Self = unsafe { std::mem::transmute(self_ptr) };
+                if self_mut_ref.notify_backend(event_set) {
+                    self_mut_ref.signal_used_queue().unwrap_or_default();
+                }
+            },
+        );
+        event_manager
+            .add(
+                self.backend.as_raw_fd(),
+                self.backend.get_polled_evset(),
+                action,
+            )
+            .expect("failed to register event");
     }
 }
 

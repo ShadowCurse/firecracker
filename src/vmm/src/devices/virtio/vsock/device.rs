@@ -67,7 +67,6 @@ pub struct Vsock<B> {
     // (queue and backend related) to be registered post virtio device activation. That's
     // mostly something we wanted to happen for the backend events, to prevent (potentially)
     // continuous triggers from happening before the device gets activated.
-    pub(crate) activate_evt: EventFd,
     pub(crate) device_state: DeviceState,
 }
 
@@ -100,7 +99,6 @@ where
             avail_features: AVAIL_FEATURES,
             acked_features: 0,
             irq_trigger: IrqTrigger::new().map_err(VsockError::EventFd)?,
-            activate_evt: EventFd::new(libc::EFD_NONBLOCK).map_err(VsockError::EventFd)?,
             device_state: DeviceState::Inactive,
         })
     }
@@ -335,12 +333,6 @@ where
                 defs::VSOCK_NUM_QUEUES,
                 self.queues.len()
             );
-            return Err(ActivateError::BadActivate);
-        }
-
-        if self.activate_evt.write(1).is_err() {
-            METRICS.activate_fails.inc();
-            error!("Cannot write to activate_evt",);
             return Err(ActivateError::BadActivate);
         }
 

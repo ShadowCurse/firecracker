@@ -158,7 +158,6 @@ pub struct Balloon {
     pub(crate) avail_features: u64,
     pub(crate) acked_features: u64,
     pub(crate) config_space: ConfigSpace,
-    pub(crate) activate_evt: EventFd,
 
     // Transport related fields.
     pub(crate) queues: Vec<Queue>,
@@ -187,7 +186,6 @@ impl fmt::Debug for Balloon {
             .field("avail_features", &self.avail_features)
             .field("acked_features", &self.acked_features)
             .field("config_space", &self.config_space)
-            .field("activate_evt", &self.activate_evt)
             .field("queues", &self.queues)
             .field("queue_evts", &self.queue_evts)
             .field("device_state", &self.device_state)
@@ -247,7 +245,6 @@ impl Balloon {
             queues,
             irq_trigger: IrqTrigger::new().map_err(BalloonError::EventFd)?,
             device_state: DeviceState::Inactive,
-            activate_evt: EventFd::new(libc::EFD_NONBLOCK).map_err(BalloonError::EventFd)?,
             restored,
             stats_polling_interval_s,
             stats_timer,
@@ -627,12 +624,6 @@ impl VirtioDevice for Balloon {
 
     fn activate(&mut self, mem: GuestMemoryMmap) -> Result<(), ActivateError> {
         self.device_state = DeviceState::Activated(mem);
-        if self.activate_evt.write(1).is_err() {
-            error!("Balloon: Cannot write to activate_evt");
-            METRICS.activate_fails.inc();
-            self.device_state = DeviceState::Inactive;
-            return Err(ActivateError::BadActivate);
-        }
 
         if self.stats_enabled() {
             self.update_timer_state();

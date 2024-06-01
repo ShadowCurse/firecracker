@@ -6,7 +6,6 @@
 use std::fmt::{self, Debug};
 use std::sync::{Arc, Mutex};
 
-use event_manager::{MutEventSubscriber, SubscriberOps};
 use kvm_ioctls::VmFd;
 use log::{error, warn};
 use serde::{Deserialize, Serialize};
@@ -48,7 +47,10 @@ use crate::resources::{ResourcesError, VmResources};
 use crate::snapshot::Persist;
 use crate::vmm_config::mmds::MmdsConfigError;
 use crate::vstate::memory::GuestMemoryMmap;
-use crate::EventManager;
+// use crate::EventManager;
+// use event_manager::{MutEventSubscriber, SubscriberOps};
+use event_manager::BufferedEventManager as EventManager;
+use event_manager::RegisterEvents;
 
 /// Errors for (de)serialization of the MMIO device manager.
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
@@ -473,7 +475,7 @@ impl<'a> Persist<'a> for MMIODeviceManager {
 
         let mut restore_helper = |device: Arc<Mutex<dyn VirtioDevice>>,
                                   is_vhost_user: bool,
-                                  as_subscriber: Arc<Mutex<dyn MutEventSubscriber>>,
+                                  as_subscriber: Arc<Mutex<dyn RegisterEvents>>,
                                   id: &String,
                                   state: &MmioTransportState,
                                   device_info: &MMIODeviceInfo,
@@ -510,7 +512,8 @@ impl<'a> Persist<'a> for MMIODeviceManager {
 
             dev_manager.register_mmio_virtio(vm, id.clone(), mmio_transport, device_info)?;
 
-            event_manager.add_subscriber(as_subscriber);
+            // event_manager.add_subscriber(as_subscriber);
+            as_subscriber.lock().unwrap().register(event_manager);
             Ok(())
         };
 
