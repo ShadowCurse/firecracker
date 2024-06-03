@@ -415,6 +415,7 @@ version = "1.9.0-dev"
 dependencies = [
  "clap",
  "displaydoc",
+ "event-manager",
  "libc",
  "log-instrument",
  "serde",

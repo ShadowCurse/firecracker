@@ -17,6 +17,7 @@ log-instrument = { path = "../log-instrument", optional = true }
 serde = { version = "1.0.203", features = ["derive"] }
 serde_json = "1.0.117"
 thiserror = "1.0.61"
+event-manager = { git = "https://github.com/ShadowCurse/event-manager", branch = "new_event_manager" }
 
 vmm = { path = "../vmm" }
 vmm-sys-util = { version = "0.12.1", features = ["with-serde"] }
