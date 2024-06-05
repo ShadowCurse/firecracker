@@ -701,7 +701,11 @@ impl Net {
 
     pub fn process_tap_rx_event(&mut self) {
         // This is safe since we checked in the event handler that the device is activated.
-        let mem = self.device_state.mem().unwrap();
+        let mem = if let Some(mem) = self.device_state.mem() {
+            mem
+        } else {
+            return;
+        };
         self.metrics.rx_tap_event_count.inc();
 
         // While there are no available RX queue buffers and there's a deferred_frame
