@@ -25,6 +25,10 @@ from framework.utils import (
 from framework.utils_cpu_templates import get_supported_cpu_templates
 from host_tools.cargo_build import get_firecracker_binaries
 
+import host_tools.cargo_build as host
+from framework import utils
+from framework.properties import global_props
+
 # pylint: enable=wrong-import-position
 
 # Default IPv4 address to route MMDS requests.
@@ -95,6 +99,12 @@ def main():
         cpu_templates = ["None"]
     cpu_templates += get_supported_cpu_templates()
 
+    snap_editor = host.get_binary("snapshot-editor")
+    remove_regs_5_10_to_6_1 = [str(r) for r in  [6931039826524487690 6931039826524487720 6931039826524488945 6931039826524488946 6931039826524495072 6931039826524495073 6931039826524495074 6931039826524495075 6931039826524495076 6931039826524495077 6931039826524495080 6931039826524495088 6931039826524495091 6931039826524495680 6931039826524495681 6931039826524495682 6931039826524495683 6931039826524495684 6931039826524495685 6931039826524495686 6931039826524495687 6931039826524495688 6931039826524495689 6931039826524495690 6931039826524495691 6931039826524495692 6931039826524495693 6931039826524495694 6931039826524495695 6931039826524495696 6931039826524495697 6931039826524495698 6931039826524495699 6931039826524495700 6931039826524495701 6931039826524495702 6931039826524495703 6931039826524495704 6931039826524495705 6931039826524495706 6931039826524495707 6931039826524495708 6931039826524495709 6931039826524495710 6931039826524495712 6931039826524495713 6931039826524495714 6931039826524495715 6931039826524495716 6931039826524495717 6931039826524495718 6931039826524495719 6931039826524495720 6931039826524495721 6931039826524495722 6931039826524495723 6931039826524495724 6931039826524495725 6931039826524495726 6931039826524495727 6931039826524495728 6931039826524495729 6931039826524495730 6931039826524495731 6931039826524495732 6931039826524495733 6931039826524495734 6931039826524495735 6931039826524495736 6931039826524495737 6931039826524495738 6931039826524495739 6931039826524495740 6931039826524495741 6931039826524495742 6931039826524495743]]
+    remove_regs_6_1_to_5_10 = [str(r) for r in [6931039826524504064, 6931039826524635136, 6931039826524635137, 6931039826524635138, 6931039826524471436, 6931039826524487690, 6931039826524487720]] 
+
+    host_kernel = global_props.host_linux_version
+
     for cpu_template in cpu_templates:
         for kernel in kernels(glob="vmlinux-*"):
             for rootfs in disks(glob="ubuntu-*.squashfs"):
@@ -157,6 +167,35 @@ def main():
                 snapshot_artifacts_dir.mkdir(parents=True)
                 snapshot.save_to(snapshot_artifacts_dir)
                 print(f"Copied snapshot to: {snapshot_artifacts_dir}.")
+
+                vm_state_path = f"{snapshot_artifacts_dir}/vmstate";
+                if host_kernel == "5.10":
+                    print("Removing regs for 5.10 to 6.1")
+                    cmd = [
+                        str(snap_editor),
+                        "edit-vmstate",
+                        "remove-regs",
+                        "--vmstate-path",
+                        vm_state_path,
+                        "--output-path",
+                        vm_state_path,
+                        remove_regs_5_10_to_6_1,
+                    ]
+                    utils.run_cmd(cmd)
+                if host_kernel == "6.1":
+                    print("Removing regs for 6.1 to 5.10")
+                    cmd = [
+                        str(snap_editor),
+                        "edit-vmstate",
+                        "remove-regs",
+                        "--vmstate-path",
+                        vm_state_path,
+                        "--output-path",
+                        vm_state_path,
+                        remove_regs_5_10_to_6_1,
+                    ]
+                    utils.run_cmd(cmd)
+
 
                 vm.kill()
 
