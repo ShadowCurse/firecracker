@@ -179,8 +179,7 @@ def main():
                         vm_state_path,
                         "--output-path",
                         vm_state_path,
-                        remove_regs_5_10_to_6_1,
-                    ]
+                    ] + remove_regs_5_10_to_6_1
                     utils.run_cmd(cmd)
                 if host_kernel == "6.1":
                     print("Removing regs for 6.1 to 5.10")
@@ -192,8 +191,7 @@ def main():
                         vm_state_path,
                         "--output-path",
                         vm_state_path,
-                        remove_regs_5_10_to_6_1,
-                    ]
+                    ] + remove_regs_6_1_to_5_10
                     utils.run_cmd(cmd)
 
 
