@@ -40,8 +40,8 @@ def select_supported_kernels():
     supported_kernels.append(r"vmlinux-5.10.\d+-no-acpi")
 
     # Support Linux 6.1 guest in a limited fashion
-    if global_props.cpu_model == "ARM_NEOVERSE_V1" and (hlv.major, hlv.minor) >= (6, 1):
-        supported_kernels.append(r"vmlinux-6.1.\d+")
+    # if global_props.cpu_model == "ARM_NEOVERSE_V1" and (hlv.major, hlv.minor) >= (6, 1):
+    supported_kernels.append(r"vmlinux-6.1.\d+")
 
     return supported_kernels
 
