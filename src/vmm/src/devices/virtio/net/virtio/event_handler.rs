@@ -5,8 +5,8 @@ use event_manager::{EventOps, Events, MutEventSubscriber};
 use utils::epoll::EventSet;
 
 use crate::devices::virtio::device::VirtioDevice;
-use crate::devices::virtio::net::device::Net;
-use crate::devices::virtio::net::{RX_INDEX, TX_INDEX};
+use crate::devices::virtio::net::virtio::device::Net;
+use crate::devices::virtio::net::virtio::{RX_INDEX, TX_INDEX};
 use crate::logger::{error, warn, IncMetric};
 
 impl Net {

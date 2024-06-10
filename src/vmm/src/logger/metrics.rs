@@ -73,7 +73,7 @@ use super::FcLineWriter;
 use crate::devices::legacy;
 use crate::devices::virtio::balloon::metrics as balloon_metrics;
 use crate::devices::virtio::block::virtio::metrics as block_metrics;
-use crate::devices::virtio::net::metrics as net_metrics;
+use crate::devices::virtio::net::virtio::metrics as net_metrics;
 use crate::devices::virtio::rng::metrics as entropy_metrics;
 use crate::devices::virtio::vhost_user_metrics;
 use crate::devices::virtio::vsock::metrics as vsock_metrics;

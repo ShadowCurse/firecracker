@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 use utils::net::mac::MacAddr;
 
 use super::RateLimiterConfig;
-use crate::devices::virtio::net::{Net, TapError};
+use crate::devices::virtio::net::device::Net;
+use crate::devices::virtio::net::virtio::tap::TapError;
 use crate::VmmError;
 
 /// This struct represents the strongly typed equivalent of the json body from net iface
@@ -155,7 +156,7 @@ impl NetBuilder {
             .map_err(NetworkInterfaceError::CreateRateLimiter)?;
 
         // Create and return the Net device
-        crate::devices::virtio::net::Net::new(
+        Net::new(
             cfg.iface_id,
             &cfg.host_dev_name,
             cfg.guest_mac,

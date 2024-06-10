@@ -31,7 +31,7 @@ use crate::devices::virtio::balloon::Balloon;
 use crate::devices::virtio::block::device::Block;
 use crate::devices::virtio::device::VirtioDevice;
 use crate::devices::virtio::mmio::MmioTransport;
-use crate::devices::virtio::net::Net;
+use crate::devices::virtio::net::device::Net;
 use crate::devices::virtio::rng::Entropy;
 use crate::devices::virtio::vsock::TYPE_VSOCK;
 use crate::devices::virtio::{TYPE_BALLOON, TYPE_BLOCK, TYPE_NET, TYPE_RNG};

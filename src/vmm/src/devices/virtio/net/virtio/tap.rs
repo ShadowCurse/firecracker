@@ -15,7 +15,7 @@ use utils::ioctl::{ioctl_with_mut_ref, ioctl_with_ref, ioctl_with_val};
 use utils::{ioctl_ioc_nr, ioctl_iow_nr};
 
 use crate::devices::virtio::iovec::IoVecBuffer;
-use crate::devices::virtio::net::gen;
+use super::gen;
 #[cfg(test)]
 use crate::devices::virtio::net::test_utils::Mocks;
 

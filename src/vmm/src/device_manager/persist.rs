@@ -27,10 +27,9 @@ use crate::devices::virtio::block::persist::{BlockConstructorArgs, BlockState};
 use crate::devices::virtio::block::BlockError;
 use crate::devices::virtio::device::VirtioDevice;
 use crate::devices::virtio::mmio::MmioTransport;
-use crate::devices::virtio::net::persist::{
-    NetConstructorArgs, NetPersistError as NetError, NetState,
-};
-use crate::devices::virtio::net::Net;
+use crate::devices::virtio::net::NetError;
+use crate::devices::virtio::net::device::Net;
+use crate::devices::virtio::net::persist::{NetConstructorArgs, NetState};
 use crate::devices::virtio::persist::{MmioTransportConstructorArgs, MmioTransportState};
 use crate::devices::virtio::rng::persist::{
     EntropyConstructorArgs, EntropyPersistError as EntropyError, EntropyState,
@@ -351,7 +350,7 @@ impl<'a> Persist<'a> for MMIODeviceManager {
                 TYPE_NET => {
                     let net = locked_device.as_any().downcast_ref::<Net>().unwrap();
                     if let (Some(mmds_ns), None) =
-                        (net.mmds_ns.as_ref(), states.mmds_version.as_ref())
+                        (net.mmds_ns().as_ref(), states.mmds_version.as_ref())
                     {
                         states.mmds_version =
                             Some(mmds_ns.mmds.lock().expect("Poisoned lock").version().into());
@@ -561,16 +560,17 @@ impl<'a> Persist<'a> for MMIODeviceManager {
             constructor_args
                 .vm_resources
                 .set_mmds_version(mmds_version.clone().into(), constructor_args.instance_id)?;
-        } else if state
-            .net_devices
-            .iter()
-            .any(|dev| dev.device_state.mmds_ns.is_some())
-        {
-            // If there's at least one network device having an mmds_ns, it means
-            // that we are restoring from a version that did not persist the `MmdsVersionState`.
-            // Init with the default.
-            constructor_args.vm_resources.mmds_or_default();
-        }
+        } 
+        // else if state
+        //     .net_devices
+        //     .iter()
+        //     .any(|dev| dev.device_state.mmds_ns.is_some())
+        // {
+        //     // If there's at least one network device having an mmds_ns, it means
+        //     // that we are restoring from a version that did not persist the `MmdsVersionState`.
+        //     // Init with the default.
+        //     constructor_args.vm_resources.mmds_or_default();
+        // }
 
         for net_state in &state.net_devices {
             let device = Arc::new(Mutex::new(Net::restore(
