@@ -4,6 +4,7 @@
 use self::virtio::NetError as VirtioNetError;
 use self::virtio::persist::NetPersistError as VirtioPersistError;
 
+pub mod gen;
 pub mod device;
 pub mod persist;
 pub mod virtio;

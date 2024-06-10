@@ -22,7 +22,8 @@ use vm_memory::GuestMemoryError;
 
 use super::metrics::{NetDeviceMetrics, NetMetricsPerDevice};
 use super::tap::Tap;
-use super::{gen, NetError, NetQueue, MAX_BUFFER_SIZE, NET_QUEUE_SIZES, RX_INDEX, TX_INDEX};
+use super::{NetError, NetQueue, MAX_BUFFER_SIZE, NET_QUEUE_SIZES, RX_INDEX, TX_INDEX};
+use crate::devices::virtio::net::gen;
 use crate::devices::virtio::device::{DeviceState, IrqTrigger, IrqType, VirtioDevice};
 use crate::devices::virtio::gen::virtio_blk::VIRTIO_F_VERSION_1;
 use crate::devices::virtio::gen::virtio_net::{

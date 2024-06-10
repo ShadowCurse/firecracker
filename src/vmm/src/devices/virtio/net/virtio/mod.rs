@@ -24,8 +24,6 @@ pub mod persist;
 pub mod tap;
 // pub mod test_utils;
 
-mod gen;
-
 use self::tap::TapError;
 
 /// Enum representing the Net device queue types
