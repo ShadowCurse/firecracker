@@ -28,6 +28,13 @@ pub struct NetworkInterfaceConfig {
     pub rx_rate_limiter: Option<RateLimiterConfig>,
     /// Rate Limiter for transmitted packages.
     pub tx_rate_limiter: Option<RateLimiterConfig>,
+    /// Vhost?
+    #[serde(default = "vhost_def")]
+    pub vhost: bool,
+}
+
+fn vhost_def() -> bool {
+    true
 }
 
 impl From<&Net> for NetworkInterfaceConfig {
@@ -40,6 +47,7 @@ impl From<&Net> for NetworkInterfaceConfig {
             guest_mac: net.guest_mac().copied(),
             rx_rate_limiter: rx_rl.into_option(),
             tx_rate_limiter: tx_rl.into_option(),
+            vhost: net.is_vhost(),
         }
     }
 }
@@ -162,6 +170,7 @@ impl NetBuilder {
             cfg.guest_mac,
             rx_rate_limiter.unwrap_or_default(),
             tx_rate_limiter.unwrap_or_default(),
+            cfg.vhost,
         )
         .map_err(NetworkInterfaceError::CreateNetworkDevice)
     }

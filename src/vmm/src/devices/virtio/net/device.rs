@@ -10,8 +10,8 @@ use utils::eventfd::EventFd;
 use utils::net::mac::MacAddr;
 
 use super::persist::{NetConstructorArgs, NetState};
-use super::virtio::device::Net as VirtioNet;
 use super::vhost::device::VhostNet;
+use super::virtio::device::Net as VirtioNet;
 use super::NetError;
 use crate::devices::virtio::device::VirtioDevice;
 use crate::devices::virtio::queue::Queue;
@@ -37,10 +37,24 @@ impl Net {
         guest_mac: Option<MacAddr>,
         rx_rate_limiter: RateLimiter,
         tx_rate_limiter: RateLimiter,
+        vhost: bool,
     ) -> Result<Self, NetError> {
-        let net = VirtioNet::new(id, tap_if_name, guest_mac, rx_rate_limiter, tx_rate_limiter)
-            .map_err(NetError::VirtioBackend)?;
-        Ok(Self::Virtio(net))
+        if !vhost {
+            let net = VirtioNet::new(id, tap_if_name, guest_mac, rx_rate_limiter, tx_rate_limiter)
+                .map_err(NetError::VirtioBackend)?;
+            Ok(Self::Virtio(net))
+        } else {
+            let net = VhostNet::new(id, tap_if_name, guest_mac).map_err(NetError::VhostBackend)?;
+            Ok(Self::Vhost(net))
+        }
+    }
+
+    /// Provides the ID of this net device.
+    pub fn is_vhost(&self) -> bool {
+        match self {
+            Self::Virtio(_) => false,
+            Self::Vhost(_) => true,
+        }
     }
 
     /// Provides the ID of this net device.

@@ -17,4 +17,6 @@ pub enum NetError {
     VirtioBackend(VirtioNetError),
     /// Persist error: {0}
     VirtioBackendPersist(VirtioPersistError),
+    /// Vhost backend error: {0}
+    VhostBackend(VirtioNetError),
 }
