@@ -39,7 +39,7 @@ thiserror = "1.0.61"
 timerfd = "1.5.0"
 userfaultfd = "0.8.1"
 utils = { path = "../utils" }
-vhost = { version = "0.11.0", features = ["vhost-user-frontend"] }
+vhost = { version = "0.11.0", features = ["vhost-user-frontend", "vhost-net"] }
 vm-allocator = "0.1.0"
 vm-memory = { version = "0.14.1", features = ["backend-mmap", "backend-bitmap"] }
 vm-superio = "0.8.0"

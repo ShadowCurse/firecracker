@@ -7,6 +7,7 @@ use self::virtio::persist::NetPersistError as VirtioPersistError;
 pub mod gen;
 pub mod device;
 pub mod persist;
+pub mod vhost;
 pub mod virtio;
 
 /// Errors the block device can trigger.

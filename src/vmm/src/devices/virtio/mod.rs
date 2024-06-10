@@ -65,6 +65,8 @@ pub enum ActivateError {
     /// General error at activation.
     BadActivate,
     /// Vhost user: {0}
+    Vhost(vhost::Error),
+    /// Vhost user: {0}
     VhostUser(vhost_user::VhostUserError),
 }
 

@@ -11,6 +11,7 @@ use utils::net::mac::MacAddr;
 
 use super::persist::{NetConstructorArgs, NetState};
 use super::virtio::device::Net as VirtioNet;
+use super::vhost::device::VhostNet;
 use super::NetError;
 use crate::devices::virtio::device::VirtioDevice;
 use crate::devices::virtio::queue::Queue;
@@ -26,6 +27,7 @@ use crate::vstate::memory::GuestMemoryMmap;
 #[derive(Debug)]
 pub enum Net {
     Virtio(VirtioNet),
+    Vhost(VhostNet),
 }
 
 impl Net {
@@ -45,6 +47,7 @@ impl Net {
     pub fn id(&self) -> &String {
         match self {
             Self::Virtio(b) => b.id(),
+            Self::Vhost(b) => b.id(),
         }
     }
 
@@ -52,6 +55,7 @@ impl Net {
     pub fn guest_mac(&self) -> Option<&MacAddr> {
         match self {
             Self::Virtio(b) => b.guest_mac(),
+            Self::Vhost(b) => b.guest_mac(),
         }
     }
 
@@ -59,6 +63,7 @@ impl Net {
     pub fn iface_name(&self) -> String {
         match self {
             Self::Virtio(b) => b.iface_name(),
+            Self::Vhost(b) => b.iface_name(),
         }
     }
 
@@ -66,6 +71,7 @@ impl Net {
     pub fn mmds_ns(&self) -> Option<&MmdsNetworkStack> {
         match self {
             Self::Virtio(b) => b.mmds_ns(),
+            Self::Vhost(_) => None,
         }
     }
 
@@ -74,6 +80,7 @@ impl Net {
     pub fn configure_mmds_network_stack(&mut self, ipv4_addr: Ipv4Addr, mmds: Arc<Mutex<Mmds>>) {
         match self {
             Self::Virtio(b) => b.configure_mmds_network_stack(ipv4_addr, mmds),
+            _ => unimplemented!(),
         }
     }
 
@@ -81,6 +88,7 @@ impl Net {
     pub fn disable_mmds_network_stack(&mut self) {
         match self {
             Self::Virtio(b) => b.disable_mmds_network_stack(),
+            _ => unimplemented!(),
         }
     }
 
@@ -88,6 +96,7 @@ impl Net {
     pub fn rx_rate_limiter(&self) -> &RateLimiter {
         match self {
             Self::Virtio(b) => b.rx_rate_limiter(),
+            _ => unimplemented!(),
         }
     }
 
@@ -95,6 +104,7 @@ impl Net {
     pub fn tx_rate_limiter(&self) -> &RateLimiter {
         match self {
             Self::Virtio(b) => b.tx_rate_limiter(),
+            _ => unimplemented!(),
         }
     }
 
@@ -108,12 +118,14 @@ impl Net {
     ) {
         match self {
             Self::Virtio(b) => b.patch_rate_limiters(rx_bytes, rx_ops, tx_bytes, tx_ops),
+            _ => unimplemented!(),
         }
     }
 
     pub fn process_virtio_queues(&mut self) {
         match self {
             Self::Virtio(b) => b.process_virtio_queues(),
+            _ => unimplemented!(),
         }
     }
 }
@@ -122,18 +134,21 @@ impl VirtioDevice for Net {
     fn avail_features(&self) -> u64 {
         match self {
             Self::Virtio(b) => b.avail_features,
+            Self::Vhost(b) => b.avail_features,
         }
     }
 
     fn acked_features(&self) -> u64 {
         match self {
             Self::Virtio(b) => b.acked_features,
+            Self::Vhost(b) => b.acked_features,
         }
     }
 
     fn set_acked_features(&mut self, acked_features: u64) {
         match self {
             Self::Virtio(b) => b.acked_features = acked_features,
+            Self::Vhost(b) => b.acked_features = acked_features,
         }
     }
 
@@ -144,54 +159,63 @@ impl VirtioDevice for Net {
     fn queues(&self) -> &[Queue] {
         match self {
             Self::Virtio(b) => &b.queues,
+            Self::Vhost(b) => &b.queues,
         }
     }
 
     fn queues_mut(&mut self) -> &mut [Queue] {
         match self {
             Self::Virtio(b) => &mut b.queues,
+            Self::Vhost(b) => &mut b.queues,
         }
     }
 
     fn queue_events(&self) -> &[EventFd] {
         match self {
             Self::Virtio(b) => &b.queue_evts,
+            Self::Vhost(b) => &b.queue_evts,
         }
     }
 
     fn interrupt_evt(&self) -> &EventFd {
         match self {
             Self::Virtio(b) => &b.irq_trigger.irq_evt,
+            Self::Vhost(b) => &b.irq_trigger.irq_evt,
         }
     }
 
     fn interrupt_status(&self) -> Arc<AtomicU32> {
         match self {
             Self::Virtio(b) => b.irq_trigger.irq_status.clone(),
+            Self::Vhost(b) => b.irq_trigger.irq_status.clone(),
         }
     }
 
     fn read_config(&self, offset: u64, data: &mut [u8]) {
         match self {
             Self::Virtio(b) => b.read_config(offset, data),
+            Self::Vhost(b) => b.read_config(offset, data),
         }
     }
 
     fn write_config(&mut self, offset: u64, data: &[u8]) {
         match self {
             Self::Virtio(b) => b.write_config(offset, data),
+            Self::Vhost(b) => b.write_config(offset, data),
         }
     }
 
     fn activate(&mut self, mem: GuestMemoryMmap) -> Result<(), ActivateError> {
         match self {
             Self::Virtio(b) => b.activate(mem),
+            Self::Vhost(b) => b.activate(mem),
         }
     }
 
     fn is_activated(&self) -> bool {
         match self {
             Self::Virtio(b) => b.device_state.is_activated(),
+            Self::Vhost(b) => b.device_state.is_activated(),
         }
     }
 }
@@ -200,12 +224,14 @@ impl MutEventSubscriber for Net {
     fn process(&mut self, event: Events, ops: &mut EventOps) {
         match self {
             Self::Virtio(b) => b.process(event, ops),
+            Self::Vhost(b) => b.process(event, ops),
         }
     }
 
     fn init(&mut self, ops: &mut EventOps) {
         match self {
             Self::Virtio(b) => b.init(ops),
+            Self::Vhost(b) => b.init(ops),
         }
     }
 }
@@ -218,6 +244,7 @@ impl Persist<'_> for Net {
     fn save(&self) -> Self::State {
         match self {
             Self::Virtio(b) => Self::State::Virtio(b.save()),
+            _ => unimplemented!(),
         }
     }
 
