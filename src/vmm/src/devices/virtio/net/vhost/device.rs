@@ -14,8 +14,8 @@ use vm_memory::GuestMemory;
 use crate::devices::virtio::device::{DeviceState, IrqTrigger, VirtioDevice};
 use crate::devices::virtio::gen::virtio_net::{
     VIRTIO_F_VERSION_1, VIRTIO_NET_F_CSUM, VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_TSO4,
-    VIRTIO_NET_F_GUEST_TSO6, VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_TSO6, VIRTIO_NET_F_MAC,
-    VIRTIO_NET_F_MRG_RXBUF,
+    VIRTIO_NET_F_GUEST_TSO6, VIRTIO_NET_F_GUEST_UFO, VIRTIO_NET_F_HOST_TSO4,
+    VIRTIO_NET_F_HOST_TSO6, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MAC, VIRTIO_NET_F_MRG_RXBUF,
 };
 use crate::devices::virtio::gen::virtio_ring::VIRTIO_RING_F_EVENT_IDX;
 use crate::devices::virtio::net::gen;
@@ -93,26 +93,17 @@ impl VhostNet {
     ) -> Result<Self, NetError> {
         let mut avail_features = 1 << VIRTIO_NET_F_GUEST_CSUM
             | 1 << VIRTIO_NET_F_CSUM
+            | 1 << VIRTIO_NET_F_GUEST_TSO4
+            | 1 << VIRTIO_NET_F_HOST_TSO4
+            // | 1 << VIRTIO_NET_F_GUEST_TSO6
+            // | 1 << VIRTIO_NET_F_HOST_TSO6
+            // | 1 << VIRTIO_NET_F_GUEST_USO4
+            // | 1 << VIRTIO_NET_F_GUEST_USO6
+            // | 1 << VIRTIO_NET_F_HOST_USO
+            | 1 << VIRTIO_NET_F_GUEST_UFO
+            | 1 << VIRTIO_NET_F_HOST_UFO
             | 1 << VIRTIO_F_VERSION_1
             | 1 << VIRTIO_RING_F_EVENT_IDX;
-        let xdp = true;
-        let uso = false;
-
-        avail_features |= if !xdp {
-            1 << VIRTIO_NET_F_GUEST_TSO4
-                | 1 << VIRTIO_NET_F_HOST_TSO4
-                | 1 << VIRTIO_NET_F_GUEST_TSO6
-                | 1 << VIRTIO_NET_F_HOST_TSO6
-                | 1 << VIRTIO_NET_F_HOST_USO
-        } else {
-            0
-        };
-
-        avail_features |= if !xdp && uso {
-            1 << VIRTIO_NET_F_GUEST_USO4 | 1 << VIRTIO_NET_F_GUEST_USO6
-        } else {
-            0
-        };
 
         // We could announce VIRTIO_RING_F_INDIRECT_DESC and
         // VIRTIO_NET_F_MRG_RXBUF but this is not needed at this
@@ -133,10 +124,9 @@ impl VhostNet {
             queues.push(Queue::new(size));
         }
 
-        let features: u64 = 1 << VIRTIO_F_VERSION_1
-            | 1 << VIRTIO_RING_F_EVENT_IDX
-            | 1 << VIRTIO_RING_F_INDIRECT_DESC
-            | 1 << VIRTIO_NET_F_MRG_RXBUF;
+        let features: u64 = 1 << VIRTIO_F_VERSION_1 | 1 << VIRTIO_RING_F_EVENT_IDX;
+        // | 1 << VIRTIO_RING_F_INDIRECT_DESC
+        // | 1 << VIRTIO_NET_F_MRG_RXBUF;
 
         Ok(VhostNet {
             id: id.clone(),
