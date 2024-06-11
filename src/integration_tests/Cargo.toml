@@ -1,0 +1,17 @@
+[package]
+name = "integration_tests"
+version = "0.1.0"
+authors = ["Amazon Firecracker team <firecracker-devel@amazon.com>"]
+edition = "2021"
+license = "Apache-2.0"
+
+[lib]
+
+[dependencies]
+rand = "0.8.5"
+tempfile = "3.9.0"
+#hyper = { version = "1.1.0", default-features = false, features = ["full"] }
+vmm = { path = "../vmm" }
+utils = { path = "../utils" }
+serde = { version = "1.0.196", features = ["derive"] }
+serde_json = "1.0.109"
