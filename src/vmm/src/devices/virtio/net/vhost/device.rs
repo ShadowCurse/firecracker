@@ -102,12 +102,12 @@ impl VhostNet {
             // | 1 << VIRTIO_NET_F_HOST_USO
             | 1 << VIRTIO_NET_F_GUEST_UFO
             | 1 << VIRTIO_NET_F_HOST_UFO
+
+            | 1 << VIRTIO_RING_F_INDIRECT_DESC
+            | 1 << VIRTIO_NET_F_MRG_RXBUF
+
             | 1 << VIRTIO_F_VERSION_1
             | 1 << VIRTIO_RING_F_EVENT_IDX;
-
-        // We could announce VIRTIO_RING_F_INDIRECT_DESC and
-        // VIRTIO_NET_F_MRG_RXBUF but this is not needed at this
-        // point.
 
         let mut config_space = ConfigSpace::default();
         if let Some(mac) = guest_mac {
@@ -124,9 +124,12 @@ impl VhostNet {
             queues.push(Queue::new(size));
         }
 
-        let features: u64 = 1 << VIRTIO_F_VERSION_1 | 1 << VIRTIO_RING_F_EVENT_IDX;
-        // | 1 << VIRTIO_RING_F_INDIRECT_DESC
-        // | 1 << VIRTIO_NET_F_MRG_RXBUF;
+        let features: u64 = 1 << VIRTIO_F_VERSION_1
+
+            | 1 << VIRTIO_RING_F_INDIRECT_DESC
+            | 1 << VIRTIO_NET_F_MRG_RXBUF
+
+            | 1 << VIRTIO_RING_F_EVENT_IDX;
 
         Ok(VhostNet {
             id: id.clone(),
