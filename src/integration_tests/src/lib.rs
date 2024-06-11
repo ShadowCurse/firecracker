@@ -27,8 +27,8 @@ use vmm::vmm_config::net::NetworkInterfaceConfig;
 use vmm::vmm_config::snapshot::{CreateSnapshotParams, LoadSnapshotConfig};
 use vmm::vmm_config::vsock::VsockDeviceConfig;
 
-#[cfg(test)]
-pub mod block;
+// #[cfg(test)]
+// pub mod block;
 #[cfg(test)]
 pub mod net;
 
