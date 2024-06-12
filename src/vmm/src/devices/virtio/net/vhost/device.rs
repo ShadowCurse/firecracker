@@ -125,10 +125,8 @@ impl VhostNet {
         }
 
         let features: u64 = 1 << VIRTIO_F_VERSION_1
-
             | 1 << VIRTIO_RING_F_INDIRECT_DESC
             | 1 << VIRTIO_NET_F_MRG_RXBUF
-
             | 1 << VIRTIO_RING_F_EVENT_IDX;
 
         Ok(VhostNet {
@@ -178,7 +176,10 @@ impl VhostNet {
             .map(|region| VhostUserMemoryRegionInfo {
                 guest_phys_addr: region.start_addr().raw_value(),
                 memory_size: region.size() as u64,
+                #[cfg(target_arch = "x86_64")]
                 userspace_addr: mem.get_host_address(GuestAddress(0x0)).unwrap() as u64,
+                #[cfg(target_arch = "aarch64")]
+                userspace_addr: mem.get_host_address(GuestAddress(0x8000_0000)).unwrap() as u64,
                 mmap_offset: 0,
                 mmap_handle: -1,
             })
