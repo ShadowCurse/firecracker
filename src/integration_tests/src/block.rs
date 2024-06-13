@@ -32,7 +32,7 @@ fn test_block_perf() {
 
     let results_dir = ResultDir::new("block").unwrap();
 
-    for kernel in ["kernel_5", "kernel_6"] {
+    for kernel in ["kernel_5"] {//, "kernel_6"] {
         for mmio_optimization in [false, true] {
             for mode in ["read", "randread"] {
                 for vcpus in [1, 2, 4] {
