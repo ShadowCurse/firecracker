@@ -31,6 +31,10 @@ const DEV_KVM_WITH_NUL: &str = "/dev/kvm";
 const DEV_KVM_MAJOR: u32 = 10;
 const DEV_KVM_MINOR: u32 = 232;
 
+const DEV_VHOST_NET_WITH_NUL: &str = "/dev/vhost-net";
+const DEV_VHOST_NET_MAJOR: u32 = 10;
+const DEV_VHOST_NET_MINOR: u32 = 238;
+
 // TUN/TAP device minor/major numbers are taken from
 // www.kernel.org/doc/Documentation/networking/tuntap.txt
 const DEV_NET_TUN_WITH_NUL: &str = "/dev/net/tun";
@@ -657,6 +661,10 @@ impl Env {
         self.mknod_and_own_dev(DEV_NET_TUN_WITH_NUL, DEV_NET_TUN_MAJOR, DEV_NET_TUN_MINOR)?;
         // Do the same for /dev/kvm with (major, minor) = (10, 232).
         self.mknod_and_own_dev(DEV_KVM_WITH_NUL, DEV_KVM_MAJOR, DEV_KVM_MINOR)?;
+
+        // Do the same for /dev/vhost-net with (major, minor) = (10, 232).
+        self.mknod_and_own_dev(DEV_VHOST_NET_WITH_NUL, DEV_VHOST_NET_MAJOR, DEV_VHOST_NET_MINOR)?;
+
         // And for /dev/urandom with (major, minor) = (1, 9).
         // If the device is not accessible on the host, output a warning to inform user that MMDS
         // version 2 will not be available to use.
