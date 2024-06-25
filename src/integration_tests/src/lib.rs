@@ -26,46 +26,21 @@ use vmm::vmm_config::net::NetworkInterfaceConfig;
 use vmm::vmm_config::snapshot::{CreateSnapshotParams, LoadSnapshotConfig};
 use vmm::vmm_config::vsock::VsockDeviceConfig;
 
-pub mod function;
+// pub mod function;
 pub mod performance;
 
-pub fn binary_path(name: &str) -> PathBuf {
-    let mut path = std::env::current_exe().unwrap();
-    path.pop();
-    path.pop();
-    path.pop();
-    if cfg!(feature = "local_dev") {
-        path.join("release").join(name)
-    } else if cfg!(target_arch = "x86_64") {
-        path.join("x86_64-unknown-linux-musl/release").join(name)
-    } else if cfg!(target_arch = "aarch64") {
-        path.join("aarch64-unknown-linux-musl/release").join(name)
-    } else {
-        unreachable!();
-    }
+#[derive(Debug, Deserialize, Serialize)]
+pub struct TestConfig {
+    firecracker_path: PathBuf,
+    kernel_path: PathBuf,
+    rootfs_path: PathBuf,
+    rootfs_ssh_key_path: PathBuf,
 }
 
-pub fn artifacts_paths() -> (&'static str, &'static str, &'static str) {
-    if cfg!(feature = "local_dev") {
-        (
-            "../../scripts/vmlinux-5.10.204",
-            "../../scripts/ubuntu-22.04.ext4",
-            "../../scripts/ubuntu-22.04.id_rsa",
-        )
-    } else if cfg!(target_arch = "x86_64") {
-        (
-            "../../build/img/x86_64/vmlinux-5.10.209",
-            "../../build/img/x86_64/ubuntu-22.04.ext4",
-            "../../build/img/x86_64/ubuntu-22.04.id_rsa",
-        )
-    } else if cfg!(target_arch = "aarch64") {
-        (
-            "../../build/img/aarch64/vmlinux-5.10.209",
-            "../../build/img/aarch64/ubuntu-22.04.ext4",
-            "../../build/img/aarch64/ubuntu-22.04.id_rsa",
-        )
-    } else {
-        unreachable!();
+impl TestConfig {
+    pub fn new(path: PathBuf) -> Self {
+        let input = std::fs::read_to_string(path).unwrap();
+        serde_json::from_str(&input).unwrap()
     }
 }
 
@@ -158,28 +133,24 @@ pub struct Fc {
 
 impl Fc {
     pub fn new_from_config(
-        artifacts_dir: PathBuf,
+        firecracker_path: &PathBuf,
+        resource_dir: &ResourceDir,
         options: FcLaunchOptions,
     ) -> Result<Self, std::io::Error> {
-        let cwd = std::env::current_dir()?;
-
-        // switch to artifacts_dir to start FC
-        // because paths in the config are relative to
-        // artifacts_dir
-        std::env::set_current_dir(&artifacts_dir)?;
-        let binary_path = binary_path("firecracker");
-
-        let socket_path = artifacts_dir.join("socket.socket");
+        let socket_path = resource_dir.join("socket.socket");
         if socket_path.exists() {
             std::fs::remove_file(&socket_path)?;
         }
 
-        let config_path = artifacts_dir.join("vm_config.json");
+        let config_path = resource_dir.join("vm_config.json");
         if config_path.exists() {
             std::fs::remove_file(&config_path)?;
         }
 
-        let mut command = Command::new(binary_path);
+
+        let cwd = std::env::current_dir()?;
+
+        let mut command = Command::new(firecracker_path);
 
         match options {
             FcLaunchOptions::NoApi(config) => {
@@ -217,7 +188,7 @@ impl Fc {
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());
 
-        let mut proccess_handle = command.spawn()?;
+        let mut proccess_handle = command.current_dir(&resource_dir.path).spawn()?;
 
         let mut stdout = proccess_handle.stdout.take().unwrap();
         let stdout_data = Arc::new(Mutex::new(Vec::new()));
@@ -242,17 +213,13 @@ impl Fc {
             }
         });
 
-        // switch back to previous cwd in order
-        // to keep everything as it was
-        std::env::set_current_dir(cwd)?;
-
         // let fc to boot
         sleep(Duration::from_millis(2000));
 
         if let Some(exit_code) = proccess_handle.try_wait()? {
             let stdout_data = stdout_data.lock().unwrap();
             let logs = String::from_utf8(stdout_data.to_vec()).unwrap();
-            eprintln!("Firecracker exited with exit code: {exit_code}. Logs: {logs}");
+            eprintln!("Firecracker exited with exit code: {exit_code}. Logs:\n{logs}");
             Err(std::io::Error::new(
                 std::io::ErrorKind::Other,
                 format!("exited with exit code: {exit_code}"),

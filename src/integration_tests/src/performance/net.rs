@@ -1,4 +1,3 @@
-use std::os::unix::fs::symlink;
 use std::process::Command;
 use std::str::FromStr;
 
@@ -9,21 +8,20 @@ use vmm::vmm_config::drive::BlockDeviceConfig;
 use vmm::vmm_config::machine_config::MachineConfig;
 use vmm::vmm_config::net::NetworkInterfaceConfig;
 
-use crate::{artifacts_paths, Fc, FcLaunchOptions, ResourceDir, ResultDir, SshConnection};
+use crate::{
+    Fc, FcLaunchOptions, ResourceDir, ResultDir, SshConnection, TestConfig,
+};
 
 const FREE_HOST_CPU: usize = 10;
 
 #[test]
 fn test_net_perf() {
-    let cwd = std::env::current_dir().unwrap();
-
-    let (kernel_path, rootfs_path, key_path) = artifacts_paths();
+    let test_config = TestConfig::new("../../rust_test_config.json".into());
+    let firecracker_path = test_config.firecracker_path.canonicalize().unwrap();
+    let kernel_path = test_config.kernel_path.canonicalize().unwrap();
+    let rootfs_path = test_config.rootfs_path.canonicalize().unwrap();
 
     let resources_dir = ResourceDir::new().unwrap();
-    symlink(cwd.join(kernel_path), resources_dir.join("kernel")).unwrap();
-    symlink(cwd.join(rootfs_path), resources_dir.join("rootfs")).unwrap();
-    // std::fs::soft_link(cwd.join(key_path), resources_dir.join("ssh_key.id_rsa"));
-
     let results_dir = ResultDir::new("net").unwrap();
 
     for mode in ["g2h", "h2g", "bd"] {
@@ -31,14 +29,14 @@ fn test_net_perf() {
             for vcpus in [1, 2, 4] {
                 let config = VmmConfig {
                     boot_source: BootSourceConfig {
-                        kernel_image_path: "kernel".to_string(),
+                        kernel_image_path: kernel_path.to_str().unwrap().to_owned(),
                         boot_args: Some("console=ttyS0 reboot=k panic=1 pci=off".to_string()),
                         ..Default::default()
                     },
                     block_devices: vec![BlockDeviceConfig {
                         drive_id: "rootfs".to_string(),
                         is_root_device: true,
-                        path_on_host: Some("rootfs".to_string()),
+                        path_on_host: Some(rootfs_path.to_str().unwrap().to_owned()),
                         ..Default::default()
                     }],
                     net_devices: vec![NetworkInterfaceConfig {
@@ -55,12 +53,14 @@ fn test_net_perf() {
                     ..Default::default()
                 };
 
-                let _fc =
-                    Fc::new_from_config(resources_dir.clone(), FcLaunchOptions::NoApi(&config))
-                        .unwrap();
+                let _fc = Fc::new_from_config(
+                    &firecracker_path,
+                    &resources_dir,
+                    FcLaunchOptions::NoApi(&config),
+                )
+                .unwrap();
 
                 println!("fc logs: {}", _fc.stdout());
-
                 println!("running: mode: {mode}, payload_length: {payload_length}, vcpus: {vcpus}");
 
                 let ports = (0..vcpus).map(|i| 5201 + i as u32).collect::<Vec<_>>();
@@ -109,7 +109,11 @@ fn test_net_perf() {
                         .join(" ");
                         println!("runnign guest command: {}", iperf_guest_cmd);
 
-                        SshConnection::ssh_no_block(key_path, &iperf_guest_cmd).unwrap()
+                        SshConnection::ssh_no_block(
+                            &test_config.rootfs_ssh_key_path,
+                            &iperf_guest_cmd,
+                        )
+                        .unwrap()
                     })
                     .collect::<Vec<_>>();
 

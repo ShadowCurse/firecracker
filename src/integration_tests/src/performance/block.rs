@@ -1,5 +1,4 @@
 use std::fs::OpenOptions;
-use std::os::unix::fs::symlink;
 use std::str::FromStr;
 
 use utils::net::mac::MacAddr;
@@ -9,18 +8,16 @@ use vmm::vmm_config::drive::BlockDeviceConfig;
 use vmm::vmm_config::machine_config::MachineConfig;
 use vmm::vmm_config::net::NetworkInterfaceConfig;
 
-use crate::{artifacts_paths, Fc, FcLaunchOptions, ResourceDir, ResultDir, SshConnection};
+use crate::{Fc, FcLaunchOptions, ResourceDir, ResultDir, SshConnection, TestConfig};
 
 #[test]
 fn test_block_perf() {
-    let cwd = std::env::current_dir().unwrap();
-
-    let (kernel_path, rootfs_path, key_path) = artifacts_paths();
+    let test_config = TestConfig::new("../../rust_test_config.json".into());
+    let firecracker_path = test_config.firecracker_path.canonicalize().unwrap();
+    let kernel_path = test_config.kernel_path.canonicalize().unwrap();
+    let rootfs_path = test_config.rootfs_path.canonicalize().unwrap();
 
     let resources_dir = ResourceDir::new().unwrap();
-    symlink(cwd.join(kernel_path), resources_dir.join("kernel")).unwrap();
-    symlink(cwd.join(rootfs_path), resources_dir.join("rootfs")).unwrap();
-
     let dummy = OpenOptions::new()
         .create(true)
         .write(true)
@@ -34,7 +31,7 @@ fn test_block_perf() {
         for vcpus in [1, 2, 4] {
             let config = VmmConfig {
                 boot_source: BootSourceConfig {
-                    kernel_image_path: "kernel".to_string(),
+                    kernel_image_path: kernel_path.to_str().unwrap().to_owned(),
                     boot_args: Some("console=ttyS0 reboot=k panic=1 pci=off".to_string()),
                     ..Default::default()
                 },
@@ -42,7 +39,7 @@ fn test_block_perf() {
                     BlockDeviceConfig {
                         drive_id: "rootfs".to_string(),
                         is_root_device: true,
-                        path_on_host: Some("rootfs".to_string()),
+                        path_on_host: Some(rootfs_path.to_str().unwrap().to_owned()),
                         ..Default::default()
                     },
                     BlockDeviceConfig {
@@ -66,8 +63,12 @@ fn test_block_perf() {
                 ..Default::default()
             };
 
-            let _fc = Fc::new_from_config(resources_dir.clone(), FcLaunchOptions::NoApi(&config))
-                .unwrap();
+            let _fc = Fc::new_from_config(
+                &firecracker_path,
+                &resources_dir,
+                FcLaunchOptions::NoApi(&config),
+            )
+            .unwrap();
 
             for run in 0..2 {
                 println!("running: mode: {mode}, vcpus: {vcpus}, run: {run}");
@@ -103,7 +104,8 @@ fn test_block_perf() {
                 ]
                 .join(" ");
 
-                let (stdout, _stderr) = SshConnection::ssh(key_path, &fio_cmd).unwrap();
+                let (stdout, _stderr) =
+                    SshConnection::ssh(&test_config.rootfs_ssh_key_path, &fio_cmd).unwrap();
 
                 // println!("fio stdout: {stdout}");
                 // println!("fio stderr: {stderr}");
