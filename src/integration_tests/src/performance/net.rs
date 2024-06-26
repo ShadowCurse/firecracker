@@ -144,7 +144,7 @@ fn test_net_perf_multi() {
     let server_ports = (0..test_config.vms)
         .map(|i| {
             let server_port = format!("{}", 5000 + i);
-            let iperf_server_cmd = ["iperf3", "-s", "-1", "-p", &server_port].join(" ");
+            let iperf_server_cmd = ["iperf3", "-s", "-1", "-D", "-p", &server_port].join(" ");
             let (_stdout, stderr) = SshConnection::ssh(
                 &test_config.server_ip,
                 "ec2-user",
