@@ -35,6 +35,9 @@ pub struct TestConfig {
     kernel_path: PathBuf,
     rootfs_path: PathBuf,
     rootfs_ssh_key_path: PathBuf,
+    server_ip: String,
+    server_ssh_key_path: PathBuf,
+    vms: u32,
 }
 
 impl TestConfig {

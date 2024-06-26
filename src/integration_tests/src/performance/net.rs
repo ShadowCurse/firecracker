@@ -133,3 +133,109 @@ fn test_net_perf() {
         }
     }
 }
+
+#[test]
+fn test_net_perf_multi() {
+    let test_config = TestConfig::new("../../tests/rust_test_config.json".into());
+    let firecracker_path = test_config.firecracker_path.canonicalize().unwrap();
+    let kernel_path = test_config.kernel_path.canonicalize().unwrap();
+    let rootfs_path = test_config.rootfs_path.canonicalize().unwrap();
+
+    let server_ports = (0..test_config.vms)
+        .map(|i| {
+            let server_port = format!("{}", 5000 + i);
+            let iperf_server_cmd = ["iperf3", "-s", "-1", "-p", &server_port].join(" ");
+            let (_stdout, stderr) = SshConnection::ssh(
+                &test_config.server_ip,
+                "ec2-user",
+                &test_config.server_ssh_key_path,
+                &iperf_server_cmd,
+            )
+            .unwrap();
+            println!("creating iperf server stderr: {stderr:?}");
+            server_port
+        })
+        .collect::<Vec<_>>();
+
+    let results_dir = ResultDir::new("net_multi").unwrap();
+
+    let resources_dir = ResourceDir::new().unwrap();
+    let vm_ips = (0..test_config.vms)
+        .map(|i| {
+            let config = VmmConfig {
+                boot_source: BootSourceConfig {
+                    kernel_image_path: kernel_path.to_str().unwrap().to_owned(),
+                    boot_args: Some("console=ttyS0 reboot=k panic=1 pci=off".to_string()),
+                    ..Default::default()
+                },
+                block_devices: vec![BlockDeviceConfig {
+                    drive_id: "rootfs".to_string(),
+                    is_root_device: true,
+                    path_on_host: Some(rootfs_path.to_str().unwrap().to_owned()),
+                    ..Default::default()
+                }],
+                net_devices: vec![NetworkInterfaceConfig {
+                    iface_id: "eth0".to_string(),
+                    guest_mac: Some(MacAddr::from_str("06:00:AC:10:00:02").unwrap()),
+                    host_dev_name: format!("tap{i}"),
+                    ..Default::default()
+                }],
+                machine_config: Some(MachineConfig {
+                    vcpu_count: 2,
+                    mem_size_mib: 1024,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+
+            let _fc = Fc::new_from_config(
+                &firecracker_path,
+                &resources_dir,
+                FcLaunchOptions::NoApi(&config),
+            )
+            .unwrap();
+
+            format!("172.16.0.{i}")
+        })
+        .collect::<Vec<_>>();
+
+    let children = server_ports
+        .iter()
+        .zip(vm_ips.iter())
+        .map(|(server_port, vm_ip)| {
+            let iperf_guest_cmd = [
+                "iperf3",
+                "--time=20",
+                "--json",
+                "--omit=5",
+                "-p",
+                &server_port,
+                "-c",
+                &test_config.server_ip,
+            ]
+            .join(" ");
+            println!("runnign guest command: {}", iperf_guest_cmd);
+
+            SshConnection::ssh_no_block(
+                vm_ip,
+                "ec2-user",
+                &test_config.rootfs_ssh_key_path,
+                &iperf_guest_cmd,
+            )
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+
+    for (i, mut ssh_connection) in children.into_iter().enumerate() {
+        let stdout = ssh_connection.stdout();
+        let stderr = ssh_connection.stderr();
+
+        // println!("fio stdout: {stdout}");
+        println!("guest stderr: {stderr}");
+
+        let result_name = format!("test_net_perf_multi_vm_{i}.json");
+        results_dir
+            .write_result(&result_name, stdout.as_bytes())
+            .unwrap();
+    }
+}
