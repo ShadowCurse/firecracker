@@ -8,9 +8,7 @@ use vmm::vmm_config::drive::BlockDeviceConfig;
 use vmm::vmm_config::machine_config::MachineConfig;
 use vmm::vmm_config::net::NetworkInterfaceConfig;
 
-use crate::{
-    Fc, FcLaunchOptions, ResourceDir, ResultDir, SshConnection, TestConfig,
-};
+use crate::{Fc, FcLaunchOptions, ResourceDir, ResultDir, SshConnection, TestConfig};
 
 const FREE_HOST_CPU: usize = 10;
 
@@ -110,6 +108,8 @@ fn test_net_perf() {
                         println!("runnign guest command: {}", iperf_guest_cmd);
 
                         SshConnection::ssh_no_block(
+                            "172.16.0.2",
+                            "root",
                             &test_config.rootfs_ssh_key_path,
                             &iperf_guest_cmd,
                         )

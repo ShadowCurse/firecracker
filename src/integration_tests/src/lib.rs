@@ -147,7 +147,6 @@ impl Fc {
             std::fs::remove_file(&config_path)?;
         }
 
-
         let cwd = std::env::current_dir()?;
 
         let mut command = Command::new(firecracker_path);
@@ -451,11 +450,14 @@ pub struct SshConnection {
 
 impl SshConnection {
     pub fn ssh(
+        ip: &str,
+        user: &str,
         key_path: impl AsRef<Path>,
         command: &str,
     ) -> Result<(String, String), std::io::Error> {
         let key_path: &Path = key_path.as_ref();
         let key_path = key_path.to_str().unwrap();
+        let ip_user = format!("{user}@{ip}");
         let mut c = Command::new("ssh");
         c.args([
             "-o",
@@ -468,7 +470,7 @@ impl SshConnection {
             "PreferredAuthentications=publickey",
             "-i",
             key_path,
-            "root@172.16.0.2",
+            &ip_user,
             command,
         ]);
         c.stdout(Stdio::piped());
@@ -489,9 +491,15 @@ impl SshConnection {
         Ok((stdout, stderr))
     }
 
-    pub fn ssh_no_block(key_path: impl AsRef<Path>, command: &str) -> Result<Self, std::io::Error> {
+    pub fn ssh_no_block(
+        ip: &str,
+        user: &str,
+        key_path: impl AsRef<Path>,
+        command: &str,
+    ) -> Result<Self, std::io::Error> {
         let key_path: &Path = key_path.as_ref();
         let key_path = key_path.to_str().unwrap();
+        let ip_user = format!("{user}@{ip}");
         let mut c = Command::new("ssh");
         c.args([
             "-o",
@@ -504,7 +512,7 @@ impl SshConnection {
             "PreferredAuthentications=publickey",
             "-i",
             key_path,
-            "root@172.16.0.2",
+            &ip_user,
             command,
         ]);
         c.stdout(Stdio::piped());

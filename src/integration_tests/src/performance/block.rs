@@ -104,8 +104,13 @@ fn test_block_perf() {
                 ]
                 .join(" ");
 
-                let (stdout, _stderr) =
-                    SshConnection::ssh(&test_config.rootfs_ssh_key_path, &fio_cmd).unwrap();
+                let (stdout, _stderr) = SshConnection::ssh(
+                    "172.16.0.2",
+                    "root",
+                    &test_config.rootfs_ssh_key_path,
+                    &fio_cmd,
+                )
+                .unwrap();
 
                 // println!("fio stdout: {stdout}");
                 // println!("fio stderr: {stderr}");
