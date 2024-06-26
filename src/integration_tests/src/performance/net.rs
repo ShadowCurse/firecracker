@@ -16,7 +16,7 @@ const FREE_HOST_CPU: usize = 10;
 
 #[test]
 fn test_net_perf() {
-    let test_config = TestConfig::new("../../rust_test_config.json".into());
+    let test_config = TestConfig::new("../../tests/rust_test_config.json".into());
     let firecracker_path = test_config.firecracker_path.canonicalize().unwrap();
     let kernel_path = test_config.kernel_path.canonicalize().unwrap();
     let rootfs_path = test_config.rootfs_path.canonicalize().unwrap();
