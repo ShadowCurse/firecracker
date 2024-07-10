@@ -16,13 +16,14 @@ use log::{error, warn};
 use utils::eventfd::EventFd;
 use utils::net::mac::MacAddr;
 use utils::u64_to_usize;
-use vm_memory::GuestMemoryError;
+use vm_memory::{GuestAddress, GuestMemory, GuestMemoryError};
 
 use crate::devices::virtio::device::{DeviceState, IrqTrigger, IrqType, VirtioDevice};
 use crate::devices::virtio::gen::virtio_blk::VIRTIO_F_VERSION_1;
 use crate::devices::virtio::gen::virtio_net::{
     virtio_net_hdr_v1, VIRTIO_NET_F_CSUM, VIRTIO_NET_F_GUEST_CSUM, VIRTIO_NET_F_GUEST_TSO4,
     VIRTIO_NET_F_GUEST_UFO, VIRTIO_NET_F_HOST_TSO4, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MAC,
+    VIRTIO_NET_F_MRG_RXBUF,
 };
 use crate::devices::virtio::gen::virtio_ring::VIRTIO_RING_F_EVENT_IDX;
 use crate::devices::virtio::iovec::IoVecBuffer;
@@ -31,7 +32,7 @@ use crate::devices::virtio::net::tap::Tap;
 use crate::devices::virtio::net::{
     gen, NetError, NetQueue, MAX_BUFFER_SIZE, NET_QUEUE_SIZES, RX_INDEX, TX_INDEX,
 };
-use crate::devices::virtio::queue::{DescriptorChain, Queue};
+use crate::devices::virtio::queue::{DescriptorChain, Queue, FIRECRACKER_MAX_QUEUE_SIZE};
 use crate::devices::virtio::{ActivateError, TYPE_NET};
 use crate::devices::{report_net_event_fail, DeviceError};
 use crate::dumbo::pdu::arp::ETH_IPV4_FRAME_LEN;
@@ -102,6 +103,13 @@ pub struct ConfigSpace {
 // SAFETY: `ConfigSpace` contains only PODs in `repr(C)` or `repr(transparent)`, without padding.
 unsafe impl ByteValued for ConfigSpace {}
 
+#[derive(Debug)]
+struct PartialWrite {
+    bytes_written: usize,
+    used_heads: u16,
+    packet_start_addr: GuestAddress,
+}
+
 /// VirtIO network device.
 ///
 /// It emulates a network device able to exchange L2 frames between the guest
@@ -126,6 +134,8 @@ pub struct Net {
 
     rx_bytes_read: usize,
     rx_frame_buf: [u8; MAX_BUFFER_SIZE],
+    rx_partial_write: Option<PartialWrite>,
+    rx_used_heads: Vec<(u16, usize)>,
 
     tx_frame_headers: [u8; frame_hdr_len()],
 
@@ -159,6 +169,7 @@ impl Net {
             | 1 << VIRTIO_NET_F_HOST_TSO4
             | 1 << VIRTIO_NET_F_HOST_UFO
             | 1 << VIRTIO_F_VERSION_1
+            | 1 << VIRTIO_NET_F_MRG_RXBUF
             | 1 << VIRTIO_RING_F_EVENT_IDX;
 
         let mut config_space = ConfigSpace::default();
@@ -188,6 +199,8 @@ impl Net {
             rx_deferred_frame: false,
             rx_bytes_read: 0,
             rx_frame_buf: [0u8; MAX_BUFFER_SIZE],
+            rx_partial_write: None,
+            rx_used_heads: Vec::with_capacity(FIRECRACKER_MAX_QUEUE_SIZE.into()),
             tx_frame_headers: [0u8; frame_hdr_len()],
             irq_trigger: IrqTrigger::new().map_err(NetError::EventFd)?,
             config_space,
@@ -316,7 +329,7 @@ impl Net {
         }
 
         // Attempt frame delivery.
-        let success = self.write_frame_to_guest();
+        let success = self.write_frame_to_guest().is_ok();
 
         // Undo the tokens consumption if guest delivery failed.
         if !success {
@@ -413,7 +426,7 @@ impl Net {
 
     // Copies a single frame from `self.rx_frame_buf` into the guest. In case of an error retries
     // the operation if possible. Returns true if the operation was successfull.
-    fn write_frame_to_guest(&mut self) -> bool {
+    fn write_frame_to_guest_old(&mut self) -> bool {
         let max_iterations = self.queues[RX_INDEX].actual_size();
         for _ in 0..max_iterations {
             match self.do_write_frame_to_guest() {
@@ -429,6 +442,104 @@ impl Net {
         }
 
         false
+    }
+
+    fn write_frame_to_guest(&mut self) -> Result<(), FrontendError> {
+        // This is safe since we checked in the event handler that the device is activated.
+        let mem = self.device_state.mem().unwrap();
+        let queue = &mut self.queues[RX_INDEX];
+
+        let mut slice = if let Some(pw) = &self.rx_partial_write {
+            &self.rx_frame_buf[pw.bytes_written..self.rx_bytes_read]
+        } else {
+            &self.rx_frame_buf[..self.rx_bytes_read]
+        };
+
+        let head_descriptor = queue.pop_or_enable_notification(mem);
+        if head_descriptor.is_none() {
+            return Err(FrontendError::EmptyQueue);
+        }
+        let head_descriptor = head_descriptor.unwrap();
+
+        let packet_start_addr = if let Some(pw) = &self.rx_partial_write {
+            pw.packet_start_addr
+        } else {
+            head_descriptor.addr
+        };
+        let mut used_heads: u16 = if let Some(pw) = &self.rx_partial_write {
+            pw.used_heads
+        } else {
+            0
+        };
+
+        let mut head_index = head_descriptor.index;
+        let mut current_descriptor = Some(head_descriptor);
+        loop {
+            used_heads += 1;
+            let mut descriptor_len = 0;
+
+            while let Some(descriptor) = &current_descriptor {
+                let len = std::cmp::min(slice.len(), descriptor.len as usize);
+                mem.write_slice(&slice[..len], descriptor.addr).unwrap();
+                self.metrics.rx_count.inc();
+                slice = &slice[len..];
+                descriptor_len += len;
+
+                // If chunk is empty we are done here.
+                if slice.is_empty() {
+                    break;
+                }
+
+                current_descriptor = descriptor.next_descriptor();
+            }
+
+            self.rx_used_heads.push((head_index, descriptor_len));
+
+            if slice.is_empty() {
+                self.metrics.rx_bytes_count.add(self.rx_bytes_read as u64);
+                self.metrics.rx_packets_count.inc();
+
+                // Update number of descrptor heads used to store
+                // a packet.
+                // SAFETY:
+                // The head_addr is valid guest address.
+                #[allow(clippy::transmute_ptr_to_ref)]
+                let header: &mut virtio_net_hdr_v1 = unsafe {
+                    std::mem::transmute(mem.get_host_address(packet_start_addr).unwrap())
+                };
+                header.num_buffers = used_heads;
+
+                for (head_index, descriptor_len) in self.rx_used_heads.iter() {
+                    queue
+                        .add_used(mem, *head_index, *descriptor_len as u32)
+                        .unwrap();
+                }
+                self.rx_used_heads.clear();
+
+                self.rx_partial_write = None;
+
+                break;
+            } else {
+                if let Some(head_descriptor) = queue.pop_or_enable_notification(mem) {
+                    head_index = head_descriptor.index;
+                    current_descriptor = Some(head_descriptor);
+                } else {
+                    if let Some(pw) = &mut self.rx_partial_write {
+                        pw.bytes_written = self.rx_bytes_read - slice.len();
+                        pw.used_heads = used_heads;
+                    } else {
+                        let pw = PartialWrite {
+                            bytes_written: self.rx_bytes_read - slice.len(),
+                            used_heads,
+                            packet_start_addr,
+                        };
+                        self.rx_partial_write = Some(pw);
+                    }
+                    return Err(FrontendError::EmptyQueue);
+                }
+            }
+        }
+        Ok(())
     }
 
     // Tries to detour the frame to MMDS and if MMDS doesn't accept it, sends it on the host TAP.
@@ -524,12 +635,15 @@ impl Net {
 
     fn process_rx(&mut self) -> Result<(), DeviceError> {
         // Read as many frames as possible.
+        let mut signal_queue = false;
         loop {
             match self.read_from_mmds_or_tap() {
                 Ok(count) => {
                     self.rx_bytes_read = count;
                     self.metrics.rx_count.inc();
-                    if !self.rate_limited_rx_single_frame() {
+                    if self.rate_limited_rx_single_frame() {
+                        signal_queue = true;
+                    } else {
                         self.rx_deferred_frame = true;
                         break;
                     }
@@ -554,8 +668,12 @@ impl Net {
         }
 
         // At this point we processed as many Rx frames as possible.
-        // We have to wake the guest if at least one descriptor chain has been used.
-        self.signal_used_queue(NetQueue::Rx)
+        // We have to wake the guest if at least one packet has been processed.
+        if signal_queue {
+            self.signal_used_queue(NetQueue::Rx)
+        } else {
+            Ok(())
+        }
     }
 
     // Process the deferred frame first, then continue reading from tap.
