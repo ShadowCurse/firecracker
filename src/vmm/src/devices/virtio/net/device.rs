@@ -9,6 +9,7 @@
 use std::io::Read;
 use std::mem;
 use std::net::Ipv4Addr;
+use std::num::Wrapping;
 use std::sync::{Arc, Mutex};
 
 use libc::EAGAIN;
@@ -329,7 +330,8 @@ impl Net {
         }
 
         // Attempt frame delivery.
-        let success = self.write_frame_to_guest().is_ok();
+        // let success = self.write_frame_to_guest().is_ok();
+        let success = self.write_frame_to_guest_opt().is_ok();
 
         // Undo the tokens consumption if guest delivery failed.
         if !success {
@@ -517,27 +519,197 @@ impl Net {
                 self.rx_partial_write = None;
 
                 break;
+            } else if let Some(head_descriptor) = queue.pop_or_enable_notification(mem) {
+                head_index = head_descriptor.index;
+                current_descriptor = Some(head_descriptor);
             } else {
-                if let Some(head_descriptor) = queue.pop_or_enable_notification(mem) {
-                    head_index = head_descriptor.index;
-                    current_descriptor = Some(head_descriptor);
+                if let Some(pw) = &mut self.rx_partial_write {
+                    pw.bytes_written = self.rx_bytes_read - slice.len();
+                    pw.used_heads = used_heads;
                 } else {
-                    if let Some(pw) = &mut self.rx_partial_write {
-                        pw.bytes_written = self.rx_bytes_read - slice.len();
-                        pw.used_heads = used_heads;
-                    } else {
-                        let pw = PartialWrite {
-                            bytes_written: self.rx_bytes_read - slice.len(),
-                            used_heads,
-                            packet_start_addr,
-                        };
-                        self.rx_partial_write = Some(pw);
-                    }
-                    return Err(FrontendError::EmptyQueue);
+                    let pw = PartialWrite {
+                        bytes_written: self.rx_bytes_read - slice.len(),
+                        used_heads,
+                        packet_start_addr,
+                    };
+                    self.rx_partial_write = Some(pw);
                 }
+                return Err(FrontendError::EmptyQueue);
             }
         }
         Ok(())
+    }
+
+    fn write_frame_to_guest_opt(&mut self) -> Result<(), FrontendError> {
+        // This is safe since we checked in the event handler that the device is activated.
+        let mem = self.device_state.mem().unwrap();
+
+        let avail_idx = self.queues[RX_INDEX].avail_idx(mem);
+        let actual_size = self.queues[RX_INDEX].actual_size();
+
+        // Check if queue is empty and early error out
+        if self.queues[RX_INDEX].next_avail.0 == avail_idx.0 {
+            return Err(FrontendError::EmptyQueue);
+        }
+
+        #[repr(C)]
+        struct AvailRing {
+            flags: u16,
+            idx: u16,
+            ring: [u16; 256],
+            used_event: u16,
+        }
+        #[repr(C)]
+        struct VirtqUsedElement {
+            id: u32,
+            len: u32,
+        }
+        #[repr(C)]
+        struct UsedRing {
+            flags: u16,
+            idx: u16,
+            ring: [VirtqUsedElement; 256],
+            avail_event: u16,
+        }
+        #[repr(C)]
+        #[derive(Default, Clone, Copy)]
+        struct Descriptor {
+            addr: u64,
+            len: u32,
+            flags: u16,
+            next: u16,
+        }
+
+        // SAFETY:
+        // avail_ring in the queue is a valid guest address
+        let avail_ring: &AvailRing = unsafe {
+            std::mem::transmute(
+                mem.get_host_address(self.queues[RX_INDEX].avail_ring)
+                    .unwrap(),
+            )
+        };
+
+        // SAFETY:
+        // used_ring in the queue is a valid guest address
+        let used_ring: &mut UsedRing = unsafe {
+            std::mem::transmute(
+                mem.get_host_address(self.queues[RX_INDEX].used_ring)
+                    .unwrap(),
+            )
+        };
+
+        // SAFETY:
+        // desc_table in the queue is a valid guest address
+        let desc_table: &[Descriptor; 256] = unsafe {
+            std::mem::transmute(
+                mem.get_host_address(self.queues[RX_INDEX].desc_table)
+                    .unwrap(),
+            )
+        };
+
+        let (mut slice, mut packet_start_addr, mut used_heads, mut next_used) =
+            if let Some(pw) = &self.rx_partial_write {
+                (
+                    &self.rx_frame_buf[pw.bytes_written..self.rx_bytes_read],
+                    Some(pw.packet_start_addr),
+                    pw.used_heads,
+                    self.queues[RX_INDEX].next_used + Wrapping(pw.used_heads),
+                )
+            } else {
+                (
+                    &self.rx_frame_buf[..self.rx_bytes_read],
+                    None,
+                    0,
+                    self.queues[RX_INDEX].next_used,
+                )
+            };
+
+        while self.queues[RX_INDEX].next_avail.0 != avail_idx.0 && !slice.is_empty() {
+            used_heads += 1;
+
+            let avail_index = self.queues[RX_INDEX].next_avail.0 % actual_size;
+            self.queues[RX_INDEX].next_avail += Wrapping(1);
+
+            let desc_index = avail_ring.ring[avail_index as usize];
+            let mut desc_len = 0;
+
+            let mut desc = &desc_table[desc_index as usize];
+
+            // If this is the first head of the packet, save it for later
+            if packet_start_addr.is_none() {
+                packet_start_addr = Some(GuestAddress(desc.addr))
+            }
+
+            // Handle descriptor chain head
+            let len = slice.len().min(desc.len as usize);
+            mem.get_slice(GuestAddress(desc.addr), len)
+                .unwrap()
+                .copy_from(&slice[..len]);
+            desc_len += len;
+            slice = &slice[len..];
+
+            // Handle following descriptors
+            while desc.flags & crate::devices::virtio::queue::VIRTQ_DESC_F_NEXT != 0
+                && !slice.is_empty()
+            {
+                desc = &desc_table[desc.next as usize];
+
+                let len = slice.len().min(desc.len as usize);
+                mem.get_slice(GuestAddress(desc.addr), len)
+                    .unwrap()
+                    .copy_from(&slice[..len]);
+                desc_len += len;
+                slice = &slice[len..];
+            }
+
+            // Add used descriptor head to used ring
+            let next_used_index = next_used.0 % actual_size;
+            used_ring.ring[next_used_index as usize].id = desc_index as u32;
+            used_ring.ring[next_used_index as usize].len = desc_len as u32;
+            // We don't update queues internal next_used value just yet
+            next_used += Wrapping(1);
+        }
+
+        if slice.is_empty() {
+            // Packet was fully written.
+            //
+            // Update number of descrptor heads used to store
+            // a packet.
+            // SAFETY:
+            // The packet_start_addr is valid guest address.
+            #[allow(clippy::transmute_ptr_to_ref)]
+            let header: &mut virtio_net_hdr_v1 = unsafe {
+                std::mem::transmute(mem.get_host_address(packet_start_addr.unwrap()).unwrap())
+            };
+            header.num_buffers = used_heads;
+
+            // Update queues internals
+            self.queues[RX_INDEX].next_used = next_used;
+            self.queues[RX_INDEX].num_added += Wrapping(used_heads);
+
+            // Update used ring with whar we used to process the packet
+            used_ring.idx = self.queues[RX_INDEX].next_used.0;
+            used_ring.avail_event = self.queues[RX_INDEX].next_avail.0;
+
+            // Clear partial write info if there was one
+            self.rx_partial_write = None;
+            Ok(())
+        } else {
+            // Packet could not be fully written to the guest
+            // Save necessary info into PartialWrite to use it during next invocation.
+            if let Some(pw) = &mut self.rx_partial_write {
+                pw.bytes_written = self.rx_bytes_read - slice.len();
+                pw.used_heads = used_heads;
+            } else {
+                let pw = PartialWrite {
+                    bytes_written: self.rx_bytes_read - slice.len(),
+                    used_heads,
+                    packet_start_addr: packet_start_addr.unwrap(),
+                };
+                self.rx_partial_write = Some(pw);
+            }
+            Err(FrontendError::EmptyQueue)
+        }
     }
 
     // Tries to detour the frame to MMDS and if MMDS doesn't accept it, sends it on the host TAP.
