@@ -449,28 +449,26 @@ impl Net {
         let mem = self.device_state.mem().unwrap();
         let queue = &mut self.queues[RX_INDEX];
 
-        let mut slice = if let Some(pw) = &self.rx_partial_write {
-            &self.rx_frame_buf[pw.bytes_written..self.rx_bytes_read]
-        } else {
-            &self.rx_frame_buf[..self.rx_bytes_read]
-        };
-
         let head_descriptor = queue.pop_or_enable_notification(mem);
         if head_descriptor.is_none() {
             return Err(FrontendError::EmptyQueue);
         }
         let head_descriptor = head_descriptor.unwrap();
 
-        let packet_start_addr = if let Some(pw) = &self.rx_partial_write {
-            pw.packet_start_addr
-        } else {
-            head_descriptor.addr
-        };
-        let mut used_heads: u16 = if let Some(pw) = &self.rx_partial_write {
-            pw.used_heads
-        } else {
-            0
-        };
+        let (mut slice, packet_start_addr, mut used_heads) =
+            if let Some(pw) = &self.rx_partial_write {
+                (
+                    &self.rx_frame_buf[pw.bytes_written..self.rx_bytes_read],
+                    pw.packet_start_addr,
+                    pw.used_heads,
+                )
+            } else {
+                (
+                    &self.rx_frame_buf[..self.rx_bytes_read],
+                    head_descriptor.addr,
+                    0,
+                )
+            };
 
         let mut head_index = head_descriptor.index;
         let mut current_descriptor = Some(head_descriptor);
