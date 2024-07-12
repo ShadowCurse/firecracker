@@ -5,7 +5,7 @@ use std::io;
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 
-use aws_lc_rs::rand;
+// use aws_lc_rs::rand;
 use utils::eventfd::EventFd;
 use vm_memory::GuestMemoryError;
 
@@ -29,8 +29,8 @@ pub enum EntropyError {
     EventFd(#[from] io::Error),
     /// Bad guest memory buffer: {0}
     GuestMemory(#[from] GuestMemoryError),
-    /// Could not get random bytes: {0}
-    Random(#[from] aws_lc_rs::error::Unspecified),
+    // / Could not get random bytes: {0}
+    // Random(#[from] aws_lc_rs::error::Unspecified),
 }
 
 #[derive(Debug)]
@@ -112,11 +112,11 @@ impl Entropy {
             return Ok(0);
         }
 
-        let mut rand_bytes = vec![0; iovec.len() as usize];
-        rand::fill(&mut rand_bytes).map_err(|err| {
-            METRICS.host_rng_fails.inc();
-            err
-        })?;
+        let rand_bytes = vec![0; iovec.len() as usize];
+        // rand::fill(&mut rand_bytes).map_err(|err| {
+        //     METRICS.host_rng_fails.inc();
+        //     err
+        // })?;
 
         // It is ok to unwrap here. We are writing `iovec.len()` bytes at offset 0.
         iovec.write_all_volatile_at(&rand_bytes, 0).unwrap();
