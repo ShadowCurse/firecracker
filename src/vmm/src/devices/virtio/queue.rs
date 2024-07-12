@@ -39,11 +39,11 @@ pub enum QueueError {
 /// A virtio descriptor constraints with C representative.
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
-struct Descriptor {
-    addr: u64,
-    len: u32,
-    flags: u16,
-    next: u16,
+pub struct Descriptor {
+    pub addr: u64,
+    pub len: u32,
+    pub flags: u16,
+    pub next: u16,
 }
 
 // SAFETY: `Descriptor` is a POD and contains no padding.

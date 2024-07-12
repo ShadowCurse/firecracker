@@ -57,23 +57,59 @@ impl IoVecBuffer {
                 return Err(IoVecError::WriteOnlyDescriptor);
             }
 
-            // We use get_slice instead of `get_host_address` here in order to have the whole
-            // range of the descriptor chain checked, i.e. [addr, addr + len) is a valid memory
-            // region in the GuestMemoryMmap.
-            let iov_base = desc
-                .mem
-                .get_slice(desc.addr, desc.len as usize)?
-                .ptr_guard_mut()
-                .as_ptr()
-                .cast::<c_void>();
-            vecs.push(iovec {
-                iov_base,
-                iov_len: desc.len as size_t,
-            });
-            len = len
-                .checked_add(desc.len)
-                .ok_or(IoVecError::OverflowedDescriptor)?;
+            if desc.flags & super::net::device::VIRTQ_DESC_F_INDIRECT != 0 {
+                // Indirect descriptor table is just an array of descriptors
+                let indirect_desc_slice: &[super::queue::Descriptor] = unsafe {
+                    std::slice::from_raw_parts_mut(
+                        desc.mem.get_host_address(desc.addr).unwrap().cast(),
+                        desc.len as usize / std::mem::size_of::<super::queue::Descriptor>(),
+                    )
+                };
 
+                // Indirect descriptors are processed in order
+                let mut ind_len = 0;
+                for indirect_desc in indirect_desc_slice {
+                    // We use get_slice instead of `get_host_address` here in order to have the whole
+                    // range of the descriptor chain checked, i.e. [addr, addr + len) is a valid memory
+                    // region in the GuestMemoryMmap.
+                    let iov_base = desc
+                        .mem
+                        .get_slice(
+                            vm_memory::GuestAddress(indirect_desc.addr),
+                            indirect_desc.len as usize,
+                        )?
+                        .ptr_guard_mut()
+                        .as_ptr()
+                        .cast::<c_void>();
+                    vecs.push(iovec {
+                        iov_base,
+                        iov_len: indirect_desc.len as size_t,
+                    });
+                    ind_len += indirect_desc.len;
+                }
+
+                len = len
+                    .checked_add(ind_len)
+                    .ok_or(IoVecError::OverflowedDescriptor)?;
+            } else {
+                // We use get_slice instead of `get_host_address` here in order to have the whole
+                // range of the descriptor chain checked, i.e. [addr, addr + len) is a valid memory
+                // region in the GuestMemoryMmap.
+                let iov_base = desc
+                    .mem
+                    .get_slice(desc.addr, desc.len as usize)?
+                    .ptr_guard_mut()
+                    .as_ptr()
+                    .cast::<c_void>();
+                vecs.push(iovec {
+                    iov_base,
+                    iov_len: desc.len as size_t,
+                });
+
+                len = len
+                    .checked_add(desc.len)
+                    .ok_or(IoVecError::OverflowedDescriptor)?;
+            }
             next_descriptor = desc.next_descriptor();
         }
 

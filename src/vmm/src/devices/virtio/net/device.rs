@@ -45,6 +45,8 @@ use crate::rate_limiter::{BucketUpdate, RateLimiter, TokenType};
 use crate::vstate::memory::{ByteValued, Bytes, GuestMemoryMmap};
 
 const FRAME_HEADER_MAX_LEN: usize = PAYLOAD_OFFSET + ETH_IPV4_FRAME_LEN;
+pub const VIRTQ_DESC_F_INDIRECT: u16 = 4;
+pub const VIRTIO_F_INDIRECT_DESC: u32 = 28;
 
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
 enum FrontendError {
@@ -171,6 +173,7 @@ impl Net {
             | 1 << VIRTIO_NET_F_HOST_UFO
             | 1 << VIRTIO_F_VERSION_1
             | 1 << VIRTIO_NET_F_MRG_RXBUF
+            | 1 << VIRTIO_F_INDIRECT_DESC
             | 1 << VIRTIO_RING_F_EVENT_IDX;
 
         let mut config_space = ConfigSpace::default();
@@ -635,18 +638,51 @@ impl Net {
 
             let mut desc = &desc_table[desc_index as usize];
 
-            // If this is the first head of the packet, save it for later
-            if packet_start_addr.is_none() {
-                packet_start_addr = Some(GuestAddress(desc.addr))
-            }
+            if desc.flags & VIRTQ_DESC_F_INDIRECT != 0 {
+                // Indirect descriptor table is just an array of descriptors
+                // SAFETY:
+                // The desc.addr is valid guest address.
+                let indirect_desc_slice: &[Descriptor] = unsafe {
+                    std::slice::from_raw_parts_mut(
+                        mem.get_host_address(GuestAddress(desc.addr))
+                            .unwrap()
+                            .cast(),
+                        desc.len as usize / std::mem::size_of::<Descriptor>(),
+                    )
+                };
+                // If this is the first descriptor in the head indirect descriptor table used to store the packet,
+                // save it for later
+                if packet_start_addr.is_none() {
+                    packet_start_addr = Some(GuestAddress(indirect_desc_slice[0].addr))
+                }
 
-            // Handle descriptor chain head
-            let len = slice.len().min(desc.len as usize);
-            mem.get_slice(GuestAddress(desc.addr), len)
-                .unwrap()
-                .copy_from(&slice[..len]);
-            desc_len += len;
-            slice = &slice[len..];
+                // Indirect descriptors are processed in order
+                for indirect_desc in indirect_desc_slice {
+                    let len = slice.len().min(indirect_desc.len as usize);
+                    mem.get_slice(GuestAddress(indirect_desc.addr), len)
+                        .unwrap()
+                        .copy_from(&slice[..len]);
+                    desc_len += len;
+                    slice = &slice[len..];
+
+                    if slice.is_empty() {
+                        break;
+                    }
+                }
+            } else {
+                // If this is the first head of the packet, save it for later
+                if packet_start_addr.is_none() {
+                    packet_start_addr = Some(GuestAddress(desc.addr))
+                }
+
+                // Handle descriptor chain head
+                let len = slice.len().min(desc.len as usize);
+                mem.get_slice(GuestAddress(desc.addr), len)
+                    .unwrap()
+                    .copy_from(&slice[..len]);
+                desc_len += len;
+                slice = &slice[len..];
+            }
 
             // Handle following descriptors
             while desc.flags & crate::devices::virtio::queue::VIRTQ_DESC_F_NEXT != 0
@@ -654,12 +690,39 @@ impl Net {
             {
                 desc = &desc_table[desc.next as usize];
 
-                let len = slice.len().min(desc.len as usize);
-                mem.get_slice(GuestAddress(desc.addr), len)
-                    .unwrap()
-                    .copy_from(&slice[..len]);
-                desc_len += len;
-                slice = &slice[len..];
+                if desc.flags & VIRTQ_DESC_F_INDIRECT != 0 {
+                    // Indirect descriptor table is just an array of descriptors
+                    // SAFETY:
+                    // The desc.addr is valid guest address.
+                    let indirect_desc_slice: &[Descriptor] = unsafe {
+                        std::slice::from_raw_parts_mut(
+                            mem.get_host_address(GuestAddress(desc.addr))
+                                .unwrap()
+                                .cast(),
+                            desc.len as usize / std::mem::size_of::<Descriptor>(),
+                        )
+                    };
+                    // Indirect descriptors are processed in order
+                    for indirect_desc in indirect_desc_slice {
+                        let len = slice.len().min(indirect_desc.len as usize);
+                        mem.get_slice(GuestAddress(indirect_desc.addr), len)
+                            .unwrap()
+                            .copy_from(&slice[..len]);
+                        desc_len += len;
+                        slice = &slice[len..];
+
+                        if slice.is_empty() {
+                            break;
+                        }
+                    }
+                } else {
+                    let len = slice.len().min(desc.len as usize);
+                    mem.get_slice(GuestAddress(desc.addr), len)
+                        .unwrap()
+                        .copy_from(&slice[..len]);
+                    desc_len += len;
+                    slice = &slice[len..];
+                }
             }
 
             // Add used descriptor head to used ring
@@ -1142,6 +1205,7 @@ impl VirtioDevice for Net {
     }
 
     fn activate(&mut self, mem: GuestMemoryMmap) -> Result<(), ActivateError> {
+        warn!("NET ACTIVATE acked_features: {:#x}", self.acked_features);
         let event_idx = self.has_feature(u64::from(VIRTIO_RING_F_EVENT_IDX));
         if event_idx {
             for queue in &mut self.queues {
