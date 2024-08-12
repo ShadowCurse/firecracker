@@ -182,6 +182,10 @@ pub trait VirtioDevice: AsAny + Send {
     }
 
     fn configure_mmio_memory(&mut self, _mmio_memory: &mut [u8]) {}
+
+    fn mmio_memory_size(&self) -> u64 {
+        0
+    }
 }
 
 impl fmt::Debug for dyn VirtioDevice {

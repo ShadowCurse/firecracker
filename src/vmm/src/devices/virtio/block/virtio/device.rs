@@ -702,7 +702,10 @@ impl VirtioDevice for VirtioBlock {
     }
 
     fn configure_mmio_memory(&mut self, mmio_memory: &mut [u8]) {
-        let mm = self.mmio_mem.as_mut().expect("MmioMem should be present if we configure mmio_region");
+        let mm = self
+            .mmio_mem
+            .as_mut()
+            .expect("MmioMem should be present if we configure mmio_region");
         mm.mmio_memory_ptr = mmio_memory.as_mut_ptr() as usize;
         mm.mmio_memory_len = mmio_memory.len();
 
@@ -733,6 +736,10 @@ impl VirtioDevice for VirtioBlock {
             )
         };
         mmio_memory_u32[64..64 + config_u32.len()].copy_from_slice(config_u32);
+    }
+
+    fn mmio_memory_size(&self) -> u64 {
+        0x100 + self.config_space.len() as u64
     }
 }
 

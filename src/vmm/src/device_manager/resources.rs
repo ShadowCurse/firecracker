@@ -21,6 +21,7 @@ pub struct ResourceAllocator {
     mmio_memory: AddressAllocator,
     // Memory allocator for system data
     system_memory: AddressAllocator,
+    first_page_mmio_memory: u64,
 }
 
 impl ResourceAllocator {
@@ -28,8 +29,9 @@ impl ResourceAllocator {
     pub fn new() -> Result<Self, vm_allocator::Error> {
         Ok(Self {
             gsi_allocator: IdAllocator::new(arch::IRQ_BASE, arch::IRQ_MAX)?,
-            mmio_memory: AddressAllocator::new(arch::MMIO_MEM_START, arch::MMIO_MEM_SIZE)?,
+            mmio_memory: AddressAllocator::new(arch::MMIO_MEM_START + 4096, arch::MMIO_MEM_SIZE)?,
             system_memory: AddressAllocator::new(arch::SYSTEM_MEM_START, arch::SYSTEM_MEM_SIZE)?,
+            first_page_mmio_memory: arch::MMIO_MEM_START,
         })
     }
 
@@ -73,6 +75,16 @@ impl ResourceAllocator {
         policy: AllocPolicy,
     ) -> Result<u64, vm_allocator::Error> {
         Ok(self.mmio_memory.allocate(size, alignment, policy)?.start())
+    }
+
+    pub fn allocate_first_page_mmio_memory(&mut self, size: u64, alignment: u64) -> u64 {
+        let addr = self.first_page_mmio_memory;
+        self.first_page_mmio_memory += size;
+        let m = self.first_page_mmio_memory & (alignment - 1);
+        if m != 0 {
+            self.first_page_mmio_memory += alignment - m;
+        }
+        addr
     }
 
     /// Allocate a memory range for system data

@@ -155,6 +155,22 @@ impl MMIODeviceManager {
         Ok(device_info)
     }
 
+    /// Allocates resources for a new device to be added.
+    fn allocate_first_page_mmio_resources(
+        &mut self,
+        resource_allocator: &mut ResourceAllocator,
+        irq_count: u32,
+        len: u64,
+    ) -> Result<MMIODeviceInfo, MmioError> {
+        let irqs = resource_allocator.allocate_gsi(irq_count)?;
+        let device_info = MMIODeviceInfo {
+            addr: resource_allocator.allocate_first_page_mmio_memory(len, 16),
+            len,
+            irqs,
+        };
+        Ok(device_info)
+    }
+
     /// Register a device at some MMIO address.
     fn register_mmio_device(
         &mut self,
@@ -254,7 +270,12 @@ impl MMIODeviceManager {
         _cmdline: &mut kernel_cmdline::Cmdline,
         mmio_optimization: bool,
     ) -> Result<MMIODeviceInfo, MmioError> {
-        let device_info = self.allocate_mmio_resources(resource_allocator, 1)?;
+        let device_mmio_size = mmio_device.locked_device().mmio_memory_size();
+        let device_info = if device_mmio_size != 0 {
+            self.allocate_mmio_resources(resource_allocator, 1)?
+        } else {
+            self.allocate_first_page_mmio_resources(resource_allocator, 1, device_mmio_size)?
+        };
         self.register_mmio_virtio(vm, device_id, mmio_device, &device_info, mmio_optimization)?;
         #[cfg(target_arch = "x86_64")]
         {

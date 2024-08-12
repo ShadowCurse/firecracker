@@ -43,7 +43,7 @@ use crate::device_manager::mmio::{MMIODeviceInfo, MMIODeviceManager};
 use crate::device_manager::persist::MMIODevManagerConstructorArgs;
 #[cfg(target_arch = "x86_64")]
 use crate::device_manager::persist::{
-    ACPIDeviceManagerConstructorArgs, ACPIDeviceManagerRestoreError, MMIODevManagerConstructorArgs,
+    ACPIDeviceManagerConstructorArgs, ACPIDeviceManagerRestoreError,
 };
 use crate::device_manager::resources::ResourceAllocator;
 use crate::devices::acpi::vmgenid::{VmGenId, VmGenIdError};
