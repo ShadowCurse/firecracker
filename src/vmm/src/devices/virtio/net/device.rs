@@ -9,14 +9,17 @@
 use std::io::Read;
 use std::mem;
 use std::net::Ipv4Addr;
+use std::num::Wrapping;
+use std::os::fd::AsRawFd;
 use std::sync::{Arc, Mutex};
 
 use libc::EAGAIN;
 use log::{error, warn};
 use utils::eventfd::EventFd;
 use utils::net::mac::MacAddr;
+use utils::ring_buffer::RingBuffer;
 use utils::u64_to_usize;
-use vm_memory::GuestMemoryError;
+use vm_memory::{GuestAddress, GuestMemory, GuestMemoryError};
 
 use crate::devices::virtio::device::{DeviceState, IrqTrigger, IrqType, VirtioDevice};
 use crate::devices::virtio::gen::virtio_blk::VIRTIO_F_VERSION_1;
@@ -32,7 +35,7 @@ use crate::devices::virtio::net::tap::Tap;
 use crate::devices::virtio::net::{
     gen, NetError, NetQueue, MAX_BUFFER_SIZE, NET_QUEUE_SIZES, RX_INDEX, TX_INDEX,
 };
-use crate::devices::virtio::queue::{DescriptorChain, Queue};
+use crate::devices::virtio::queue::{Descriptor, DescriptorChain, Queue, UsedElement};
 use crate::devices::virtio::{ActivateError, TYPE_NET};
 use crate::devices::{report_net_event_fail, DeviceError};
 use crate::dumbo::pdu::arp::ETH_IPV4_FRAME_LEN;
@@ -103,6 +106,180 @@ pub struct ConfigSpace {
 // SAFETY: `ConfigSpace` contains only PODs in `repr(C)` or `repr(transparent)`, without padding.
 unsafe impl ByteValued for ConfigSpace {}
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct RxIovInfo {
+    head_index: u16,
+    chain_capacity: u32,
+    chain_len: u32,
+}
+
+#[derive(Debug, Default)]
+struct RxIov<'a> {
+    ring_iov: RingIov<'a>,
+    heads_info: RingBuffer<RxIovInfo>,
+}
+
+impl RxIov<'_> {
+    pub fn new() -> Self {
+        Self {
+            ring_iov: RingIov::new(),
+            heads_info: RingBuffer::new_with_size(256),
+        }
+    }
+
+    pub fn update(&mut self, queue: &mut Queue, mem: &GuestMemoryMmap) {
+        // Preparing iov vector with all available buffers
+        // from all available descriptor chains
+        #[repr(C)]
+        struct AvailRing {
+            flags: u16,
+            idx: u16,
+            ring: [u16; 256],
+            used_element: u16,
+        }
+        // SAFETY:
+        // avail_ring in the queue is a valid guest address
+        let avail_ring: &AvailRing =
+            unsafe { std::mem::transmute(mem.get_host_address(queue.avail_ring).unwrap()) };
+        // SAFETY:
+        // desc_table in the queue is a valid guest address
+        let desc_table: &[Descriptor; 256] =
+            unsafe { std::mem::transmute(mem.get_host_address(queue.desc_table).unwrap()) };
+
+        let avail_idx = queue.avail_idx(mem);
+        let actual_size = queue.actual_size();
+
+        while queue.next_avail.0 != avail_idx.0 {
+            let avail_index = queue.next_avail.0 % actual_size;
+
+            let desc_index = avail_ring.ring[avail_index as usize];
+            let mut desc = &desc_table[desc_index as usize];
+
+            let mut chain_capacity = desc.len;
+            let mut chain_len = 1;
+
+            let iov = libc::iovec {
+                iov_base: mem
+                    .get_host_address(GuestAddress(desc.addr))
+                    .unwrap()
+                    .cast(),
+                iov_len: desc.len as usize,
+            };
+            self.ring_iov.push(iov);
+
+            while desc.flags & crate::devices::virtio::queue::VIRTQ_DESC_F_NEXT != 0 {
+                desc = &desc_table[desc.next as usize];
+                chain_capacity += desc.len;
+                chain_len += 1;
+
+                let iov = libc::iovec {
+                    iov_base: mem
+                        .get_host_address(GuestAddress(desc.addr))
+                        .unwrap()
+                        .cast(),
+                    iov_len: desc.len as usize,
+                };
+                self.ring_iov.push(iov);
+            }
+
+            self.heads_info.push(RxIovInfo {
+                head_index: desc_index,
+                chain_capacity,
+                chain_len,
+            });
+
+            queue.next_avail += Wrapping(1);
+        }
+
+        let next_avail = queue.next_avail.0;
+        queue.set_used_ring_avail_event(next_avail, mem);
+    }
+}
+
+#[derive(Debug, Default)]
+struct RingIov<'a> {
+    iov: &'a mut [libc::iovec],
+    iov_start: u16,
+    iov_len: u16,
+}
+
+unsafe impl Send for RingIov<'_> {}
+
+impl RingIov<'_> {
+    pub fn new() -> Self {
+        let iov = unsafe {
+            let memfd_obj = memfd::MemfdOptions::default()
+                .create("ring_buffer")
+                .unwrap();
+            let memfd = memfd_obj.as_file().as_raw_fd();
+            std::mem::forget(memfd_obj);
+            // let memfd = libc::memfd_create("ring_buffer\0".as_ptr().cast(), 0);
+            libc::ftruncate(memfd, 4096);
+            let ring_mem = libc::mmap(
+                std::ptr::null_mut(),
+                4096 * 2,
+                libc::PROT_NONE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            );
+            libc::mmap(
+                ring_mem,
+                4096,
+                libc::PROT_READ | libc::PROT_WRITE,
+                // libc::MAP_PRIVATE | libc::MAP_FIXED,
+                libc::MAP_SHARED | libc::MAP_FIXED,
+                memfd,
+                0,
+            );
+            libc::mmap(
+                ring_mem.add(4096),
+                4096,
+                libc::PROT_READ | libc::PROT_WRITE,
+                // libc::MAP_PRIVATE | libc::MAP_FIXED,
+                libc::MAP_SHARED | libc::MAP_FIXED,
+                memfd,
+                0,
+            );
+            std::slice::from_raw_parts_mut(
+                ring_mem.cast(),
+                4096 / std::mem::size_of::<libc::iovec>() * 2,
+            )
+        };
+        Self {
+            iov,
+            iov_start: 0,
+            iov_len: 0,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.iov_len == 0
+    }
+
+    pub fn push(&mut self, iov: libc::iovec) {
+        if self.iov_len == 256 {
+            panic!("p");
+            return;
+        }
+        let index = self.iov_start + self.iov_len;
+        self.iov[index as usize] = iov;
+        self.iov_len += 1;
+    }
+
+    pub fn pop_slice(&mut self, len: u16) {
+        self.iov_start += len;
+        self.iov_len -= len;
+        if 256 <= self.iov_start {
+            self.iov_start -= 256;
+        }
+    }
+
+    pub fn get_slice(&mut self) -> &mut [libc::iovec] {
+        &mut self.iov[self.iov_start as usize..(self.iov_start + self.iov_len) as usize]
+    }
+}
+
 /// VirtIO network device.
 ///
 /// It emulates a network device able to exchange L2 frames between the guest
@@ -128,6 +305,8 @@ pub struct Net {
     rx_bytes_read: usize,
     rx_frame_buf: [u8; MAX_BUFFER_SIZE],
 
+    rx_iov_new: RxIov<'static>,
+
     tx_frame_headers: [u8; frame_hdr_len()],
 
     pub(crate) irq_trigger: IrqTrigger,
@@ -145,6 +324,8 @@ pub struct Net {
 
     tx_buffer: IoVecBuffer,
 }
+
+unsafe impl Send for Net {}
 
 impl Net {
     /// Create a new virtio network device with the given TAP interface.
@@ -193,6 +374,9 @@ impl Net {
             rx_deferred_frame: false,
             rx_bytes_read: 0,
             rx_frame_buf: [0u8; MAX_BUFFER_SIZE],
+
+            rx_iov_new: RxIov::new(),
+
             tx_frame_headers: [0u8; frame_hdr_len()],
             irq_trigger: IrqTrigger::new().map_err(NetError::EventFd)?,
             config_space,
@@ -528,7 +712,7 @@ impl Net {
         self.read_tap().map_err(NetError::IO)
     }
 
-    fn process_rx(&mut self) -> Result<(), DeviceError> {
+    fn process_rx_old(&mut self) -> Result<(), DeviceError> {
         // Read as many frames as possible.
         loop {
             match self.read_from_mmds_or_tap() {
@@ -560,6 +744,98 @@ impl Net {
         }
 
         self.try_signal_queue(NetQueue::Rx)
+    }
+
+    fn process_rx(&mut self) -> Result<(), DeviceError> {
+        let mem = self.device_state.mem().unwrap();
+
+        self.rx_iov_new.update(&mut self.queues[RX_INDEX], mem);
+
+        if self.rx_iov_new.ring_iov.is_empty() {
+            return Ok(());
+        }
+
+        loop {
+            let iov_slice = self.rx_iov_new.ring_iov.get_slice();
+
+            // If we used all iovs, we cannot read
+            // anything else.
+            if iov_slice.is_empty() {
+                break;
+            }
+
+            match self.tap.read_iovec(iov_slice).map_err(NetError::IO) {
+                Ok(mut bytes_written) => {
+                    let packet_head = iov_slice[0].iov_base;
+                    let mut used_heads = 0;
+                    // Calculate how manu descriptor heads we used for this write.
+                    loop {
+                        let Some(iov_info) = self.rx_iov_new.heads_info.pop_front() else {
+                            panic!("there always should be enough");
+                        };
+
+                        self.rx_iov_new
+                            .ring_iov
+                            .pop_slice(iov_info.chain_len as u16);
+
+                        if bytes_written <= iov_info.chain_capacity as usize {
+                            let next_used_index =
+                                self.queues[RX_INDEX].next_used + Wrapping(used_heads);
+                            let used_element = UsedElement {
+                                id: iov_info.head_index as u32,
+                                len: bytes_written as u32,
+                            };
+                            self.queues[RX_INDEX]
+                                .write_used_ring(mem, next_used_index.0, used_element)
+                                .unwrap();
+                            used_heads += 1;
+                            break;
+                        } else {
+                            let next_used_index =
+                                self.queues[RX_INDEX].next_used + Wrapping(used_heads);
+                            let used_element = UsedElement {
+                                id: iov_info.head_index as u32,
+                                len: iov_info.chain_capacity,
+                            };
+                            self.queues[RX_INDEX]
+                                .write_used_ring(mem, next_used_index.0, used_element)
+                                .unwrap();
+                            used_heads += 1;
+
+                            bytes_written -= iov_info.chain_capacity as usize;
+                        };
+                    }
+                    self.queues[RX_INDEX].advance_used_ring(mem, used_heads);
+
+                    // Update number of descrptor heads used to store
+                    // a packet.
+                    // SAFETY:
+                    // The iov_base is valid userspace address.
+                    #[allow(clippy::transmute_ptr_to_ref)]
+                    let header: &mut virtio_net_hdr_v1 =
+                        unsafe { std::mem::transmute(packet_head) };
+                    header.num_buffers = used_heads as u16;
+                }
+                Err(NetError::IO(err)) => {
+                    // The tap device is non-blocking, so any error aside from EAGAIN is
+                    // unexpected.
+                    match err.raw_os_error() {
+                        Some(err) if err == EAGAIN => (),
+                        _ => {
+                            error!("Failed to read tap: {:?}", err);
+                            self.metrics.tap_read_fails.inc();
+                            return Err(DeviceError::FailedReadTap);
+                        }
+                    };
+                    break;
+                }
+                Err(err) => {
+                    error!("Spurious error in network RX: {:?}", err);
+                }
+            }
+        }
+        self.try_signal_queue(NetQueue::Rx)?;
+        Ok(())
     }
 
     // Process the deferred frame first, then continue reading from tap.
@@ -735,6 +1011,11 @@ impl Net {
     /// buffer in the RX queue.
     pub fn process_rx_queue_event(&mut self) {
         self.metrics.rx_queue_event_count.inc();
+
+        // Guest tells us there are new descriptor chains, so
+        // we read them here.
+        let mem = self.device_state.mem().unwrap();
+        self.rx_iov_new.update(&mut self.queues[RX_INDEX], mem);
 
         if let Err(err) = self.queue_evts[RX_INDEX].read() {
             // rate limiters present but with _very high_ allowed rate

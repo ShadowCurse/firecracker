@@ -44,11 +44,11 @@ pub enum QueueError {
 /// 2.6.5 The Virtqueue Descriptor Table
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
-struct Descriptor {
-    addr: u64,
-    len: u32,
-    flags: u16,
-    next: u16,
+pub struct Descriptor {
+    pub addr: u64,
+    pub len: u32,
+    pub flags: u16,
+    pub next: u16,
 }
 
 // SAFETY: `Descriptor` is a POD and contains no padding.
@@ -60,9 +60,9 @@ unsafe impl ByteValued for Descriptor {}
 /// 2.6.8 The Virtqueue Used Ring
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
-struct UsedElement {
-    id: u32,
-    len: u32,
+pub struct UsedElement {
+    pub id: u32,
+    pub len: u32,
 }
 
 // SAFETY: `UsedElement` is a POD and contains no padding.
@@ -485,7 +485,7 @@ impl Queue {
 
     /// Read used element to the used ring at specified index.
     #[inline(always)]
-    fn write_used_ring<M: GuestMemory>(
+    pub fn write_used_ring<M: GuestMemory>(
         &self,
         mem: &M,
         index: u16,
@@ -575,7 +575,7 @@ impl Queue {
 
     /// Helper method that writes to the `avail_event` field of the used ring.
     #[inline(always)]
-    fn set_used_ring_avail_event<M: GuestMemory>(&mut self, avail_event: u16, mem: &M) {
+    pub fn set_used_ring_avail_event<M: GuestMemory>(&mut self, avail_event: u16, mem: &M) {
         debug_assert!(self.is_layout_valid(mem));
 
         // Used ring has layout:
