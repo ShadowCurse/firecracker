@@ -23,20 +23,21 @@ fn main() {
     // Target arch (x86_64 / aarch64)
     let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").expect("Missing target arch.");
 
-    let seccomp_json_path = format!("{}/{}.json", JSON_DIR, target);
-    // If the current target doesn't have a default filter, use a default, empty filter.
-    // This is to make sure that Firecracker builds even with libc toolchains for which we don't
-    // provide a default filter. For example, GNU libc.
-    let seccomp_json_path = if Path::new(&seccomp_json_path).exists() {
-        seccomp_json_path
-    } else {
-        println!(
-            "cargo:warning=No default seccomp policy for target: {}. Defaulting to \
-             `resources/seccomp/unimplemented.json`.",
-            target
-        );
-        format!("{}/unimplemented.json", JSON_DIR)
-    };
+    // let seccomp_json_path = format!("{}/{}.json", JSON_DIR, target);
+    // // If the current target doesn't have a default filter, use a default, empty filter.
+    // // This is to make sure that Firecracker builds even with libc toolchains for which we don't
+    // // provide a default filter. For example, GNU libc.
+    // let seccomp_json_path = if Path::new(&seccomp_json_path).exists() {
+    //     seccomp_json_path
+    // } else {
+    //     println!(
+    //         "cargo:warning=No default seccomp policy for target: {}. Defaulting to \
+    //          `resources/seccomp/unimplemented.json`.",
+    //         target
+    //     );
+    //     format!("{}/unimplemented.json", JSON_DIR)
+    // };
+    let seccomp_json_path = format!("{}/unimplemented.json", JSON_DIR);
 
     // Retrigger the build script if the JSON file has changed.
     // let json_path = json_path.to_str().expect("Invalid bytes");
