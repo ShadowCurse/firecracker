@@ -10,7 +10,9 @@ use vm_memory::{
 };
 
 use crate::devices::virtio::queue::DescriptorChain;
-use crate::vstate::memory::{Bitmap, GuestMemory};
+use crate::vstate::memory::{Bitmap, GuestMemory, GuestMemoryMmap};
+
+use super::queue::DescriptorChainOpt;
 
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
 pub enum IoVecError {
@@ -91,6 +93,42 @@ impl IoVecBuffer {
         Ok(())
     }
 
+    pub unsafe fn load_descriptor_chain_opt(
+        &mut self,
+        head: DescriptorChainOpt,
+        mem: &GuestMemoryMmap,
+    ) -> Result<(), IoVecError> {
+        self.clear();
+
+        let mut next_descriptor = Some(head);
+        while let Some(desc) = next_descriptor {
+            if desc.is_write_only() {
+                return Err(IoVecError::WriteOnlyDescriptor);
+            }
+
+            // We use get_slice instead of `get_host_address` here in order to have the whole
+            // range of the descriptor chain checked, i.e. [addr, addr + len) is a valid memory
+            // region in the GuestMemoryMmap.
+            let iov_base = mem
+                .get_slice(desc.addr, desc.len as usize)?
+                .ptr_guard_mut()
+                .as_ptr()
+                .cast::<c_void>();
+            self.vecs.push(iovec {
+                iov_base,
+                iov_len: desc.len as size_t,
+            });
+            self.len = self
+                .len
+                .checked_add(desc.len)
+                .ok_or(IoVecError::OverflowedDescriptor)?;
+
+            next_descriptor = desc.next_descriptor();
+        }
+
+        Ok(())
+    }
+
     /// Create an `IoVecBuffer` from a `DescriptorChain`
     ///
     /// # Safety
@@ -100,6 +138,17 @@ impl IoVecBuffer {
         let mut new_buffer: Self = Default::default();
 
         new_buffer.load_descriptor_chain(head)?;
+
+        Ok(new_buffer)
+    }
+
+    pub unsafe fn from_descriptor_chain_opt(
+        head: DescriptorChainOpt,
+        mem: &GuestMemoryMmap,
+    ) -> Result<Self, IoVecError> {
+        let mut new_buffer: Self = Default::default();
+
+        new_buffer.load_descriptor_chain_opt(head, mem)?;
 
         Ok(new_buffer)
     }
@@ -254,6 +303,44 @@ impl IoVecBufferMut {
             len = len
                 .checked_add(desc.len)
                 .ok_or(IoVecError::OverflowedDescriptor)?;
+        }
+
+        Ok(Self { vecs, len })
+    }
+
+    pub fn from_descriptor_chain_opt(
+        head: DescriptorChainOpt,
+        mem: &GuestMemoryMmap,
+    ) -> Result<Self, IoVecError> {
+        let mut vecs = IoVecVec::new();
+        let mut len = 0u32;
+
+        let mut next_descriptor = Some(head);
+        while let Some(desc) = next_descriptor {
+            if !desc.is_write_only() {
+                return Err(IoVecError::ReadOnlyDescriptor);
+            }
+
+            // We use get_slice instead of `get_host_address` here in order to have the whole
+            // range of the descriptor chain checked, i.e. [addr, addr + len) is a valid memory
+            // region in the GuestMemoryMmap.
+            let slice = mem.get_slice(desc.addr, desc.len as usize)?;
+
+            // We need to mark the area of guest memory that will be mutated through this
+            // IoVecBufferMut as dirty ahead of time, as we loose access to all
+            // vm-memory related information after converting down to iovecs.
+            slice.bitmap().mark_dirty(0, desc.len as usize);
+
+            let iov_base = slice.ptr_guard_mut().as_ptr().cast::<c_void>();
+            vecs.push(iovec {
+                iov_base,
+                iov_len: desc.len as size_t,
+            });
+            len = len
+                .checked_add(desc.len)
+                .ok_or(IoVecError::OverflowedDescriptor)?;
+
+            next_descriptor = desc.next_descriptor();
         }
 
         Ok(Self { vecs, len })

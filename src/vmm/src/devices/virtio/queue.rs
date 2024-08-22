@@ -201,6 +201,238 @@ impl<'a> Iterator for DescriptorIterator<'a> {
     }
 }
 
+/// A virtio descriptor chain.
+#[derive(Debug)]
+pub struct DescriptorChainOpt {
+    desc_table: DescTable,
+
+    queue_size: u16,
+    ttl: u16, // used to prevent infinite chain cycles
+
+    /// Index into the descriptor table
+    pub index: u16,
+
+    /// Guest physical address of device specific data
+    pub addr: GuestAddress,
+
+    /// Length of device specific data
+    pub len: u32,
+
+    /// Includes next, write, and indirect bits
+    pub flags: u16,
+
+    /// Index into the descriptor table of the next descriptor if flags has
+    /// the next bit set
+    pub next: u16,
+}
+
+impl DescriptorChainOpt {
+    /// Creates a new `DescriptorChain` from the given memory and descriptor table.
+    ///
+    /// Note that the desc_table and queue_size are assumed to be validated by the caller.
+    fn checked_new(desc_table: DescTable, queue_size: u16, index: u16) -> Option<Self> {
+        if index >= queue_size {
+            return None;
+        }
+
+        let desc = &desc_table.get()[index as usize];
+
+        let chain = Self {
+            desc_table,
+            queue_size,
+            ttl: queue_size,
+            index,
+            addr: GuestAddress(desc.addr),
+            len: desc.len,
+            flags: desc.flags,
+            next: desc.next,
+        };
+
+        if chain.is_valid() {
+            Some(chain)
+        } else {
+            None
+        }
+    }
+
+    fn is_valid(&self) -> bool {
+        !self.has_next() || self.next < self.queue_size
+    }
+
+    /// Gets if this descriptor chain has another descriptor chain linked after it.
+    pub fn has_next(&self) -> bool {
+        self.flags & VIRTQ_DESC_F_NEXT != 0 && self.ttl > 1
+    }
+
+    /// If the driver designated this as a write only descriptor.
+    ///
+    /// If this is false, this descriptor is read only.
+    /// Write only means the emulated device can write and the driver can read.
+    pub fn is_write_only(&self) -> bool {
+        self.flags & VIRTQ_DESC_F_WRITE != 0
+    }
+
+    /// Gets the next descriptor in this descriptor chain, if there is one.
+    ///
+    /// Note that this is distinct from the next descriptor chain returned by `AvailIter`, which is
+    /// the head of the next _available_ descriptor chain.
+    pub fn next_descriptor(&self) -> Option<Self> {
+        if self.has_next() {
+            DescriptorChainOpt::checked_new(self.desc_table, self.queue_size, self.next).map(
+                |mut c| {
+                    c.ttl = self.ttl - 1;
+                    c
+                },
+            )
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DescTable {
+    ptr: *mut Descriptor,
+    len: usize,
+}
+
+unsafe impl Send for DescTable {}
+
+impl Default for DescTable {
+    fn default() -> Self {
+        Self {
+            ptr: std::ptr::null_mut(),
+            len: 0,
+        }
+    }
+}
+
+impl DescTable {
+    pub fn new(guest_addr: GuestAddress, mem: &GuestMemoryMmap, len: usize) -> Self {
+        Self {
+            ptr: mem.get_host_address(guest_addr).unwrap().cast(),
+            len,
+        }
+    }
+
+    #[inline(always)]
+    pub fn get(&self) -> &[Descriptor] {
+        unsafe { std::slice::from_raw_parts(self.ptr.cast(), self.len) }
+    }
+}
+
+// struct AvailRing {
+//     flags: u16,
+//     idx: u16,
+//     ring: [u16; <queue size>],
+//     used_event: u16,
+// }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AvailRing {
+    ptr: *mut u8,
+    len: usize,
+}
+
+unsafe impl Send for AvailRing {}
+
+impl Default for AvailRing {
+    fn default() -> Self {
+        Self {
+            ptr: std::ptr::null_mut(),
+            len: 0,
+        }
+    }
+}
+
+impl AvailRing {
+    pub fn new(guest_addr: GuestAddress, mem: &GuestMemoryMmap, len: usize) -> Self {
+        Self {
+            ptr: mem.get_host_address(guest_addr).unwrap().cast(),
+            len,
+        }
+    }
+
+    #[inline(always)]
+    pub fn idx(&self) -> &mut u16 {
+        unsafe { &mut *(self.ptr.add(std::mem::size_of::<u16>()) as *mut u16) }
+    }
+
+    #[inline(always)]
+    pub fn ring(&self) -> &mut [u16] {
+        unsafe {
+            let ring_ptr = self.ptr.add(std::mem::size_of::<u16>().unchecked_mul(2));
+            std::slice::from_raw_parts_mut(ring_ptr.cast(), self.len)
+        }
+    }
+
+    #[inline(always)]
+    pub fn used_event(&self) -> &mut u16 {
+        unsafe {
+            &mut *(self
+                .ptr
+                .add(std::mem::size_of::<u16>().unchecked_mul((2 + self.len)))
+                as *mut u16)
+        }
+    }
+}
+
+// struct UsedRing {
+//     flags: u16,
+//     idx: u16,
+//     ring: [UsedElement; <queue size>],
+//     avail_event: u16,
+// }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UsedRing {
+    ptr: *mut u8,
+    len: usize,
+}
+
+unsafe impl Send for UsedRing {}
+
+impl Default for UsedRing {
+    fn default() -> Self {
+        Self {
+            ptr: std::ptr::null_mut(),
+            len: 0,
+        }
+    }
+}
+
+impl UsedRing {
+    pub fn new(guest_addr: GuestAddress, mem: &GuestMemoryMmap, len: usize) -> Self {
+        Self {
+            ptr: mem.get_host_address(guest_addr).unwrap().cast(),
+            len,
+        }
+    }
+
+    #[inline(always)]
+    pub fn idx(&self) -> &mut u16 {
+        unsafe { unsafe { &mut *(self.ptr.add(std::mem::size_of::<u16>()) as *mut u16) } }
+    }
+
+    #[inline(always)]
+    pub fn ring(&self) -> &mut [UsedElement] {
+        unsafe {
+            let ring_ptr = self.ptr.add(std::mem::size_of::<u16>() * 2);
+            std::slice::from_raw_parts_mut(ring_ptr.cast(), self.len)
+        }
+    }
+
+    #[inline(always)]
+    pub fn avail_event(&self) -> &mut u16 {
+        unsafe {
+            &mut *(self.ptr.add(
+                std::mem::size_of::<u16>().unchecked_mul(2)
+                    + std::mem::size_of::<UsedElement>().unchecked_mul(self.len),
+            ) as *mut u16)
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 /// A virtio queue's parameters.
 pub struct Queue {
@@ -222,6 +454,10 @@ pub struct Queue {
     /// Guest physical address of the used ring
     pub used_ring: GuestAddress,
 
+    pub dt: DescTable,
+    pub ar: AvailRing,
+    pub ur: UsedRing,
+
     pub(crate) next_avail: Wrapping<u16>,
     pub(crate) next_used: Wrapping<u16>,
 
@@ -242,11 +478,22 @@ impl Queue {
             desc_table: GuestAddress(0),
             avail_ring: GuestAddress(0),
             used_ring: GuestAddress(0),
+
+            dt: Default::default(),
+            ar: Default::default(),
+            ur: Default::default(),
+
             next_avail: Wrapping(0),
             next_used: Wrapping(0),
             uses_notif_suppression: false,
             num_added: Wrapping(0),
         }
+    }
+
+    pub fn set_pointers(&mut self, mem: &GuestMemoryMmap) {
+        self.dt = DescTable::new(self.desc_table, mem, self.actual_size() as usize);
+        self.ar = AvailRing::new(self.avail_ring, mem, self.actual_size() as usize);
+        self.ur = UsedRing::new(self.used_ring, mem, self.actual_size() as usize);
     }
 
     /// Maximum size of the queue.
@@ -336,9 +583,17 @@ impl Queue {
         (self.avail_idx(mem) - self.next_avail).0
     }
 
+    pub fn len_opt(&self) -> u16 {
+        (Wrapping(*self.ar.idx()) - self.next_avail).0
+    }
+
     /// Checks if the driver has made any descriptor chains available in the avail ring.
     pub fn is_empty<M: GuestMemory>(&self, mem: &M) -> bool {
         self.len(mem) == 0
+    }
+
+    pub fn is_empty_opt(&self) -> bool {
+        self.len_opt() == 0
     }
 
     /// Pop the first available descriptor chain from the avail ring.
@@ -369,6 +624,21 @@ impl Queue {
         self.do_pop_unchecked(mem)
     }
 
+    pub fn pop_opt(&mut self) -> Option<DescriptorChainOpt> {
+        let len = self.len_opt();
+        if len > self.actual_size() {
+            panic!(
+                "The number of available virtio descriptors {len} is greater than queue size: {}!",
+                self.actual_size()
+            );
+        }
+        if len == 0 {
+            return None;
+        }
+
+        self.do_pop_unchecked_opt()
+    }
+
     /// Try to pop the first available descriptor chain from the avail ring.
     /// If no descriptor is available, enable notifications.
     pub fn pop_or_enable_notification<'b, M: GuestMemory>(
@@ -384,6 +654,18 @@ impl Queue {
         }
 
         self.do_pop_unchecked(mem)
+    }
+
+    pub fn pop_or_enable_notification_opt(&mut self) -> Option<DescriptorChainOpt> {
+        if !self.uses_notif_suppression {
+            return self.pop_opt();
+        }
+
+        if self.try_enable_notification_opt() {
+            return None;
+        }
+
+        self.do_pop_unchecked_opt()
     }
 
     /// Pop the first available descriptor chain from the avail ring.
@@ -438,6 +720,16 @@ impl Queue {
         )
     }
 
+    pub fn do_pop_unchecked_opt(&mut self) -> Option<DescriptorChainOpt> {
+        // This fence ensures all subsequent reads see the updated driver writes.
+        fence(Ordering::Acquire);
+        let desc_index = self.ar.ring()[(self.next_avail.0 % self.actual_size()) as usize];
+        DescriptorChainOpt::checked_new(self.dt, self.actual_size(), desc_index).map(|dc| {
+            self.next_avail += Wrapping(1);
+            dc
+        })
+    }
+
     /// Undo the effects of the last `self.pop()` call.
     /// The caller can use this, if it was unable to consume the last popped descriptor chain.
     pub fn undo_pop(&mut self) {
@@ -470,6 +762,24 @@ impl Queue {
         Ok(())
     }
 
+    pub fn add_used_opt(&mut self, desc_index: u16, len: u32) -> Result<(), QueueError> {
+        let next_used = self.next_used.0 % self.actual_size();
+        let used_element = UsedElement {
+            id: u32::from(desc_index),
+            len,
+        };
+        self.write_used_ring_opt(next_used, used_element)?;
+
+        self.num_added += Wrapping(1);
+        self.next_used += Wrapping(1);
+
+        // This fence ensures all descriptor writes are visible before the index update is.
+        fence(Ordering::Release);
+
+        *self.ur.idx() = self.next_used.0;
+        Ok(())
+    }
+
     fn write_used_ring<M: GuestMemory>(
         &self,
         mem: &M,
@@ -499,6 +809,24 @@ impl Queue {
 
         mem.write_obj(used_element, used_element_address)
             .map_err(QueueError::UsedRing)
+    }
+
+    /// Read used element to the used ring at specified index.
+    #[inline(always)]
+    pub fn write_used_ring_opt(
+        &self,
+        index: u16,
+        used_element: UsedElement,
+    ) -> Result<(), QueueError> {
+        if used_element.id >= u32::from(self.actual_size()) {
+            error!(
+                "attempted to add out of bounds descriptor to used ring: {}",
+                used_element.id
+            );
+            return Err(QueueError::DescIndexOutOfBounds(used_element.id));
+        }
+        self.ur.ring()[(index % self.actual_size()) as usize] = used_element;
+        Ok(())
     }
 
     /// Fetch the available ring index (`virtq_avail->idx`) from guest memory.
@@ -610,6 +938,33 @@ impl Queue {
         self.next_avail.0 == self.avail_idx(mem).0
     }
 
+    pub fn try_enable_notification_opt(&mut self) -> bool {
+        if !self.uses_notif_suppression {
+            return true;
+        }
+
+        let len = self.len_opt();
+        if len != 0 {
+            if len > self.actual_size() {
+                panic!(
+                    "The number of available virtio descriptors {len} is greater than queue size: \
+                     {}!",
+                    self.actual_size()
+                );
+            }
+            return false;
+        }
+
+        *self.ur.avail_event() = self.next_avail.0;
+
+        // Make sure all subsequent reads are performed after `set_used_ring_avail_event`.
+        fence(Ordering::SeqCst);
+
+        // If the actual avail_idx is different than next_avail one or more descriptors can still
+        // be consumed from the available ring.
+        self.next_avail.0 == *self.ar.idx()
+    }
+
     /// Enable notification suppression.
     pub fn enable_notif_suppression(&mut self) {
         self.uses_notif_suppression = true;
@@ -636,6 +991,24 @@ impl Queue {
         let new = self.next_used;
         let old = self.next_used - self.num_added;
         let used_event = self.used_event(mem);
+
+        self.num_added = Wrapping(0);
+
+        new - used_event - Wrapping(1) < new - old
+    }
+
+    pub fn prepare_kick_opt(&mut self) -> bool {
+        // If the device doesn't use notification suppression, always return true
+        if !self.uses_notif_suppression {
+            return true;
+        }
+
+        // We need to expose used array entries before checking the used_event.
+        fence(Ordering::SeqCst);
+
+        let new = self.next_used;
+        let old = self.next_used - self.num_added;
+        let used_event = Wrapping(*self.ar.used_event());
 
         self.num_added = Wrapping(0);
 

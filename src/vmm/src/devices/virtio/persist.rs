@@ -16,6 +16,8 @@ use crate::devices::virtio::queue::Queue;
 use crate::snapshot::Persist;
 use crate::vstate::memory::{GuestAddress, GuestMemoryMmap};
 
+use super::queue::DescTable;
+
 /// Errors thrown during restoring virtio state.
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
 pub enum PersistError {
@@ -78,6 +80,11 @@ impl Persist<'_> for Queue {
             desc_table: GuestAddress(state.desc_table),
             avail_ring: GuestAddress(state.avail_ring),
             used_ring: GuestAddress(state.used_ring),
+
+            dt: Default::default(),
+            ar: Default::default(),
+            ur: Default::default(),
+
             next_avail: state.next_avail,
             next_used: state.next_used,
             uses_notif_suppression: false,
