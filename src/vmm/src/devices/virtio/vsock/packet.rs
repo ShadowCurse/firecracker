@@ -22,8 +22,8 @@ use vm_memory::{GuestMemoryError, ReadVolatile, WriteVolatile};
 
 use super::{defs, VsockError};
 use crate::devices::virtio::iovec::{IoVecBuffer, IoVecBufferMut};
-use crate::devices::virtio::queue::DescriptorChain;
-use crate::vstate::memory::ByteValued;
+use crate::devices::virtio::queue::{DescriptorChain, DescriptorChainOpt};
+use crate::vstate::memory::{ByteValued, GuestMemoryMmap};
 
 // The vsock packet header is defined by the C struct:
 //
@@ -155,6 +155,41 @@ impl VsockPacket {
         })
     }
 
+    pub fn from_tx_virtq_head_opt(
+        chain: DescriptorChainOpt,
+        mem: &GuestMemoryMmap,
+    ) -> Result<Self, VsockError> {
+        // SAFETY: This descriptor chain is only loaded once
+        // virtio requests are handled sequentially so no two IoVecBuffers
+        // are live at the same time, meaning this has exclusive ownership over the memory
+        let buffer = unsafe { IoVecBuffer::from_descriptor_chain_opt(chain, mem)? };
+
+        let mut hdr = VsockPacketHeader::default();
+        match buffer.read_exact_volatile_at(hdr.as_mut_slice(), 0) {
+            Ok(()) => (),
+            Err(Error::PartialBuffer { completed, .. }) => {
+                return Err(VsockError::DescChainTooShortForHeader(completed))
+            }
+            Err(err) => return Err(VsockError::GuestMemoryMmap(err.into())),
+        }
+
+        if hdr.len > defs::MAX_PKT_BUF_SIZE {
+            return Err(VsockError::InvalidPktLen(hdr.len));
+        }
+
+        if hdr.len > buffer.len() - VSOCK_PKT_HDR_SIZE {
+            return Err(VsockError::DescChainTooShortForPacket(
+                buffer.len(),
+                hdr.len,
+            ));
+        }
+
+        Ok(VsockPacket {
+            hdr,
+            buffer: VsockPacketBuffer::Tx(buffer),
+        })
+    }
+
     /// Create the packet wrapper from an RX virtq chain head.
     ///
     /// ## Errors
@@ -162,6 +197,26 @@ impl VsockPacket {
     /// length is insufficient to hold the 44 byte vsock header
     pub fn from_rx_virtq_head(chain: DescriptorChain) -> Result<Self, VsockError> {
         let buffer = IoVecBufferMut::from_descriptor_chain(chain)?;
+
+        if buffer.len() < VSOCK_PKT_HDR_SIZE {
+            return Err(VsockError::DescChainTooShortForHeader(buffer.len() as usize));
+        }
+
+        Ok(Self {
+            // On the Rx path the header has to be filled by Firecracker. The guest only provides
+            // a write-only memory area that Firecracker can write the header into. So we initialize
+            // the local copy with zeros, we write to it whenever we need to, and we only commit it
+            // to the guest memory once, before marking the RX descriptor chain as used.
+            hdr: VsockPacketHeader::default(),
+            buffer: VsockPacketBuffer::Rx(buffer),
+        })
+    }
+
+    pub fn from_rx_virtq_head_opt(
+        chain: DescriptorChainOpt,
+        mem: &GuestMemoryMmap,
+    ) -> Result<Self, VsockError> {
+        let buffer = IoVecBufferMut::from_descriptor_chain_opt(chain, mem)?;
 
         if buffer.len() < VSOCK_PKT_HDR_SIZE {
             return Err(VsockError::DescChainTooShortForHeader(buffer.len() as usize));
