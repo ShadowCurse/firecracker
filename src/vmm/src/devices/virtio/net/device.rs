@@ -32,7 +32,7 @@ use crate::devices::virtio::net::tap::Tap;
 use crate::devices::virtio::net::{
     gen, NetError, NetQueue, MAX_BUFFER_SIZE, NET_QUEUE_SIZES, RX_INDEX, TX_INDEX,
 };
-use crate::devices::virtio::queue::{DescriptorChain, Queue};
+use crate::devices::virtio::queue::{DescriptorChain, DescriptorChainOpt, Queue};
 use crate::devices::virtio::{ActivateError, TYPE_NET};
 use crate::devices::{report_net_event_fail, DeviceError};
 use crate::dumbo::pdu::arp::ETH_IPV4_FRAME_LEN;
@@ -383,19 +383,63 @@ impl Net {
         Err(FrontendError::DescriptorChainTooSmall)
     }
 
+    fn write_to_descriptor_chain_opt(
+        mem: &GuestMemoryMmap,
+        data: &[u8],
+        head: DescriptorChainOpt,
+        net_metrics: &NetDeviceMetrics,
+    ) -> Result<(), FrontendError> {
+        let mut chunk = data;
+        let mut next_descriptor = Some(head);
+
+        while let Some(descriptor) = &next_descriptor {
+            if !descriptor.is_write_only() {
+                return Err(FrontendError::ReadOnlyDescriptor);
+            }
+
+            let len = std::cmp::min(chunk.len(), descriptor.len as usize);
+            match mem.write_slice(&chunk[..len], descriptor.addr) {
+                Ok(()) => {
+                    net_metrics.rx_count.inc();
+                    chunk = &chunk[len..];
+                }
+                Err(err) => {
+                    error!("Failed to write slice: {:?}", err);
+                    if let GuestMemoryError::PartialBuffer { .. } = err {
+                        net_metrics.rx_partial_writes.inc();
+                    }
+                    return Err(FrontendError::GuestMemory(err));
+                }
+            }
+
+            // If chunk is empty we are done here.
+            if chunk.is_empty() {
+                let len = data.len() as u64;
+                net_metrics.rx_bytes_count.add(len);
+                net_metrics.rx_packets_count.inc();
+                return Ok(());
+            }
+
+            next_descriptor = descriptor.next_descriptor();
+        }
+
+        warn!("Receiving buffer is too small to hold frame of current size");
+        Err(FrontendError::DescriptorChainTooSmall)
+    }
+
     // Copies a single frame from `self.rx_frame_buf` into the guest.
     fn do_write_frame_to_guest(&mut self) -> Result<(), FrontendError> {
         // This is safe since we checked in the event handler that the device is activated.
         let mem = self.device_state.mem().unwrap();
 
         let queue = &mut self.queues[RX_INDEX];
-        let head_descriptor = queue.pop_or_enable_notification(mem).ok_or_else(|| {
+        let head_descriptor = queue.pop_or_enable_notification_opt().ok_or_else(|| {
             self.metrics.no_rx_avail_buffer.inc();
             FrontendError::EmptyQueue
         })?;
         let head_index = head_descriptor.index;
 
-        let result = Self::write_to_descriptor_chain(
+        let result = Self::write_to_descriptor_chain_opt(
             mem,
             &self.rx_frame_buf[..self.rx_bytes_read],
             head_descriptor,
@@ -409,7 +453,7 @@ impl Net {
             // Safe to unwrap because a frame must be smaller than 2^16 bytes.
             u32::try_from(self.rx_bytes_read).unwrap()
         };
-        queue.add_used(mem, head_index, used_len).map_err(|err| {
+        queue.add_used_opt(head_index, used_len).map_err(|err| {
             error!("Failed to add available descriptor {}: {}", head_index, err);
             FrontendError::AddUsed
         })?;
@@ -594,16 +638,16 @@ impl Net {
         let mut used_any = false;
         let tx_queue = &mut self.queues[TX_INDEX];
 
-        while let Some(head) = tx_queue.pop_or_enable_notification(mem) {
+        while let Some(head) = tx_queue.pop_or_enable_notification_opt() {
             self.metrics
                 .tx_remaining_reqs_count
-                .add(tx_queue.len(mem).into());
+                .add(tx_queue.len_opt().into());
             let head_index = head.index;
             // Parse IoVecBuffer from descriptor head
             // SAFETY: This descriptor chain is only loaded once
             // virtio requests are handled sequentially so no two IoVecBuffers
             // are live at the same time, meaning this has exclusive ownership over the memory
-            if unsafe { self.tx_buffer.load_descriptor_chain(head).is_err() } {
+            if unsafe { self.tx_buffer.load_descriptor_chain_opt(head, mem).is_err() } {
                 self.metrics.tx_fails.inc();
                 tx_queue
                     .add_used(mem, head_index, 0)
@@ -646,7 +690,7 @@ impl Net {
             }
 
             tx_queue
-                .add_used(mem, head_index, 0)
+                .add_used_opt(head_index, 0)
                 .map_err(DeviceError::QueueError)?;
             used_any = true;
         }
@@ -751,14 +795,13 @@ impl Net {
 
     pub fn process_tap_rx_event(&mut self) {
         // This is safe since we checked in the event handler that the device is activated.
-        let mem = self.device_state.mem().unwrap();
         self.metrics.rx_tap_event_count.inc();
 
         // While there are no available RX queue buffers and there's a deferred_frame
         // don't process any more incoming. Otherwise start processing a frame. In the
         // process the deferred_frame flag will be set in order to avoid freezing the
         // RX queue.
-        if self.queues[RX_INDEX].is_empty(mem) && self.rx_deferred_frame {
+        if self.queues[RX_INDEX].is_empty_opt() && self.rx_deferred_frame {
             self.metrics.no_rx_avail_buffer.inc();
             return;
         }
@@ -903,6 +946,9 @@ impl VirtioDevice for Net {
     }
 
     fn activate(&mut self, mem: GuestMemoryMmap) -> Result<(), ActivateError> {
+        self.queues[RX_INDEX].set_pointers(&mem);
+        self.queues[TX_INDEX].set_pointers(&mem);
+
         let event_idx = self.has_feature(u64::from(VIRTIO_RING_F_EVENT_IDX));
         if event_idx {
             for queue in &mut self.queues {
