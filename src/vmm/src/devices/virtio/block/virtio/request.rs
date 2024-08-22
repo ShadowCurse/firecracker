@@ -16,7 +16,7 @@ pub use crate::devices::virtio::gen::virtio_blk::{
     VIRTIO_BLK_ID_BYTES, VIRTIO_BLK_S_IOERR, VIRTIO_BLK_S_OK, VIRTIO_BLK_S_UNSUPP,
     VIRTIO_BLK_T_FLUSH, VIRTIO_BLK_T_GET_ID, VIRTIO_BLK_T_IN, VIRTIO_BLK_T_OUT,
 };
-use crate::devices::virtio::queue::DescriptorChain;
+use crate::devices::virtio::queue::{DescriptorChain, DescriptorChainOpt};
 use crate::logger::{error, IncMetric};
 use crate::rate_limiter::{RateLimiter, TokenType};
 use crate::vstate::memory::{ByteValued, Bytes, GuestAddress, GuestMemoryMmap};
@@ -243,6 +243,95 @@ pub struct Request {
 impl Request {
     pub fn parse(
         avail_desc: &DescriptorChain,
+        mem: &GuestMemoryMmap,
+        num_disk_sectors: u64,
+    ) -> Result<Request, VirtioBlockError> {
+        // The head contains the request type which MUST be readable.
+        if avail_desc.is_write_only() {
+            return Err(VirtioBlockError::UnexpectedWriteOnlyDescriptor);
+        }
+
+        let request_header = RequestHeader::read_from(mem, avail_desc.addr)?;
+        let mut req = Request {
+            r#type: RequestType::from(request_header.request_type),
+            sector: request_header.sector,
+            data_addr: GuestAddress(0),
+            data_len: 0,
+            status_addr: GuestAddress(0),
+        };
+
+        let data_desc;
+        let status_desc;
+        let desc = avail_desc
+            .next_descriptor()
+            .ok_or(VirtioBlockError::DescriptorChainTooShort)?;
+
+        if !desc.has_next() {
+            status_desc = desc;
+            // Only flush requests are allowed to skip the data descriptor.
+            if req.r#type != RequestType::Flush {
+                return Err(VirtioBlockError::DescriptorChainTooShort);
+            }
+        } else {
+            data_desc = desc;
+            status_desc = data_desc
+                .next_descriptor()
+                .ok_or(VirtioBlockError::DescriptorChainTooShort)?;
+
+            if data_desc.is_write_only() && req.r#type == RequestType::Out {
+                return Err(VirtioBlockError::UnexpectedWriteOnlyDescriptor);
+            }
+            if !data_desc.is_write_only() && req.r#type == RequestType::In {
+                return Err(VirtioBlockError::UnexpectedReadOnlyDescriptor);
+            }
+            if !data_desc.is_write_only() && req.r#type == RequestType::GetDeviceID {
+                return Err(VirtioBlockError::UnexpectedReadOnlyDescriptor);
+            }
+
+            req.data_addr = data_desc.addr;
+            req.data_len = data_desc.len;
+        }
+
+        // check request validity
+        match req.r#type {
+            RequestType::In | RequestType::Out => {
+                // Check that the data length is a multiple of 512 as specified in the virtio
+                // standard.
+                if req.data_len % SECTOR_SIZE != 0 {
+                    return Err(VirtioBlockError::InvalidDataLength);
+                }
+                let top_sector = req
+                    .sector
+                    .checked_add(u64::from(req.data_len) >> SECTOR_SHIFT)
+                    .ok_or(VirtioBlockError::InvalidOffset)?;
+                if top_sector > num_disk_sectors {
+                    return Err(VirtioBlockError::InvalidOffset);
+                }
+            }
+            RequestType::GetDeviceID => {
+                if req.data_len < VIRTIO_BLK_ID_BYTES {
+                    return Err(VirtioBlockError::InvalidDataLength);
+                }
+            }
+            _ => {}
+        }
+
+        // The status MUST always be writable.
+        if !status_desc.is_write_only() {
+            return Err(VirtioBlockError::UnexpectedReadOnlyDescriptor);
+        }
+
+        if status_desc.len < 1 {
+            return Err(VirtioBlockError::DescriptorLengthTooSmall);
+        }
+
+        req.status_addr = status_desc.addr;
+
+        Ok(req)
+    }
+
+    pub fn parse_opt(
+        avail_desc: &DescriptorChainOpt,
         mem: &GuestMemoryMmap,
         num_disk_sectors: u64,
     ) -> Result<Request, VirtioBlockError> {

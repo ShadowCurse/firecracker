@@ -388,15 +388,14 @@ impl VirtioBlock {
         queue: &mut Queue,
         index: u16,
         len: u32,
-        mem: &GuestMemoryMmap,
         irq_trigger: &IrqTrigger,
         block_metrics: &BlockDeviceMetrics,
     ) {
-        queue.add_used(mem, index, len).unwrap_or_else(|err| {
+        queue.add_used_opt(index, len).unwrap_or_else(|err| {
             error!("Failed to add available descriptor head {}: {}", index, err)
         });
 
-        if queue.prepare_kick(mem) {
+        if queue.prepare_kick_opt() {
             irq_trigger.trigger_irq(IrqType::Vring).unwrap_or_else(|_| {
                 block_metrics.event_fails.inc();
             });
@@ -411,9 +410,11 @@ impl VirtioBlock {
         let queue = &mut self.queues[queue_index];
         let mut used_any = false;
 
-        while let Some(head) = queue.pop_or_enable_notification(mem) {
-            self.metrics.remaining_reqs_count.add(queue.len(mem).into());
-            let processing_result = match Request::parse(&head, mem, self.disk.nsectors) {
+        while let Some(head) = queue.pop_or_enable_notification_opt() {
+            self.metrics
+                .remaining_reqs_count
+                .add(queue.len_opt().into());
+            let processing_result = match Request::parse_opt(&head, mem, self.disk.nsectors) {
                 Ok(request) => {
                     if request.rate_limit(&mut self.rate_limiter) {
                         // Stop processing the queue and return this descriptor chain to the
@@ -448,7 +449,6 @@ impl VirtioBlock {
                         queue,
                         head.index,
                         finished.num_bytes_to_mem,
-                        mem,
                         &self.irq_trigger,
                         &self.metrics,
                     );
@@ -500,7 +500,6 @@ impl VirtioBlock {
                         queue,
                         finished.desc_idx,
                         finished.num_bytes_to_mem,
-                        mem,
                         &self.irq_trigger,
                         &self.metrics,
                     );
@@ -633,6 +632,7 @@ impl VirtioDevice for VirtioBlock {
     }
 
     fn activate(&mut self, mem: GuestMemoryMmap) -> Result<(), ActivateError> {
+        self.queues[0].set_pointers(&mem);
         let event_idx = self.has_feature(u64::from(VIRTIO_RING_F_EVENT_IDX));
         if event_idx {
             for queue in &mut self.queues {
