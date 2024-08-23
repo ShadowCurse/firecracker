@@ -522,11 +522,10 @@ impl Queue {
     pub fn is_valid<M: GuestMemory>(&self, mem: &M) -> bool {
         if !self.is_layout_valid(mem) {
             false
-        } else if self.len(mem) > self.max_size {
+        } else if self.size > self.max_size {
             error!(
-                "virtio queue number of available descriptors {} is greater than queue max size {}",
-                self.len(mem),
-                self.max_size
+                "virtio size set up by the guest is {} and it is greater than queue max size {}",
+                self.size, self.max_size
             );
             false
         } else {
@@ -1450,18 +1449,6 @@ mod tests {
         q.size = 11;
         assert!(!q.is_valid(m));
         q.size = q.max_size;
-
-        // or when avail_idx - next_avail > max_size
-        q.next_avail = Wrapping(5);
-        assert!(!q.is_valid(m));
-        // avail_ring + 2 is the address of avail_idx in guest mem
-        m.write_obj::<u16>(64_u16, q.avail_ring_address.unchecked_add(2))
-            .unwrap();
-        assert!(!q.is_valid(m));
-        m.write_obj::<u16>(5_u16, q.avail_ring_address.unchecked_add(2))
-            .unwrap();
-        q.max_size = 2;
-        assert!(!q.is_valid(m));
 
         // reset dirtied values
         q.max_size = 16;
