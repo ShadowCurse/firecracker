@@ -497,27 +497,6 @@ impl Net {
         rate_limiter.manual_replenish(size, TokenType::Bytes);
     }
 
-    // Attempts to copy a single frame into the guest if there is enough
-    // rate limiting budget.
-    // Returns true on successful frame delivery.
-    fn rate_limited_rx_single_frame(&mut self) -> bool {
-        if !Self::rate_limiter_consume_op(&mut self.rx_rate_limiter, self.rx_bytes_read as u64) {
-            self.metrics.rx_rate_limiter_throttled.inc();
-            return false;
-        }
-
-        // Attempt frame delivery.
-        let success = self.write_frame_to_guest();
-
-        // Undo the tokens consumption if guest delivery failed.
-        if !success {
-            // revert the rate limiting budget consumption
-            Self::rate_limiter_replenish_op(&mut self.rx_rate_limiter, self.rx_bytes_read as u64);
-        }
-
-        success
-    }
-
     /// Write a slice in a descriptor chain
     ///
     /// # Errors
@@ -566,60 +545,6 @@ impl Net {
 
         warn!("Receiving buffer is too small to hold frame of current size");
         Err(FrontendError::DescriptorChainTooSmall)
-    }
-
-    // Copies a single frame from `self.rx_frame_buf` into the guest.
-    fn do_write_frame_to_guest(&mut self) -> Result<(), FrontendError> {
-        // This is safe since we checked in the event handler that the device is activated.
-        let mem = self.device_state.mem().unwrap();
-
-        let queue = &mut self.queues[RX_INDEX];
-        let head_descriptor = queue.pop_or_enable_notification(mem).ok_or_else(|| {
-            self.metrics.no_rx_avail_buffer.inc();
-            FrontendError::EmptyQueue
-        })?;
-        let head_index = head_descriptor.index;
-
-        let result = Self::write_to_descriptor_chain(
-            mem,
-            &self.rx_frame_buf[..self.rx_bytes_read],
-            head_descriptor,
-            &self.metrics,
-        );
-        // Mark the descriptor chain as used. If an error occurred, skip the descriptor chain.
-        let used_len = if result.is_err() {
-            self.metrics.rx_fails.inc();
-            0
-        } else {
-            // Safe to unwrap because a frame must be smaller than 2^16 bytes.
-            u32::try_from(self.rx_bytes_read).unwrap()
-        };
-        queue.add_used(mem, head_index, used_len).map_err(|err| {
-            error!("Failed to add available descriptor {}: {}", head_index, err);
-            FrontendError::AddUsed
-        })?;
-
-        result
-    }
-
-    // Copies a single frame from `self.rx_frame_buf` into the guest. In case of an error retries
-    // the operation if possible. Returns true if the operation was successfull.
-    fn write_frame_to_guest(&mut self) -> bool {
-        let max_iterations = self.queues[RX_INDEX].actual_size();
-        for _ in 0..max_iterations {
-            match self.do_write_frame_to_guest() {
-                Ok(()) => return true,
-                Err(FrontendError::EmptyQueue) | Err(FrontendError::AddUsed) => {
-                    return false;
-                }
-                Err(_) => {
-                    // retry
-                    continue;
-                }
-            }
-        }
-
-        false
     }
 
     // Tries to detour the frame to MMDS and if MMDS doesn't accept it, sends it on the host TAP.
@@ -694,57 +619,6 @@ impl Net {
             }
         };
         Ok(false)
-    }
-
-    // We currently prioritize packets from the MMDS over regular network packets.
-    fn read_from_mmds_or_tap(&mut self) -> Result<usize, NetError> {
-        if let Some(ns) = self.mmds_ns.as_mut() {
-            if let Some(len) =
-                ns.write_next_frame(frame_bytes_from_buf_mut(&mut self.rx_frame_buf)?)
-            {
-                let len = len.get();
-                METRICS.mmds.tx_frames.inc();
-                METRICS.mmds.tx_bytes.add(len as u64);
-                init_vnet_hdr(&mut self.rx_frame_buf);
-                return Ok(vnet_hdr_len() + len);
-            }
-        }
-
-        self.read_tap().map_err(NetError::IO)
-    }
-
-    fn process_rx_old(&mut self) -> Result<(), DeviceError> {
-        // Read as many frames as possible.
-        loop {
-            match self.read_from_mmds_or_tap() {
-                Ok(count) => {
-                    self.rx_bytes_read = count;
-                    self.metrics.rx_count.inc();
-                    if !self.rate_limited_rx_single_frame() {
-                        self.rx_deferred_frame = true;
-                        break;
-                    }
-                }
-                Err(NetError::IO(err)) => {
-                    // The tap device is non-blocking, so any error aside from EAGAIN is
-                    // unexpected.
-                    match err.raw_os_error() {
-                        Some(err) if err == EAGAIN => (),
-                        _ => {
-                            error!("Failed to read tap: {:?}", err);
-                            self.metrics.tap_read_fails.inc();
-                            return Err(DeviceError::FailedReadTap);
-                        }
-                    };
-                    break;
-                }
-                Err(err) => {
-                    error!("Spurious error in network RX: {:?}", err);
-                }
-            }
-        }
-
-        self.try_signal_queue(NetQueue::Rx)
     }
 
     fn process_rx(&mut self) -> Result<(), DeviceError> {
@@ -841,22 +715,11 @@ impl Net {
 
     // Process the deferred frame first, then continue reading from tap.
     fn handle_deferred_frame(&mut self) -> Result<(), DeviceError> {
-        if self.rate_limited_rx_single_frame() {
-            self.rx_deferred_frame = false;
-            // process_rx() was interrupted possibly before consuming all
-            // packets in the tap; try continuing now.
-            return self.process_rx();
-        }
-
-        self.try_signal_queue(NetQueue::Rx)
+        self.process_rx()
     }
 
     fn resume_rx(&mut self) -> Result<(), DeviceError> {
-        if self.rx_deferred_frame {
-            self.handle_deferred_frame()
-        } else {
-            Ok(())
-        }
+        Ok(())
     }
 
     fn process_tx(&mut self) -> Result<(), DeviceError> {
