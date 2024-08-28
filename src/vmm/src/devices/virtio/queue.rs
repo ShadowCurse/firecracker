@@ -541,7 +541,7 @@ impl Queue {
             return None;
         }
 
-        self.do_pop_unchecked()
+        self.pop_unchecked()
     }
 
     /// Try to pop the first available descriptor chain from the avail ring.
@@ -555,7 +555,7 @@ impl Queue {
             return None;
         }
 
-        self.do_pop_unchecked()
+        self.pop_unchecked()
     }
 
     /// Pop the first available descriptor chain from the avail ring.
@@ -563,7 +563,7 @@ impl Queue {
     /// # Important
     /// This is an internal method that ASSUMES THAT THERE ARE AVAILABLE DESCRIPTORS. Otherwise it
     /// will retrieve a descriptor that contains garbage data (obsolete/empty).
-    fn do_pop_unchecked(&mut self) -> Option<DescriptorChain> {
+    fn pop_unchecked(&mut self) -> Option<DescriptorChain> {
         // This fence ensures all subsequent reads see the updated driver writes.
         fence(Ordering::Acquire);
 
