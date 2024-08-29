@@ -120,7 +120,7 @@ impl Entropy {
 
         // It is ok to unwrap here. We are writing `iovec.len()` bytes at offset 0.
         iovec.write_all_volatile_at(&rand_bytes, 0).unwrap();
-        Ok(iovec.len())
+        Ok(iovec.len() as u32)
     }
 
     fn process_entropy_queue(&mut self) {
@@ -145,7 +145,10 @@ impl Entropy {
                     // Check for available rate limiting budget.
                     // If not enough budget is available, leave the request descriptor in the queue
                     // to handle once we do have budget.
-                    if !Self::rate_limit_request(&mut self.rate_limiter, u64::from(iovec.len())) {
+                    if !Self::rate_limit_request(
+                        &mut self.rate_limiter,
+                        u64::try_from(iovec.len()).unwrap(),
+                    ) {
                         debug!("entropy: throttling entropy queue");
                         METRICS.entropy_rate_limiter_throttled.inc();
                         self.queues[RNG_QUEUE].undo_pop();

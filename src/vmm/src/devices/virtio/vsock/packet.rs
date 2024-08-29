@@ -172,7 +172,7 @@ impl VsockPacket {
         // are live at the same time, meaning this has exclusive ownership over the memory
         let buffer = unsafe { IoVecBufferMut::from_descriptor_chain(mem, chain)? };
 
-        if buffer.len() < VSOCK_PKT_HDR_SIZE {
+        if (buffer.len() as u32) < VSOCK_PKT_HDR_SIZE {
             return Err(VsockError::DescChainTooShortForHeader(buffer.len() as usize));
         }
 
@@ -222,7 +222,7 @@ impl VsockPacket {
     pub fn buf_size(&self) -> usize {
         let chain_length = match self.buffer {
             VsockPacketBuffer::Tx(ref iovec_buf) => iovec_buf.len(),
-            VsockPacketBuffer::Rx(ref iovec_buf) => iovec_buf.len(),
+            VsockPacketBuffer::Rx(ref iovec_buf) => iovec_buf.len() as u32,
         };
         (chain_length - VSOCK_PKT_HDR_SIZE) as usize
     }

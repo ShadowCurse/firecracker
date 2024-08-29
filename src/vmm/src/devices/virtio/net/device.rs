@@ -5,14 +5,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the THIRD-PARTY file.
 
-#[cfg(not(test))]
-use std::io::Read;
+use std::collections::VecDeque;
 use std::mem;
 use std::net::Ipv4Addr;
 use std::sync::{Arc, Mutex};
 
 use libc::EAGAIN;
-use log::{error, warn};
+use log::error;
 use utils::eventfd::EventFd;
 use utils::net::mac::MacAddr;
 use utils::u64_to_usize;
@@ -26,7 +25,7 @@ use crate::devices::virtio::gen::virtio_net::{
     VIRTIO_NET_F_HOST_TSO6, VIRTIO_NET_F_HOST_UFO, VIRTIO_NET_F_MAC,
 };
 use crate::devices::virtio::gen::virtio_ring::VIRTIO_RING_F_EVENT_IDX;
-use crate::devices::virtio::iovec::IoVecBuffer;
+use crate::devices::virtio::iovec::{IoVecBuffer, IoVecBufferMut, IoVecError};
 use crate::devices::virtio::net::metrics::{NetDeviceMetrics, NetMetricsPerDevice};
 use crate::devices::virtio::net::tap::Tap;
 use crate::devices::virtio::net::{
@@ -41,10 +40,11 @@ use crate::logger::{IncMetric, METRICS};
 use crate::mmds::data_store::Mmds;
 use crate::mmds::ns::MmdsNetworkStack;
 use crate::rate_limiter::{BucketUpdate, RateLimiter, TokenType};
-use crate::vstate::memory::{ByteValued, Bytes, GuestMemoryMmap};
+use crate::vstate::memory::{ByteValued, GuestMemoryMmap};
 
 const FRAME_HEADER_MAX_LEN: usize = PAYLOAD_OFFSET + ETH_IPV4_FRAME_LEN;
 
+#[allow(unused)]
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
 enum FrontendError {
     /// Add user.
@@ -103,6 +103,76 @@ pub struct ConfigSpace {
 // SAFETY: `ConfigSpace` contains only PODs in `repr(C)` or `repr(transparent)`, without padding.
 unsafe impl ByteValued for ConfigSpace {}
 
+/// A map of all the memory the guest has provided us for performing RX
+#[derive(Debug, Default)]
+pub(crate) struct RxBuffers {
+    // An IoVecBufferMut covering all the memory we have available for receiving network frames
+    iovec: IoVecBufferMut,
+    // A map of which part of the memory belongs to which DescriptorChain object
+    descriptor_ranges: VecDeque<(u16, u32)>,
+    // Buffers that have been used
+    used_descriptors: Vec<(u16, u32)>,
+}
+
+impl RxBuffers {
+    unsafe fn add_buffer(
+        &mut self,
+        mem: &GuestMemoryMmap,
+        head: DescriptorChain,
+    ) -> Result<(), IoVecError> {
+        let head_index = head.index;
+        let length = self.iovec.append_descriptor_chain(mem, head)?;
+        self.descriptor_ranges.push_back((head_index, length));
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn len(&self) -> usize {
+        self.iovec.len()
+    }
+
+    fn mark_used(&mut self, length: u32) -> Result<(), IoVecError> {
+        if length as usize > self.len() {
+            panic!("net: internal bug. Mismatch between written frame size and RX buffer size");
+        }
+
+        if length == 0 {
+            return Ok(());
+        }
+
+        let mut dropped = 0u32;
+        while dropped < length {
+            let (head_index, mut len) = self.descriptor_ranges.pop_front().expect(
+                "net: internal bug. Mismatch between written frame size and available descriptors",
+            );
+
+            dropped += len;
+            if dropped > length {
+                len -= dropped - length
+            }
+
+            self.used_descriptors.push((head_index, len));
+        }
+
+        self.iovec.drop_iovecs(dropped)
+    }
+
+    fn drop_used(&mut self, rx_queue: &mut Queue) {
+        self.used_descriptors
+            .drain(..)
+            .for_each(|(head_index, len)| {
+                rx_queue.add_used(head_index, len).map_err(|err| {
+                    error!(
+                        "net: Could not add used descriptor {head_index} of length {len} to RX queue: {err}"
+                        );
+                }).unwrap();
+            });
+    }
+}
+
+// SAFETY: TODO
+unsafe impl Send for RxBuffers {}
+
 /// VirtIO network device.
 ///
 /// It emulates a network device able to exchange L2 frames between the guest
@@ -144,6 +214,7 @@ pub struct Net {
     pub(crate) metrics: Arc<NetDeviceMetrics>,
 
     tx_buffer: IoVecBuffer,
+    rx_buffer: RxBuffers,
 }
 
 impl Net {
@@ -202,6 +273,7 @@ impl Net {
             mmds_ns: None,
             metrics: NetMetricsPerDevice::alloc(id),
             tx_buffer: Default::default(),
+            rx_buffer: Default::default(),
         })
     }
 
@@ -313,125 +385,30 @@ impl Net {
     // rate limiting budget.
     // Returns true on successful frame delivery.
     fn rate_limited_rx_single_frame(&mut self) -> bool {
+        let rx_queue = &mut self.queues[RX_INDEX];
         if !Self::rate_limiter_consume_op(&mut self.rx_rate_limiter, self.rx_bytes_read as u64) {
             self.metrics.rx_rate_limiter_throttled.inc();
             return false;
         }
 
         // Attempt frame delivery.
-        let success = self.write_frame_to_guest();
-
-        // Undo the tokens consumption if guest delivery failed.
-        if !success {
-            // revert the rate limiting budget consumption
-            Self::rate_limiter_replenish_op(&mut self.rx_rate_limiter, self.rx_bytes_read as u64);
-        }
-
-        success
+        self.rx_buffer.drop_used(rx_queue);
+        true
     }
 
-    /// Write a slice in a descriptor chain
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the descriptor chain is too short or
-    /// an inappropriate (read only) descriptor is found in the chain
-    fn write_to_descriptor_chain(
-        mem: &GuestMemoryMmap,
-        data: &[u8],
-        head: DescriptorChain,
-        net_metrics: &NetDeviceMetrics,
-    ) -> Result<(), FrontendError> {
-        let mut chunk = data;
-        let mut next_descriptor = Some(head);
-
-        while let Some(descriptor) = &next_descriptor {
-            if !descriptor.is_write_only() {
-                return Err(FrontendError::ReadOnlyDescriptor);
-            }
-
-            let len = std::cmp::min(chunk.len(), descriptor.len as usize);
-            match mem.write_slice(&chunk[..len], descriptor.addr) {
-                Ok(()) => {
-                    net_metrics.rx_count.inc();
-                    chunk = &chunk[len..];
-                }
-                Err(err) => {
-                    error!("Failed to write slice: {:?}", err);
-                    if let GuestMemoryError::PartialBuffer { .. } = err {
-                        net_metrics.rx_partial_writes.inc();
-                    }
-                    return Err(FrontendError::GuestMemory(err));
-                }
-            }
-
-            // If chunk is empty we are done here.
-            if chunk.is_empty() {
-                let len = data.len() as u64;
-                net_metrics.rx_bytes_count.add(len);
-                net_metrics.rx_packets_count.inc();
-                return Ok(());
-            }
-
-            next_descriptor = descriptor.next_descriptor();
-        }
-
-        warn!("Receiving buffer is too small to hold frame of current size");
-        Err(FrontendError::DescriptorChainTooSmall)
-    }
-
-    // Copies a single frame from `self.rx_frame_buf` into the guest.
-    fn do_write_frame_to_guest(&mut self) -> Result<(), FrontendError> {
+    fn parse_rx_descriptors(&mut self) -> Result<(), FrontendError> {
         // This is safe since we checked in the event handler that the device is activated.
         let mem = self.device_state.mem().unwrap();
-
         let queue = &mut self.queues[RX_INDEX];
-        let head_descriptor = queue.pop_or_enable_notification().ok_or_else(|| {
-            self.metrics.no_rx_avail_buffer.inc();
-            FrontendError::EmptyQueue
-        })?;
-        let head_index = head_descriptor.index;
-
-        let result = Self::write_to_descriptor_chain(
-            mem,
-            &self.rx_frame_buf[..self.rx_bytes_read],
-            head_descriptor,
-            &self.metrics,
-        );
-        // Mark the descriptor chain as used. If an error occurred, skip the descriptor chain.
-        let used_len = if result.is_err() {
-            self.metrics.rx_fails.inc();
-            0
-        } else {
-            // Safe to unwrap because a frame must be smaller than 2^16 bytes.
-            u32::try_from(self.rx_bytes_read).unwrap()
-        };
-        queue.add_used(head_index, used_len).map_err(|err| {
-            error!("Failed to add available descriptor {}: {}", head_index, err);
-            FrontendError::AddUsed
-        })?;
-
-        result
-    }
-
-    // Copies a single frame from `self.rx_frame_buf` into the guest. In case of an error retries
-    // the operation if possible. Returns true if the operation was successfull.
-    fn write_frame_to_guest(&mut self) -> bool {
-        let max_iterations = self.queues[RX_INDEX].actual_size();
-        for _ in 0..max_iterations {
-            match self.do_write_frame_to_guest() {
-                Ok(()) => return true,
-                Err(FrontendError::EmptyQueue) | Err(FrontendError::AddUsed) => {
-                    return false;
-                }
-                Err(_) => {
-                    // retry
-                    continue;
-                }
+        while let Some(head) = queue.pop_or_enable_notification() {
+            // SAFETY: we are only using this descriptor chain here.
+            unsafe {
+                // TODO: map error to FrontendError
+                self.rx_buffer.add_buffer(mem, head).unwrap();
             }
         }
 
-        false
+        Ok(())
     }
 
     // Tries to detour the frame to MMDS and if MMDS doesn't accept it, sends it on the host TAP.
@@ -510,6 +487,10 @@ impl Net {
 
     // We currently prioritize packets from the MMDS over regular network packets.
     fn read_from_mmds_or_tap(&mut self) -> Result<usize, NetError> {
+        if self.rx_buffer.iovec.len() == 0 {
+            return Ok(0);
+        }
+
         if let Some(ns) = self.mmds_ns.as_mut() {
             if let Some(len) =
                 ns.write_next_frame(frame_bytes_from_buf_mut(&mut self.rx_frame_buf)?)
@@ -518,17 +499,39 @@ impl Net {
                 METRICS.mmds.tx_frames.inc();
                 METRICS.mmds.tx_bytes.add(len as u64);
                 init_vnet_hdr(&mut self.rx_frame_buf);
+                //TODO: Error handling
+                self.rx_buffer
+                    .iovec
+                    .write_all_volatile_at(&self.rx_frame_buf[..vnet_hdr_len() + len], 0)
+                    .unwrap();
+                self.rx_buffer
+                    .mark_used((vnet_hdr_len() + len).try_into().unwrap())
+                    .unwrap();
                 return Ok(vnet_hdr_len() + len);
             }
         }
 
-        self.read_tap().map_err(NetError::IO)
+        let len = self
+            .tap
+            .read_iovec(&mut self.rx_buffer.iovec)
+            .map_err(NetError::IO)?;
+        self.rx_buffer.mark_used(len.try_into().unwrap()).unwrap();
+        Ok(len)
     }
 
     fn process_rx(&mut self) -> Result<(), DeviceError> {
         // Read as many frames as possible.
+        if self.rx_buffer.iovec.len() == 0 {
+            // TODO: Error handling
+            self.parse_rx_descriptors().unwrap();
+        }
+
         loop {
             match self.read_from_mmds_or_tap() {
+                Ok(0) => {
+                    self.metrics.no_rx_avail_buffer.inc();
+                    break;
+                }
                 Ok(count) => {
                     self.rx_bytes_read = count;
                     self.metrics.rx_count.inc();
@@ -575,7 +578,7 @@ impl Net {
         if self.rx_deferred_frame {
             self.handle_deferred_frame()
         } else {
-            Ok(())
+            self.process_rx()
         }
     }
 
@@ -717,11 +720,6 @@ impl Net {
     }
 
     #[cfg(not(test))]
-    fn read_tap(&mut self) -> std::io::Result<usize> {
-        self.tap.read(&mut self.rx_frame_buf)
-    }
-
-    #[cfg(not(test))]
     fn write_tap(tap: &mut Tap, buf: &IoVecBuffer) -> std::io::Result<usize> {
         tap.write_iovec(buf)
     }
@@ -737,7 +735,14 @@ impl Net {
             // rate limiters present but with _very high_ allowed rate
             error!("Failed to get rx queue event: {:?}", err);
             self.metrics.event_fails.inc();
-        } else if self.rx_rate_limiter.is_blocked() {
+            return;
+        } else {
+            // TODO: error handling
+            self.parse_rx_descriptors()
+                .expect("Error parsing RX descriptors from guest");
+        }
+
+        if self.rx_rate_limiter.is_blocked() {
             self.metrics.rx_rate_limiter_throttled.inc();
         } else {
             // If the limiter is not blocked, resume the receiving of bytes.
@@ -1731,7 +1736,7 @@ pub mod tests {
         th.activate_net();
         th.net().tap.mocks.set_read_tap(ReadTapMock::Failure);
 
-        // The RX queue is empty and rx_deffered_frame is set.
+        // The RX queue is empty and rx_deferred_frame is set.
         th.net().rx_deferred_frame = true;
         check_metric_after_block!(
             th.net().metrics.no_rx_avail_buffer,

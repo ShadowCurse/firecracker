@@ -367,7 +367,8 @@ impl Queue {
         // SAFETY: `used_event` is 2 + self.len u16 away from the start
         unsafe {
             self.avail_ring_ptr
-                .add(2_usize.unchecked_add(usize::from(self.size)))
+                //.add(2_usize.unchecked_add(usize::from(self.size)))
+                .add(2 + usize::from(self.size))
                 .read_volatile()
         }
     }
@@ -392,7 +393,8 @@ impl Queue {
         // SAFETY: `ring` is 2 u16 away from the start
         unsafe {
             self.used_ring_ptr
-                .add(std::mem::size_of::<u16>().unchecked_mul(2))
+                //.add(std::mem::size_of::<u16>().unchecked_mul(2))
+                .add(std::mem::size_of::<u16>() * 2)
                 .cast::<UsedElement>()
                 .add(index)
                 .write_volatile(val)
@@ -406,8 +408,10 @@ impl Queue {
         unsafe {
             self.used_ring_ptr
                 .add(
-                    std::mem::size_of::<u16>().unchecked_mul(2)
-                        + std::mem::size_of::<UsedElement>().unchecked_mul(usize::from(self.size)),
+                    //std::mem::size_of::<u16>().unchecked_mul(2)
+                    //    + std::mem::size_of::<UsedElement>().unchecked_mul(usize::from(self.size)),
+                    std::mem::size_of::<u16>() * 2
+                        + std::mem::size_of::<UsedElement>() * usize::from(self.size),
                 )
                 .cast::<u16>()
                 .read_volatile()
@@ -421,8 +425,10 @@ impl Queue {
         unsafe {
             self.used_ring_ptr
                 .add(
-                    std::mem::size_of::<u16>().unchecked_mul(2)
-                        + std::mem::size_of::<UsedElement>().unchecked_mul(usize::from(self.size)),
+                    //std::mem::size_of::<u16>().unchecked_mul(2)
+                    //    + std::mem::size_of::<UsedElement>().unchecked_mul(usize::from(self.size)),
+                    std::mem::size_of::<u16>() * 2
+                        + std::mem::size_of::<UsedElement>() * usize::from(self.size),
                 )
                 .cast::<u16>()
                 .write_volatile(val)

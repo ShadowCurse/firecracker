@@ -1,6 +1,7 @@
 // Copyright 2020 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::VecDeque;
 use std::io::ErrorKind;
 
 use libc::{c_void, iovec, size_t};
@@ -222,25 +223,19 @@ impl IoVecBuffer {
 #[derive(Debug, Default, Clone)]
 pub struct IoVecBufferMut {
     // container of the memory regions included in this IO vector
-    vecs: IoVecVec,
+    vecs: VecDeque<iovec>,
     // Total length of the IoVecBufferMut
-    len: u32,
+    len: usize,
 }
 
 impl IoVecBufferMut {
-    /// Create an `IoVecBuffer` from a `DescriptorChain`
-    ///
-    /// # Safety
-    ///
-    /// The descriptor chain cannot be referencing the same memory location as another chain
-    pub unsafe fn load_descriptor_chain(
+    fn parse_descriptor(
         &mut self,
         mem: &GuestMemoryMmap,
         head: DescriptorChain,
-    ) -> Result<(), IoVecError> {
-        self.clear();
-
+    ) -> Result<u32, IoVecError> {
         let mut next_descriptor = Some(head);
+        let mut length = 0u32;
         while let Some(desc) = next_descriptor {
             if !desc.is_write_only() {
                 return Err(IoVecError::ReadOnlyDescriptor);
@@ -257,17 +252,75 @@ impl IoVecBufferMut {
             slice.bitmap().mark_dirty(0, desc.len as usize);
 
             let iov_base = slice.ptr_guard_mut().as_ptr().cast::<c_void>();
-            self.vecs.push(iovec {
+            self.vecs.push_back(iovec {
                 iov_base,
                 iov_len: desc.len as size_t,
             });
-            self.len = self
-                .len
+            length = length
                 .checked_add(desc.len)
                 .ok_or(IoVecError::OverflowedDescriptor)?;
 
             next_descriptor = desc.next_descriptor();
         }
+
+        self.len = self
+            .len
+            .checked_add(length as usize)
+            .ok_or(IoVecError::OverflowedDescriptor)?;
+
+        Ok(length)
+    }
+
+    /// Create an `IoVecBuffer` from a `DescriptorChain`
+    ///
+    /// # Safety
+    ///
+    /// The descriptor chain cannot be referencing the same memory location as another chain
+    pub unsafe fn load_descriptor_chain(
+        &mut self,
+        mem: &GuestMemoryMmap,
+        head: DescriptorChain,
+    ) -> Result<(), IoVecError> {
+        self.clear();
+        let _ = self.parse_descriptor(mem, head)?;
+        Ok(())
+    }
+
+    /// Append a `DescriptorChain` in this `IoVecBufferMut`
+    ///
+    /// # Safety
+    ///
+    /// The descriptor chain cannot be referencing the same memory location as another chain
+    pub unsafe fn append_descriptor_chain(
+        &mut self,
+        mem: &GuestMemoryMmap,
+        head: DescriptorChain,
+    ) -> Result<u32, IoVecError> {
+        self.parse_descriptor(mem, head)
+    }
+
+    /// Drop memory from the `IoVecBufferMut`
+    ///
+    /// This will drop memory described by the `IoVecBufferMut` starting from the beginning.
+    pub fn drop_iovecs(&mut self, size: u32) -> Result<(), IoVecError> {
+        let mut dropped = 0u32;
+
+        while dropped < size {
+            if self.vecs.is_empty() {
+                return Ok(());
+            }
+
+            // TODO: convert these to sums that check for overflows
+            let next_length: u32 = self.vecs.front().unwrap().iov_len.try_into().unwrap();
+            self.vecs.pop_front().unwrap();
+            dropped += next_length;
+        }
+
+        assert_eq!(dropped, size);
+        self.len = self
+            .len
+            .checked_sub(size as usize)
+            .ok_or(IoVecError::OverflowedDescriptor)?;
 
         Ok(())
     }
@@ -287,14 +340,24 @@ impl IoVecBufferMut {
     }
 
     /// Get the total length of the memory regions covered by this `IoVecBuffer`
-    pub(crate) fn len(&self) -> u32 {
+    pub(crate) fn len(&self) -> usize {
         self.len
+    }
+
+    /// Returns a pointer to the memory keeping the `iovec` structs
+    pub fn as_iovec_ptr(&mut self) -> *mut iovec {
+        self.vecs.make_contiguous().as_mut_ptr()
+    }
+
+    /// Returns the length of the `iovec` array.
+    pub fn iovec_count(&self) -> usize {
+        self.vecs.len()
     }
 
     /// Clears the `iovec` array
     pub fn clear(&mut self) {
         self.vecs.clear();
-        self.len = 0u32;
+        self.len = 0;
     }
 
     /// Writes a number of bytes into the `IoVecBufferMut` starting at a given offset.
@@ -313,7 +376,7 @@ impl IoVecBufferMut {
         mut buf: &[u8],
         offset: usize,
     ) -> Result<(), VolatileMemoryError> {
-        if offset < self.len() as usize {
+        if offset < self.len() {
             let expected = buf.len();
             let bytes_written = self.write_volatile_at(&mut buf, offset, expected)?;
 
@@ -430,12 +493,12 @@ mod tests {
     impl From<&mut [u8]> for IoVecBufferMut {
         fn from(buf: &mut [u8]) -> Self {
             Self {
-                vecs: vec![iovec {
+                vecs: [iovec {
                     iov_base: buf.as_mut_ptr().cast::<c_void>(),
                     iov_len: buf.len(),
                 }]
                 .into(),
-                len: buf.len().try_into().unwrap(),
+                len: buf.len(),
             }
         }
     }
