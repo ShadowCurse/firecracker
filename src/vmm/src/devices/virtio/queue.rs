@@ -630,6 +630,39 @@ impl Queue {
         Ok(())
     }
 
+    /// Puts an available descriptor head into the used ring for use by the guest.
+    pub fn add_used_many(&mut self, descriptors: &[(u16, u32)]) -> Result<(), QueueError> {
+        for &(desc_index, len) in descriptors {
+            if self.actual_size() <= desc_index {
+                error!(
+                    "attempted to add out of bounds descriptor to used ring: {}",
+                    desc_index
+                );
+                return Err(QueueError::DescIndexOutOfBounds(desc_index));
+            }
+
+            let next_used = self.next_used.0 % self.actual_size();
+            let used_element = UsedElement {
+                id: u32::from(desc_index),
+                len,
+            };
+            // SAFETY:
+            // index is bound by the queue size
+            unsafe {
+                self.used_ring_ring_set(usize::from(next_used), used_element);
+            }
+        }
+
+        self.num_added += Wrapping(descriptors.len().try_into().unwrap());
+        self.next_used += Wrapping(descriptors.len().try_into().unwrap());
+
+        // This fence ensures all descriptor writes are visible before the index update is.
+        fence(Ordering::Release);
+
+        self.used_ring_idx_set(self.next_used.0);
+        Ok(())
+    }
+
     /// Try to enable notification events from the guest driver. Returns true if notifications were
     /// successfully enabled. Otherwise it means that one or more descriptors can still be consumed
     /// from the available ring and we can't guarantee that there will be a notification. In this

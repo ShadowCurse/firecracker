@@ -158,15 +158,12 @@ impl RxBuffers {
     }
 
     fn drop_used(&mut self, rx_queue: &mut Queue) {
-        self.used_descriptors
-            .drain(..)
-            .for_each(|(head_index, len)| {
-                rx_queue.add_used(head_index, len).map_err(|err| {
-                    error!(
-                        "net: Could not add used descriptor {head_index} of length {len} to RX queue: {err}"
-                        );
-                }).unwrap();
+        rx_queue
+            .add_used_many(&self.used_descriptors)
+            .unwrap_or_else(|err| {
+                error!("net: Could not add used descriptor used descriptors to RX queue: {err}");
             });
+        self.used_descriptors.clear();
     }
 }
 
