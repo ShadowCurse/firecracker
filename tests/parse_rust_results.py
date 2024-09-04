@@ -22,8 +22,7 @@ def print_green(s): print("\033[92m {}\033[00m" .format(s))
 
 
 results_path = sys.argv[1]
-
-dirs = [d for d in os.listdir(results_path) if os.path.isdir(d)]
+dirs = [d for d in os.listdir(results_path) if os.path.isdir(os.path.join(results_path, d))]
 
 # each dir has a structure
 # rust_test_results
@@ -46,7 +45,7 @@ for d in dirs:
     instance_name = instance_info[0]
     instance_kernel = instance_info[1][0]
     # used as a key to instance data
-    instance_tag = (instance_name, instance_kernel)
+    instance_tag = f"{instance_name}_{instance_kernel}"
 
     block_results_path = os.path.join(instance_results_path, "block")
     results = os.listdir(block_results_path)
@@ -56,7 +55,7 @@ for d in dirs:
         # get test parameters from the file name
         s = r.split("_")
         mode = s[0]
-        vcpus = s[2]
+        vcpus = int(s[2])
         run = os.path.splitext(s[4])[0]
 
         bw_mean = []
@@ -89,7 +88,7 @@ for d in dirs:
         s = r.split("_")
         mode = s[0]
         payload = s[1]
-        vcpus = s[2]
+        vcpus = int(s[2])
         worker_id = os.path.splitext(s[3])[0]
 
         bits_per_second = []
@@ -119,73 +118,92 @@ for d in dirs:
         }
 
 # output all the data
+# layout will be:
+# {
+#   "<instance, kernel>": {
+#     "block": [
+#       {
+#         "mode": "<mode>",
+#         ...
+#       }
+#       ...
+#     ],
+#     "net": {
+#       
+#     }
+#   }
+#
+# }
+
+processed_data = {}
 for instance in sorted(total_data.keys()):
-    print(f"instance: {instance}")
+
+    processed_data[instance] = {"block": [], "net": []}
     instance_data = total_data[instance]
 
     block_datas = instance_data["block"]
     for mode in ["read", "randread"]:
-        for vcpu in ["1", "2", "4"]:
+        for vcpu in [1, 2, 4]:
+
+            block_data = {"mode": mode, "vcpu": vcpu}
+            bw_mean_all = []
+            bw_dev_all = []
+            iops_mean_all = []
+            iops_dev_all = []
+            lat_ns_mean_all = []
+
             for run in ["0", "1"]:
-                print(f"block: mode: {mode}, vcpu: {vcpu}, run: {run}")
-                bw_mean_all = []
-                for block_data in block_datas:
-                    bw_mean_all.extend(block_data[(mode, vcpu, run)]["bw_mean"])
-                mean = np.array(bw_mean_all).mean()
-                print(f"bw_mean mean: {mean:.2f} Mb/s")
-
-                bw_dev_all = []
-                for block_data in block_datas:
-                    bw_mean_all.extend(block_data[(mode, vcpu, run)]["bw_dev"])
-                mean = np.array(bw_mean_all).mean()
-                print(f"bw_dev mean: {mean:.2f} Mb/s")
-
-                iops_mean_all = []
-                for block_data in block_datas:
-                    bw_mean_all.extend(block_data[(mode, vcpu, run)]["iops_mean"])
-                mean = np.array(bw_mean_all).mean()
-                print(f"iops_mean mean: {mean:.2f}")
-
-                iops_dev_all = []
-                for block_data in block_datas:
-                    bw_mean_all.extend(block_data[(mode, vcpu, run)]["iops_dev"])
-                mean = np.array(bw_mean_all).mean()
-                print(f"iops_dev mean: {mean:.2f}")
-
-                lat_ns_mean_all = []
-                for block_data in block_datas:
-                    bw_mean_all.extend(block_data[(mode, vcpu, run)]["lat_ns_mean"])
-                mean = np.array(bw_mean_all).mean()
-                print(f"lat_ns_mean mean: {mean:.2f} ns")
+                for bd in block_datas:
+                    bw_mean_all.extend(bd[(mode, vcpu, run)]["bw_mean"])
+                for bd in block_datas:
+                    bw_dev_all.extend(bd[(mode, vcpu, run)]["bw_dev"])
+                for bd in block_datas:
+                    iops_mean_all.extend(bd[(mode, vcpu, run)]["iops_mean"])
+                for bd in block_datas:
+                    iops_dev_all.extend(bd[(mode, vcpu, run)]["iops_dev"])
+                for bd in block_datas:
+                    lat_ns_mean_all.extend(bd[(mode, vcpu, run)]["lat_ns_mean"])
+            block_data["bw_mean"] = np.array(bw_mean_all).mean()
+            block_data["bw_dev"] = np.array(bw_dev_all).mean()
+            block_data["iops_mean"] = np.array(iops_mean_all).mean()
+            block_data["iops_dev"] = np.array(iops_dev_all).mean()
+            block_data["lat_ns_mean"] = np.array(lat_ns_mean_all).mean()
+            processed_data[instance]["block"].append(block_data)
 
     net_datas = instance_data["net"]
     for mode in ["g2h", "h2g", "bd"]:
         for payload in ["128K", "1024K"]:
-            for vcpu in ["1", "2", "4"]:
-                print(f"net: mode: {mode}, payload: {payload}, vcpu: {vcpu}");
+            for vcpu in [1, 2, 4]:
+
+                net_data = {"mode": mode, "payload": payload, "vcpu": vcpu}
 
                 if mode != "bd":
                     bps_all = []
                     for worker_id in range(int(vcpu)):
-                        for net_data in net_datas:
-                            bps_all.extend(net_data[(mode, payload, vcpu, str(worker_id))]["bits_per_second"])
+                        for nd in net_datas:
+                            bps_all.extend(nd[(mode, payload, vcpu, str(worker_id))]["bits_per_second"])
                     mean = np.array(bps_all).mean()
                     mean = mean / 1000 / 1000 / 1000
-                    print(f"bps {mode} mean: {mean:.2f} Gb/s")
+                    net_data["bps"] = mean
                 else:
                     bps_g2h_all = []
                     bps_h2g_all = []
                     for worker_id in range(int(vcpu)):
-                        for net_data in net_datas:
+                        for nd in net_datas:
                             if worker_id % 2 == 0:
-                                bps_g2h_all.extend(net_data[(mode, payload, vcpu, str(worker_id))]["bits_per_second"])
+                                bps_g2h_all.extend(nd[(mode, payload, vcpu, str(worker_id))]["bits_per_second"])
                             else:
-                                bps_h2g_all.extend(net_data[(mode, payload, vcpu, str(worker_id))]["bits_per_second"])
-                    mean = np.array(bps_g2h_all).mean()
-                    mean = mean / 1000 / 1000 / 1000
-                    print(f"bps g2h mean: {mean:.2f} Gb/s")
+                                bps_h2g_all.extend(nd[(mode, payload, vcpu, str(worker_id))]["bits_per_second"])
+                    if bps_g2h_all:
+                        mean = np.array(bps_g2h_all).mean()
+                        mean = mean / 1000 / 1000 / 1000
+                        net_data["bps_g2h"] = mean
 
-                    mean = np.array(bps_h2g_all).mean()
-                    mean = mean / 1000 / 1000 / 1000
-                    print(f"bps h2g mean: {mean:.2f} Gb/s")
+                    if bps_h2g_all:
+                        mean = np.array(bps_h2g_all).mean()
+                        mean = mean / 1000 / 1000 / 1000
+                        net_data["bps_h2g"] = mean
+                processed_data[instance]["net"].append(net_data)
+
+print(json.dumps(processed_data, indent=4, sort_keys=True))
 
