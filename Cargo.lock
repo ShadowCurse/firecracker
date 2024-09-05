@@ -1551,6 +1551,7 @@ dependencies = [
  "memfd",
  "micro_http",
  "proptest",
+ "rustix",
  "seccompiler",
  "semver",
  "serde",

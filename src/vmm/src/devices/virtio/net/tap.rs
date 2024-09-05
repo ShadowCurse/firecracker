@@ -202,13 +202,15 @@ impl Tap {
 
 impl Read for Tap {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, IoError> {
-        self.tap_file.read(buf)
+        rustix::io::read(&self.tap_file, buf)
+            .map_err(|e| IoError::from_raw_os_error(e.raw_os_error()))
     }
 }
 
 impl Write for Tap {
     fn write(&mut self, buf: &[u8]) -> Result<usize, IoError> {
-        self.tap_file.write(buf)
+        rustix::io::write(&self.tap_file, buf)
+            .map_err(|e| IoError::from_raw_os_error(e.raw_os_error()))
     }
 
     fn flush(&mut self) -> Result<(), IoError> {

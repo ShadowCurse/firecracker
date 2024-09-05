@@ -28,6 +28,7 @@ log = { version = "0.4.22", features = ["std", "serde"] }
 log-instrument = { path = "../log-instrument", optional = true }
 memfd = "0.6.3"
 micro_http = { git = "https://github.com/firecracker-microvm/micro-http" }
+rustix = "0.38.35"
 
 seccompiler = { path = "../seccompiler" }
 semver = { version = "1.0.23", features = ["serde"] }
