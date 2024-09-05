@@ -78,12 +78,13 @@ impl IrqTrigger {
         use std::os::unix::io::{AsRawFd, FromRawFd};
         // SAFETY: safe as the fd is valid
         let f = unsafe { std::fs::File::from_raw_fd(self.irq_evt.as_raw_fd()) };
-        rustix::io::write(&f, &[1])
+        rustix::io::write(&f, &1_u64.to_le_bytes())
             .map_err(|e| std::io::Error::from_raw_os_error(e.raw_os_error()))
             .map_err(|err| {
                 error!("Failed to send irq to the guest: {:?}", err);
                 err
             })?;
+
         std::mem::forget(f);
         Ok(())
     }

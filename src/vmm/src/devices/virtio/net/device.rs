@@ -739,7 +739,7 @@ impl Net {
         use std::os::unix::io::{AsRawFd, FromRawFd};
         // SAFETY: safe as the fd is valid
         let f = unsafe { std::fs::File::from_raw_fd(self.queue_evts[RX_INDEX].as_raw_fd()) };
-        let r = rustix::io::read(&f, &mut [0])
+        let r = rustix::io::read(&f, &mut [0; std::mem::size_of::<u64>()])
             .map_err(|e| std::io::Error::from_raw_os_error(e.raw_os_error()));
         std::mem::forget(f);
 
@@ -798,7 +798,7 @@ impl Net {
         use std::os::unix::io::{AsRawFd, FromRawFd};
         // SAFETY: safe as the fd is valid
         let f = unsafe { std::fs::File::from_raw_fd(self.queue_evts[TX_INDEX].as_raw_fd()) };
-        let r = rustix::io::read(&f, &mut [0])
+        let r = rustix::io::read(&f, &mut [0; std::mem::size_of::<u64>()])
             .map_err(|e| std::io::Error::from_raw_os_error(e.raw_os_error()));
         std::mem::forget(f);
 
