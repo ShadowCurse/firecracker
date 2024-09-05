@@ -736,7 +736,14 @@ impl Net {
     pub fn process_rx_queue_event(&mut self) {
         self.metrics.rx_queue_event_count.inc();
 
-        if let Err(err) = self.queue_evts[RX_INDEX].read() {
+        use std::os::unix::io::{AsRawFd, FromRawFd};
+        // SAFETY: safe as the fd is valid
+        let f = unsafe { std::fs::File::from_raw_fd(self.queue_evts[RX_INDEX].as_raw_fd()) };
+        let r = rustix::io::read(&f, &mut [0])
+            .map_err(|e| std::io::Error::from_raw_os_error(e.raw_os_error()));
+        std::mem::forget(f);
+
+        if let Err(err) = r {
             // rate limiters present but with _very high_ allowed rate
             error!("Failed to get rx queue event: {:?}", err);
             self.metrics.event_fails.inc();
@@ -787,7 +794,15 @@ impl Net {
     /// buffer in the TX queue.
     pub fn process_tx_queue_event(&mut self) {
         self.metrics.tx_queue_event_count.inc();
-        if let Err(err) = self.queue_evts[TX_INDEX].read() {
+
+        use std::os::unix::io::{AsRawFd, FromRawFd};
+        // SAFETY: safe as the fd is valid
+        let f = unsafe { std::fs::File::from_raw_fd(self.queue_evts[TX_INDEX].as_raw_fd()) };
+        let r = rustix::io::read(&f, &mut [0])
+            .map_err(|e| std::io::Error::from_raw_os_error(e.raw_os_error()));
+        std::mem::forget(f);
+
+        if let Err(err) = r {
             error!("Failed to get tx queue event: {:?}", err);
             self.metrics.event_fails.inc();
         } else if !self.tx_rate_limiter.is_blocked()
