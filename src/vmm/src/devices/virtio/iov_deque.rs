@@ -6,8 +6,8 @@ use std::os::fd::AsRawFd;
 use libc::{c_int, c_void, iovec, off_t, size_t};
 use memfd;
 
-use super::queue::FIRECRACKER_MAX_QUEUE_SIZE;
-use crate::arch::PAGE_SIZE;
+use super::net::NET_QUEUE_MAX_SIZE;
+const PAGE_SIZE: usize = NET_QUEUE_MAX_SIZE as usize * std::mem::size_of::<iovec>();
 
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
 pub enum IovDequeError {
@@ -141,7 +141,7 @@ impl IovDeque {
         // will adapt our logic if the assumption changes in the future.
         const {
             assert!(
-                std::mem::size_of::<iovec>() * FIRECRACKER_MAX_QUEUE_SIZE as usize == PAGE_SIZE
+                std::mem::size_of::<iovec>() * NET_QUEUE_MAX_SIZE as usize == PAGE_SIZE
             );
         }
 
@@ -216,7 +216,7 @@ impl IovDeque {
     /// Returns `true` if the [`IovDeque`] is full, `false` otherwise
     #[inline(always)]
     pub fn is_full(&self) -> bool {
-        self.len() == FIRECRACKER_MAX_QUEUE_SIZE
+        self.len() == NET_QUEUE_MAX_SIZE
     }
 
     /// Resets the queue, dropping all its elements.
@@ -261,8 +261,8 @@ impl IovDeque {
 
         self.start += nr_iovecs;
         self.len -= nr_iovecs;
-        if self.start >= FIRECRACKER_MAX_QUEUE_SIZE {
-            self.start -= FIRECRACKER_MAX_QUEUE_SIZE;
+        if self.start >= NET_QUEUE_MAX_SIZE {
+            self.start -= NET_QUEUE_MAX_SIZE;
         }
     }
 
