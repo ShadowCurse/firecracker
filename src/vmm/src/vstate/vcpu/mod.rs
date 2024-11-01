@@ -497,23 +497,95 @@ impl Vcpu {
             return Ok(VcpuEmulation::Interrupted);
         }
 
-        match self.kvm_vcpu.fd.run() {
-            Err(ref err) if err.errno() == libc::EINTR => {
-                self.kvm_vcpu.fd.set_kvm_immediate_exit(0);
-                // Notify that this KVM_RUN was interrupted.
-                Ok(VcpuEmulation::Interrupted)
-            }
-            #[cfg(feature = "gdb")]
-            Ok(VcpuExit::Debug(_)) => {
-                if let Some(gdb_event) = &self.gdb_event {
-                    gdb_event
-                        .send(get_raw_tid(self.kvm_vcpu.index.into()))
-                        .expect("Unable to notify gdb event");
-                }
+        let er = self.kvm_vcpu.fd.run();
 
-                Ok(VcpuEmulation::Paused)
+        const PRINT: bool = false;
+        if PRINT {
+            static mut RT: u128 = 0;
+            static mut RC: u128 = 0;
+            static mut WT: u128 = 0;
+            static mut WC: u128 = 0;
+
+            enum ET {
+                R,
+                W,
             }
-            emulation_result => handle_kvm_exit(&mut self.kvm_vcpu.peripherals, emulation_result),
+
+            let now = std::time::Instant::now();
+            let exit_type = match er.as_ref() {
+                Ok(run) => match run {
+                    VcpuExit::MmioRead(_, _) => Some(ET::R),
+                    VcpuExit::MmioWrite(_, _) => Some(ET::W),
+                    _ => None,
+                },
+                Err(_) => None,
+            };
+
+            let r = match er {
+                Err(ref err) if err.errno() == libc::EINTR => {
+                    self.kvm_vcpu.fd.set_kvm_immediate_exit(0);
+                    // Notify that this KVM_RUN was interrupted.
+                    Ok(VcpuEmulation::Interrupted)
+                }
+                #[cfg(feature = "gdb")]
+                Ok(VcpuExit::Debug(_)) => {
+                    if let Some(gdb_event) = &self.gdb_event {
+                        gdb_event
+                            .send(get_raw_tid(self.kvm_vcpu.index.into()))
+                            .expect("Unable to notify gdb event");
+                    }
+
+                    Ok(VcpuEmulation::Paused)
+                }
+                emulation_result => {
+                    handle_kvm_exit(&mut self.kvm_vcpu.peripherals, emulation_result)
+                }
+            };
+
+            if let Some(et) = exit_type {
+                let dt = std::time::Instant::now() - now;
+                unsafe {
+                    match et {
+                        ET::R => {
+                            RT += dt.as_nanos();
+                            RC += 1;
+                            if RC % 100 == 0 {
+                                log::info!("KVM exit: READ avg took: {}ns", RT / RC);
+                            }
+                        }
+                        ET::W => {
+                            WT += dt.as_nanos();
+                            WC += 1;
+                            if WC % 100 == 0 {
+                                log::info!("KVM exit: WRITE avg took: {}ns", WT / WC);
+                            }
+                        }
+                    }
+                }
+            }
+
+            r
+        } else {
+            match er {
+                Err(ref err) if err.errno() == libc::EINTR => {
+                    self.kvm_vcpu.fd.set_kvm_immediate_exit(0);
+                    // Notify that this KVM_RUN was interrupted.
+                    Ok(VcpuEmulation::Interrupted)
+                }
+                #[cfg(feature = "gdb")]
+                Ok(VcpuExit::Debug(_)) => {
+                    if let Some(gdb_event) = &self.gdb_event {
+                        gdb_event
+                            .send(get_raw_tid(self.kvm_vcpu.index.into()))
+                            .expect("Unable to notify gdb event");
+                    }
+
+                    Ok(VcpuEmulation::Paused)
+                }
+                emulation_result => {
+                    handle_kvm_exit(&mut self.kvm_vcpu.peripherals, emulation_result)
+                }
+            }
         }
     }
 }
