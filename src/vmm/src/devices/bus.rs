@@ -41,16 +41,47 @@ impl PartialOrd for BusRange {
     }
 }
 
+#[derive(Debug, Clone)]
+struct BusDeviceVTable {
+    ptr: *mut (),
+    read_ptr: usize,
+    write_ptr: usize,
+}
+
+impl BusDeviceVTable {
+    pub fn read(&self, offset: u64, data: &mut [u8]) {
+        unsafe {
+            let read_fn: fn(*mut (), u64, &mut [u8]) = std::mem::transmute(self.read_ptr);
+            read_fn(self.ptr, offset, data);
+        }
+    }
+    pub fn write(&self, offset: u64, data: &[u8]) {
+        unsafe {
+            let write_fn: fn(*mut (), u64, &[u8]) = std::mem::transmute(self.write_ptr);
+            write_fn(self.ptr, offset, data);
+        }
+    }
+}
+
+unsafe impl Send for BusDeviceVTable {}
+
 /// A device container for routing reads and writes over some address space.
 ///
 /// This doesn't have any restrictions on what kind of device or address space this applies to. The
 /// only restriction is that no two devices can overlap in this address space.
 #[derive(Debug, Clone, Default)]
 pub struct Bus {
-    devices: BTreeMap<BusRange, Arc<Mutex<BusDevice>>>,
+    pio_locations: Vec<(u64, u64)>,
+    pio_devices: Vec<Arc<Mutex<BusDevice>>>,
+    pio_devices_vtable: Vec<BusDeviceVTable>,
+    mmio_devices: Vec<Arc<Mutex<BusDevice>>>,
+    mmio_devices_vtable: Vec<BusDeviceVTable>,
 }
 
 use event_manager::{EventOps, Events, MutEventSubscriber};
+
+use crate::arch::MMIO_MEM_START;
+use crate::device_manager::mmio::MMIO_LEN;
 
 #[cfg(target_arch = "aarch64")]
 use super::legacy::RTCDevice;
@@ -166,6 +197,40 @@ impl BusDevice {
         }
     }
 
+    pub fn as_vtable(&self) -> BusDeviceVTable {
+        unsafe {
+            match self {
+                Self::I8042Device(x) => BusDeviceVTable {
+                    ptr: std::mem::transmute(x),
+                    read_ptr: I8042Device::bus_read as usize,
+                    write_ptr: I8042Device::bus_write as usize,
+                },
+                #[cfg(target_arch = "aarch64")]
+                Self::RTCDevice(x) => BusDeviceVTable {
+                    ptr: std::mem::transmute(x),
+                    read_ptr: RTCDevice::bus_read as usize,
+                    write_ptr: RTCDevice::bus_write as usize,
+                },
+                Self::BootTimer(x) => BusDeviceVTable {
+                    ptr: std::mem::transmute(x),
+                    read_ptr: BootTimer::bus_read as usize,
+                    write_ptr: BootTimer::bus_write as usize,
+                },
+                Self::MmioTransport(x) => BusDeviceVTable {
+                    ptr: std::mem::transmute(x),
+                    read_ptr: MmioTransport::bus_read as usize,
+                    write_ptr: MmioTransport::bus_write as usize,
+                },
+                Self::Serial(x) => BusDeviceVTable {
+                    ptr: std::mem::transmute(x),
+                    read_ptr: SerialDevice::<std::io::Stdin>::bus_read as usize,
+                    write_ptr: SerialDevice::<std::io::Stdin>::bus_write as usize,
+                },
+                _ => unreachable!(),
+            }
+        }
+    }
+
     pub fn read(&mut self, offset: u64, data: &mut [u8]) {
         match self {
             Self::I8042Device(x) => x.bus_read(offset, data),
@@ -216,29 +281,35 @@ impl Bus {
     /// Constructs an a bus with an empty address space.
     pub fn new() -> Bus {
         Bus {
-            devices: BTreeMap::new(),
+            pio_locations: vec![],
+            pio_devices: vec![],
+            pio_devices_vtable: vec![],
+            mmio_devices: vec![],
+            mmio_devices_vtable: vec![],
         }
     }
 
-    fn first_before(&self, addr: u64) -> Option<(BusRange, &Mutex<BusDevice>)> {
-        // for when we switch to rustc 1.17: self.devices.range(..addr).iter().rev().next()
-        for (range, dev) in self.devices.iter().rev() {
-            if range.0 <= addr {
-                return Some((*range, dev));
-            }
-        }
-        None
+    pub fn len(&self) -> usize {
+        // self.devices_not_mmio.len() + self.devices_opt.len() + self.devices_no_opt.len()
+        self.mmio_devices.len()
     }
 
     /// Returns the device found at some address.
     pub fn get_device(&self, addr: u64) -> Option<(u64, &Mutex<BusDevice>)> {
-        if let Some((BusRange(start, len), dev)) = self.first_before(addr) {
-            let offset = addr - start;
-            if offset < len {
-                return Some((offset, dev));
+        // None
+        if addr < MMIO_MEM_START {
+            for (i, (base, len)) in self.pio_locations.iter().enumerate() {
+                if *base <= addr && addr <= *base + *len {
+                    let offset = addr - base;
+                    return Some((offset, &self.pio_devices[i]));
+                }
             }
+            None
+        } else {
+            let index = (addr - MMIO_MEM_START) / MMIO_LEN;
+            let offset = (addr - MMIO_MEM_START) - MMIO_LEN * index;
+            Some((offset, &self.mmio_devices[index as usize]))
         }
-        None
     }
 
     /// Puts the given device at the given address space.
@@ -248,31 +319,20 @@ impl Bus {
         base: u64,
         len: u64,
     ) -> Result<(), BusError> {
-        if len == 0 {
-            return Err(BusError::Overlap);
+        log::info!(
+            "adding device {} at base: {base}, len: {len}",
+            self.mmio_devices.len()
+        );
+        if base < MMIO_MEM_START {
+            self.pio_devices_vtable
+                .push(device.lock().unwrap().as_vtable());
+            self.pio_devices.push(device);
+            self.pio_locations.push((base, len));
+        } else {
+            self.mmio_devices_vtable
+                .push(device.lock().unwrap().as_vtable());
+            self.mmio_devices.push(device);
         }
-
-        // Reject all cases where the new device's base is within an old device's range.
-        if self.get_device(base).is_some() {
-            return Err(BusError::Overlap);
-        }
-
-        // The above check will miss an overlap in which the new device's base address is before the
-        // range of another device. To catch that case, we search for a device with a range before
-        // the new device's range's end. If there is no existing device in that range that starts
-        // after the new device, then there will be no overlap.
-        if let Some((BusRange(start, _), _)) = self.first_before(base + len - 1) {
-            // Such a device only conflicts with the new device if it also starts after the new
-            // device because of our initial `get_device` check above.
-            if start >= base {
-                return Err(BusError::Overlap);
-            }
-        }
-
-        if self.devices.insert(BusRange(base, len), device).is_some() {
-            return Err(BusError::Overlap);
-        }
-
         Ok(())
     }
 
@@ -280,14 +340,35 @@ impl Bus {
     ///
     /// Returns true on success, otherwise `data` is untouched.
     pub fn read(&self, addr: u64, data: &mut [u8]) -> bool {
-        if let Some((offset, dev)) = self.get_device(addr) {
-            // OK to unwrap as lock() failing is a serious error condition and should panic.
-            dev.lock()
-                .expect("Failed to acquire device lock")
-                .read(offset, data);
-            true
-        } else {
+        if addr < MMIO_MEM_START {
+            for (i, (base, len)) in self.pio_locations.iter().enumerate() {
+                if *base <= addr && addr <= *base + *len {
+                    let offset = addr - base;
+                    let vtable = &self.pio_devices_vtable[i];
+                    // log::info!(
+                    //     "read from device: {} at addr: {} offset: {}",
+                    //     i,
+                    //     addr,
+                    //     offset
+                    // );
+                    vtable.read(addr - base, data);
+                    return true;
+                }
+            }
+            log::error!("WFT: {addr}, {data:?}");
             false
+        } else {
+            let index = (addr - MMIO_MEM_START) / MMIO_LEN;
+            let offset = (addr - MMIO_MEM_START) - MMIO_LEN * index;
+            let vtable = &self.mmio_devices_vtable[index as usize];
+            // log::info!(
+            //     "read from device: {} at addr: {} offset: {}",
+            //     index,
+            //     addr,
+            //     offset
+            // );
+            vtable.read(offset, data);
+            true
         }
     }
 
@@ -295,14 +376,35 @@ impl Bus {
     ///
     /// Returns true on success, otherwise `data` is untouched.
     pub fn write(&self, addr: u64, data: &[u8]) -> bool {
-        if let Some((offset, dev)) = self.get_device(addr) {
-            // OK to unwrap as lock() failing is a serious error condition and should panic.
-            dev.lock()
-                .expect("Failed to acquire device lock")
-                .write(offset, data);
-            true
-        } else {
+        if addr < MMIO_MEM_START {
+            for (i, (base, len)) in self.pio_locations.iter().enumerate() {
+                if *base <= addr && addr <= *base + *len {
+                    let offset = addr - base;
+                    let vtable = &self.pio_devices_vtable[i];
+                    // log::info!(
+                    //     "write from device: {} at addr: {} offset: {}",
+                    //     i,
+                    //     addr,
+                    //     offset
+                    // );
+                    vtable.write(offset, data);
+                    return true;
+                }
+            }
+            log::error!("WFT: {addr}, {data:?}");
             false
+        } else {
+            let index = (addr - MMIO_MEM_START) / MMIO_LEN;
+            let offset = (addr - MMIO_MEM_START) - MMIO_LEN * index;
+            let vtable = &self.mmio_devices_vtable[index as usize];
+            // log::info!(
+            //     "write from device: {} at addr: {} offset: {}",
+            //     index,
+            //     addr,
+            //     offset
+            // );
+            vtable.write(offset, data);
+            true
         }
     }
 }
