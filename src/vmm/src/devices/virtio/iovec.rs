@@ -226,9 +226,9 @@ pub struct ParsedDescriptorChain {
 /// of data from that buffer.
 /// `L` const generic value must be a multiple of 256 as required by the `IovDeque` requirements.
 #[derive(Debug)]
-pub struct IoVecBufferMut<const L: u16 = FIRECRACKER_MAX_QUEUE_SIZE> {
+pub struct IoVecBufferMut {
     // container of the memory regions included in this IO vector
-    pub vecs: IovDeque<L>,
+    pub vecs: IovDeque,
     // Total length of the IoVecBufferMut
     // We use `u32` here because we use this type in devices which
     // should not give us huge buffers. In any case this
@@ -238,9 +238,9 @@ pub struct IoVecBufferMut<const L: u16 = FIRECRACKER_MAX_QUEUE_SIZE> {
 
 // SAFETY: `IoVecBufferMut` doesn't allow for interior mutability and no shared ownership is
 // possible as it doesn't implement clone
-unsafe impl<const L: u16> Send for IoVecBufferMut<L> {}
+unsafe impl Send for IoVecBufferMut {}
 
-impl<const L: u16> IoVecBufferMut<L> {
+impl IoVecBufferMut {
     /// Append a `DescriptorChain` in this `IoVecBufferMut`
     ///
     /// # Safety
@@ -309,8 +309,8 @@ impl<const L: u16> IoVecBufferMut<L> {
     }
 
     /// Create an empty `IoVecBufferMut`.
-    pub fn new() -> Result<Self, IovDequeError> {
-        let vecs = IovDeque::new()?;
+    pub fn new(capacity: u16) -> Result<Self, IovDequeError> {
+        let vecs = IovDeque::new(capacity)?;
         Ok(Self { vecs, len: 0 })
     }
 
@@ -356,8 +356,9 @@ impl<const L: u16> IoVecBufferMut<L> {
     pub unsafe fn from_descriptor_chain(
         mem: &GuestMemoryMmap,
         head: DescriptorChain,
+        capacity: u16,
     ) -> Result<Self, IoVecError> {
-        let mut new_buffer = Self::new()?;
+        let mut new_buffer = Self::new(capacity)?;
         new_buffer.load_descriptor_chain(mem, head)?;
         Ok(new_buffer)
     }

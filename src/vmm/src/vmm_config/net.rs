@@ -27,6 +27,8 @@ pub struct NetworkInterfaceConfig {
     pub rx_rate_limiter: Option<RateLimiterConfig>,
     /// Rate Limiter for transmitted packages.
     pub tx_rate_limiter: Option<RateLimiterConfig>,
+    /// Size of the queue
+    pub queue_size: Option<u16>,
 }
 
 impl From<&Net> for NetworkInterfaceConfig {
@@ -39,6 +41,7 @@ impl From<&Net> for NetworkInterfaceConfig {
             guest_mac: net.guest_mac().copied(),
             rx_rate_limiter: rx_rl.into_option(),
             tx_rate_limiter: tx_rl.into_option(),
+            queue_size: Some(net.queue_size()),
         }
     }
 }
@@ -161,6 +164,7 @@ impl NetBuilder {
             cfg.guest_mac,
             rx_rate_limiter.unwrap_or_default(),
             tx_rate_limiter.unwrap_or_default(),
+            cfg.queue_size,
         )
         .map_err(NetworkInterfaceError::CreateNetworkDevice)
     }

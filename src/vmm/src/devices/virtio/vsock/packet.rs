@@ -22,7 +22,7 @@ use vm_memory::{GuestMemoryError, ReadVolatile, WriteVolatile};
 
 use super::{defs, VsockError};
 use crate::devices::virtio::iovec::{IoVecBuffer, IoVecBufferMut};
-use crate::devices::virtio::queue::DescriptorChain;
+use crate::devices::virtio::queue::{DescriptorChain, FIRECRACKER_MAX_QUEUE_SIZE};
 use crate::vstate::memory::{ByteValued, GuestMemoryMmap};
 
 // The vsock packet header is defined by the C struct:
@@ -291,7 +291,8 @@ pub struct VsockPacketRx {
 impl VsockPacketRx {
     /// Creates new VsockPacketRx.
     pub fn new() -> Result<Self, VsockError> {
-        let buffer = IoVecBufferMut::new().map_err(VsockError::IovDeque)?;
+        let buffer =
+            IoVecBufferMut::new(FIRECRACKER_MAX_QUEUE_SIZE).map_err(VsockError::IovDeque)?;
         Ok(Self {
             hdr: Default::default(),
             buffer,

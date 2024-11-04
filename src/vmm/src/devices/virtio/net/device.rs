@@ -14,7 +14,7 @@ use libc::{iovec, EAGAIN};
 use log::error;
 use vmm_sys_util::eventfd::EventFd;
 
-use super::NET_QUEUE_MAX_SIZE;
+use super::{NET_NUM_QUEUES, NET_QUEUE_MAX_SIZE};
 use crate::devices::virtio::device::{DeviceState, IrqTrigger, IrqType, VirtioDevice};
 use crate::devices::virtio::gen::virtio_blk::VIRTIO_F_VERSION_1;
 use crate::devices::virtio::gen::virtio_net::{
@@ -105,7 +105,7 @@ pub struct RxBuffers {
     pub min_buffer_size: u32,
     // An [`IoVecBufferMut`] covering all the memory we have available for receiving network
     // frames.
-    pub iovec: IoVecBufferMut<NET_QUEUE_MAX_SIZE>,
+    pub iovec: IoVecBufferMut,
     // A map of which part of the memory belongs to which `DescriptorChain` object
     pub parsed_descriptors: VecDeque<ParsedDescriptorChain>,
     // Buffers that we have used and they are ready to be given back to the guest.
@@ -115,10 +115,10 @@ pub struct RxBuffers {
 
 impl RxBuffers {
     /// Create a new [`RxBuffers`] object for storing guest memory for performing RX
-    fn new() -> Result<Self, IoVecError> {
+    fn new(queue_size: u16) -> Result<Self, IoVecError> {
         Ok(Self {
             min_buffer_size: 0,
-            iovec: IoVecBufferMut::new()?,
+            iovec: IoVecBufferMut::new(queue_size)?,
             parsed_descriptors: VecDeque::with_capacity(FIRECRACKER_MAX_QUEUE_SIZE.into()),
             used_descriptors: 0,
             used_bytes: 0,
@@ -273,6 +273,7 @@ impl Net {
         guest_mac: Option<MacAddr>,
         rx_rate_limiter: RateLimiter,
         tx_rate_limiter: RateLimiter,
+        queue_size: u16,
     ) -> Result<Self, NetError> {
         let mut avail_features = 1 << VIRTIO_NET_F_GUEST_CSUM
             | 1 << VIRTIO_NET_F_CSUM
@@ -296,9 +297,9 @@ impl Net {
 
         let mut queue_evts = Vec::new();
         let mut queues = Vec::new();
-        for size in NET_QUEUE_SIZES {
+        for _ in 0..NET_NUM_QUEUES {
             queue_evts.push(EventFd::new(libc::EFD_NONBLOCK).map_err(NetError::EventFd)?);
-            queues.push(Queue::new(size));
+            queues.push(Queue::new(queue_size));
         }
 
         Ok(Net {
@@ -320,7 +321,7 @@ impl Net {
             mmds_ns: None,
             metrics: NetMetricsPerDevice::alloc(id),
             tx_buffer: Default::default(),
-            rx_buffer: RxBuffers::new()?,
+            rx_buffer: RxBuffers::new(queue_size)?,
         })
     }
 
@@ -331,6 +332,7 @@ impl Net {
         guest_mac: Option<MacAddr>,
         rx_rate_limiter: RateLimiter,
         tx_rate_limiter: RateLimiter,
+        queue_size: Option<u16>,
     ) -> Result<Self, NetError> {
         let tap = Tap::open_named(tap_if_name).map_err(NetError::TapOpen)?;
 
@@ -338,7 +340,8 @@ impl Net {
         tap.set_vnet_hdr_size(vnet_hdr_size)
             .map_err(NetError::TapSetVnetHdrSize)?;
 
-        Self::new_with_tap(id, tap, guest_mac, rx_rate_limiter, tx_rate_limiter)
+        let queue_size = queue_size.unwrap_or(NET_QUEUE_MAX_SIZE);
+        Self::new_with_tap(id, tap, guest_mac, rx_rate_limiter, tx_rate_limiter, queue_size)
     }
 
     /// Provides the ID of this net device.
@@ -384,6 +387,10 @@ impl Net {
     /// Provides a reference to the configured TX rate limiter.
     pub fn tx_rate_limiter(&self) -> &RateLimiter {
         &self.tx_rate_limiter
+    }
+
+    pub fn queue_size(&self) -> u16 {
+        self.queues[0].max_size
     }
 
     /// Trigger queue notification for the guest if we used enough descriptors

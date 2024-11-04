@@ -25,6 +25,8 @@ use crate::rate_limiter::RateLimiter;
 use crate::utils::net::mac::MacAddr;
 use crate::vstate::memory::{GuestAddress, GuestMemoryMmap};
 
+use super::NET_QUEUE_MAX_SIZE;
+
 static NEXT_INDEX: AtomicUsize = AtomicUsize::new(1);
 
 pub fn default_net() -> Net {
@@ -45,6 +47,7 @@ pub fn default_net() -> Net {
         Some(guest_mac),
         RateLimiter::default(),
         RateLimiter::default(),
+        Some(NET_QUEUE_MAX_SIZE),
     )
     .unwrap();
     net.configure_mmds_network_stack(
@@ -68,6 +71,7 @@ pub fn default_net_no_mmds() -> Net {
         Some(guest_mac),
         RateLimiter::default(),
         RateLimiter::default(),
+        Some(NET_QUEUE_MAX_SIZE),
     )
     .unwrap();
     enable(&net.tap);

@@ -80,7 +80,7 @@ impl Entropy {
             queue_events,
             irq_trigger,
             rate_limiter,
-            buffer: IoVecBufferMut::new()?,
+            buffer: IoVecBufferMut::new(FIRECRACKER_MAX_QUEUE_SIZE)?,
         })
     }
 

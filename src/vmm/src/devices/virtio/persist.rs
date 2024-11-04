@@ -33,7 +33,7 @@ pub struct QueueState {
     max_size: u16,
 
     /// The queue size in elements the driver selected
-    size: u16,
+    pub size: u16,
 
     /// Indicates if the queue is finished with configuration
     ready: bool,

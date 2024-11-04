@@ -123,6 +123,7 @@ impl Persist<'_> for Net {
             state.config_space.guest_mac,
             rx_rate_limiter,
             tx_rate_limiter,
+            Some(state.virtio_state.queues[0].size),
         )?;
 
         // We trust the MMIODeviceManager::restore to pass us an MMDS data store reference if
