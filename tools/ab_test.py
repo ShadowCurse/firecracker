@@ -389,7 +389,7 @@ if __name__ == "__main__":
         "--noise-threshold",
         help="The minimal delta which a metric has to regress on average across all tests that emit it before the regressions will be considered valid.",
         type=float,
-        default=0.05,
+        default=0.01,
     )
     args = parser.parse_args()
 
