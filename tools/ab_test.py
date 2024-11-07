@@ -291,18 +291,26 @@ def analyze_data(
             old_mean = statistics.mean(processed_emf_a[dimension_set][metric][0])
             new_mean = statistics.mean(processed_emf_b[dimension_set][metric][0])
 
-            msg = (
-                f"\033[0;32m[Firecracker A/B-Test Runner]\033[0m A/B-testing shows a change of "
-                f"{format_with_reduced_unit(result.statistic, unit)}, or {result.statistic / old_mean:.2%}, "
-                f"(from {format_with_reduced_unit(old_mean, unit)} to {format_with_reduced_unit(new_mean, unit)}) "
-                f"for metric \033[1m{metric}\033[0m with \033[0;31m\033[1mp={result.pvalue}\033[0m. "
-                f"This means that observing a change of this magnitude or worse, assuming that performance "
-                f"characteristics did not change across the tested commits, has a probability of {result.pvalue:.2%}. "
-                f"Tested Dimensions:\n{json.dumps(dict(dimension_set), indent=2, sort_keys=True)}"
-            )
-            messages.append(msg)
+            m = dict(dimension_set)
+            m["diff"] = f"{result.statistic / old_mean:.2%}"
+            # msg = (
+            #     f"\033[0;32m[Firecracker A/B-Test Runner]\033[0m A/B-testing shows a change of "
+            #     f"{format_with_reduced_unit(result.statistic, unit)}, or {result.statistic / old_mean:.2%}, "
+            #     f"(from {format_with_reduced_unit(old_mean, unit)} to {format_with_reduced_unit(new_mean, unit)}) "
+            #     f"for metric \033[1m{metric}\033[0m with \033[0;31m\033[1mp={result.pvalue}\033[0m. "
+            #     f"This means that observing a change of this magnitude or worse, assuming that performance "
+            #     f"characteristics did not change across the tested commits, has a probability of {result.pvalue:.2%}. "
+            #     f"Tested Dimensions:\n{json.dumps(dict(dimension_set), indent=2, sort_keys=True)}"
+            # )
+            # msg = f"{json.dumps(m, indent=2, sort_keys=True)}"
+            # messages.append(msg)
+            messages.append(m)
 
-    assert not messages, "\n" + "\n".join(messages)
+    # assert not messages, "\n" + "\n".join(messages)
+    if messages:
+        with open("test_results/ab.json", "w") as f:
+            json.dump(messages, f, indent=2, sort_keys=True)
+    assert not messages, "\n" + f"{json.dumps(messages, indent=2, sort_keys=True)}"
     print("No regressions detected!")
 
 
