@@ -4,7 +4,7 @@
 pub use vm_allocator::AllocPolicy;
 use vm_allocator::{AddressAllocator, IdAllocator};
 
-use crate::arch;
+use crate::{arch, devices::virtio::device::{MMIO_DEVICE_SIZE, MMIO_OPT_DEVICES}};
 
 /// A resource manager for (de)allocating interrupt lines (GSIs) and guest memory
 ///
@@ -29,9 +29,9 @@ impl ResourceAllocator {
     pub fn new() -> Result<Self, vm_allocator::Error> {
         Ok(Self {
             gsi_allocator: IdAllocator::new(arch::IRQ_BASE, arch::IRQ_MAX)?,
-            mmio_memory: AddressAllocator::new(arch::MMIO_MEM_START + 4096, arch::MMIO_MEM_SIZE)?,
+            mmio_memory: AddressAllocator::new(arch::MMIO_MEM_START + (MMIO_DEVICE_SIZE * MMIO_OPT_DEVICES * 2), arch::MMIO_MEM_SIZE)?,
             system_memory: AddressAllocator::new(arch::SYSTEM_MEM_START, arch::SYSTEM_MEM_SIZE)?,
-            first_page_mmio_memory: arch::MMIO_MEM_START,
+            first_page_mmio_memory: arch::MMIO_MEM_START + (0x1000 - 0x60),
         })
     }
 
@@ -77,13 +77,9 @@ impl ResourceAllocator {
         Ok(self.mmio_memory.allocate(size, alignment, policy)?.start())
     }
 
-    pub fn allocate_first_page_mmio_memory(&mut self, size: u64, alignment: u64) -> u64 {
+    pub fn allocate_first_page_mmio_memory(&mut self) -> u64 {
         let addr = self.first_page_mmio_memory;
-        self.first_page_mmio_memory += size;
-        let m = self.first_page_mmio_memory & (alignment - 1);
-        if m != 0 {
-            self.first_page_mmio_memory += alignment - m;
-        }
+        self.first_page_mmio_memory += 0x1000 * 2;
         addr
     }
 

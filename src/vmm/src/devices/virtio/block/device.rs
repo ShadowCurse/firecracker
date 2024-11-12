@@ -217,13 +217,6 @@ impl VirtioDevice for Block {
             Self::VhostUser(_) => false,
         }
     }
-
-    fn configure_mmio_memory(&mut self, mem_ptr: *mut u8) {
-        match self {
-            Self::Virtio(b) => b.configure_mmio_memory(mem_ptr),
-            Self::VhostUser(_) => {}
-        }
-    }
 }
 
 impl MutEventSubscriber for Block {

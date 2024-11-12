@@ -173,12 +173,12 @@ impl BusDevice {
             Self::RTCDevice(x) => x.bus_read(offset, data),
             Self::BootTimer(x) => x.bus_read(offset, data),
             Self::MmioTransport(x) => {
-                if x.mmio_memory_ptr.is_some() {
-                    println!("should not do reads: ofsset: {offset}, data: {data:?}");
-                    panic!();
-                } else {
-                    x.bus_read(offset, data)
-                }
+                // if x.mmio_memory_ptr.is_some() {
+                //     println!("should not do reads: ofsset: {offset}, data: {data:?}");
+                //     panic!();
+                // } else {
+                x.bus_read(offset, data)
+                // }
             }
             Self::Serial(x) => x.bus_read(offset, data),
             #[cfg(test)]
@@ -195,11 +195,11 @@ impl BusDevice {
             Self::RTCDevice(x) => x.bus_write(offset, data),
             Self::BootTimer(x) => x.bus_write(offset, data),
             Self::MmioTransport(x) => {
-                if x.mmio_memory_ptr.is_some() {
-                    x.write_mem(offset, data)
-                } else {
-                    x.bus_write(offset, data)
-                }
+                // if x.mmio_memory_ptr.is_some() {
+                //     x.write_mem(offset, data)
+                // } else {
+                x.bus_write(offset, data)
+                // }
             }
             Self::Serial(x) => x.bus_write(offset, data),
             #[cfg(test)]

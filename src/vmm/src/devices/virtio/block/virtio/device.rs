@@ -23,6 +23,7 @@ use super::{
     SECTOR_SIZE,
 };
 use super::{request::*, BLOCK_NUM_QUEUES};
+use crate::device_manager::mmio::MMIO_OPT_REGION_INFO;
 use crate::devices::virtio::block::virtio::metrics::{BlockDeviceMetrics, BlockMetricsPerDevice};
 use crate::devices::virtio::block::CacheType;
 use crate::devices::virtio::device::{
@@ -768,6 +769,7 @@ impl VirtioDevice for VirtioBlock {
     }
 
     fn activate(&mut self, mem: GuestMemoryMmap) -> Result<(), ActivateError> {
+        unsafe { MMIO_OPT_REGION_INFO.add_activated() };
         for q in self.queues.iter_mut() {
             q.initialize(&mem)
                 .map_err(ActivateError::QueueMemoryError)?;
@@ -790,46 +792,6 @@ impl VirtioDevice for VirtioBlock {
 
     fn is_activated(&self) -> bool {
         self.device_state.is_activated()
-    }
-
-    fn configure_mmio_memory(&mut self, mem_ptr: *mut u8) {
-        unsafe {
-            log::info!("Block: configure_mmio_memory: ptr: {:p}", mem_ptr,);
-            let mm = self
-                .mmio_mem
-                .as_mut()
-                .expect("MmioMem should be present if we configure mmio_region");
-            mm.mmio_memory_ptr = mem_ptr as usize;
-
-            let mem_u32_ptr: *mut u32 = mem_ptr.cast();
-
-            // MagicValue
-            mem_u32_ptr.add(0).write_volatile(0x7472_6976);
-            // Device version number
-            mem_u32_ptr.add(1).write_volatile(2);
-            // Virtio Subsystem Device ID
-            mem_u32_ptr.add(2).write_volatile(TYPE_BLOCK);
-            // Virtio Subsystem Vendor ID
-            mem_u32_ptr.add(3).write_volatile(0);
-            // Maximum virtual queue size
-            mem_u32_ptr
-                .add(13)
-                .write_volatile(FIRECRACKER_MAX_QUEUE_SIZE as u32);
-            // interrupt status
-            mem_u32_ptr.add(24).write_volatile(1);
-            // detvice status
-            mem_u32_ptr.add(28).write_volatile(0);
-            // configuraton generation
-            mem_u32_ptr.add(63).write_volatile(0);
-
-            // copy config
-            let config_slice = self.config_space.as_slice();
-            std::ptr::copy_nonoverlapping(
-                config_slice.as_ptr(),
-                mem_ptr.add(256),
-                config_slice.len(),
-            );
-        }
     }
 }
 

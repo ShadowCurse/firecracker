@@ -58,11 +58,7 @@ pub struct MmioTransport {
     mem: GuestMemoryMmap,
     pub(crate) interrupt_status: Arc<AtomicU32>,
     pub is_vhost_user: bool,
-
-    pub mmio_memory_ptr: Option<*mut u8>,
 }
-
-unsafe impl Send for MmioTransport {}
 
 impl MmioTransport {
     /// Constructs a new MMIO transport for the given virtio device.
@@ -83,20 +79,7 @@ impl MmioTransport {
             mem,
             interrupt_status,
             is_vhost_user,
-            mmio_memory_ptr: None,
         }
-    }
-
-    pub fn set_mmio_memory(&mut self, device_info: &MMIODeviceInfo) {
-        log::info!(
-            "device type: {} setting mmio memory. ptr: {:p}, len: {}",
-            self.locked_device().device_type(),
-            device_info.user_addr as *const u8,
-            device_info.len,
-        );
-        let ptr = device_info.user_addr as *mut u8;
-        self.mmio_memory_ptr = Some(ptr);
-        self.locked_device().configure_mmio_memory(ptr);
     }
 
     /// Gets the encapsulated locked VirtioDevice.
@@ -373,73 +356,6 @@ impl MmioTransport {
                     device_status::DRIVER,
                     device_status::FAILED | device_status::DEVICE_NEEDS_RESET,
                 ) {
-                    self.locked_device().write_config(offset - 0x100, data)
-                } else {
-                    warn!("can not write to device config data area before driver is ready");
-                }
-            }
-            _ => {
-                warn!(
-                    "invalid virtio mmio write: 0x{:x}:0x{:x}",
-                    offset,
-                    data.len()
-                );
-            }
-        }
-    }
-
-    pub fn write_mem(&mut self, offset: u64, data: &[u8]) {
-        let mem_u32_ptr: *mut u32 = self.mmio_memory_ptr.unwrap().cast();
-
-        fn hi(v: &mut GuestAddress, x: u32) {
-            *v = (*v & 0xffff_ffff) | (u64::from(x) << 32)
-        }
-
-        fn lo(v: &mut GuestAddress, x: u32) {
-            *v = (*v & !0xffff_ffff) | u64::from(x)
-        }
-
-        let data_u32 = byte_order::read_le_u32(data);
-        match offset {
-            0x14 => {
-                self.features_select = data_u32;
-
-                let mut features = self
-                    .locked_device()
-                    .avail_features_by_page(self.features_select);
-                if self.features_select == 1 {
-                    features |= 0x1; // enable support of VirtIO Version 1
-                }
-
-                unsafe { mem_u32_ptr.add(4).write_volatile(features) };
-            }
-            0x20 => {
-                self.locked_device()
-                    .ack_features_by_page(self.acked_features_select, data_u32);
-            }
-            0x24 => {
-                self.acked_features_select = data_u32;
-            }
-            0x30 => {
-                self.queue_select = data_u32;
-            }
-            0x38 => self.update_queue_field(|q| q.size = (data_u32 & 0xffff) as u16),
-            0x44 => self.update_queue_field(|q| q.ready = data_u32 == 1),
-            0x64 => {
-                unsafe { mem_u32_ptr.add(24).write_volatile(1) };
-            }
-            0x70 => {
-                self.set_device_status(data_u32);
-                unsafe { mem_u32_ptr.add(28).write_volatile(data_u32) };
-            }
-            0x80 => self.update_queue_field(|q| lo(&mut q.desc_table_address, data_u32)),
-            0x84 => self.update_queue_field(|q| hi(&mut q.desc_table_address, data_u32)),
-            0x90 => self.update_queue_field(|q| lo(&mut q.avail_ring_address, data_u32)),
-            0x94 => self.update_queue_field(|q| hi(&mut q.avail_ring_address, data_u32)),
-            0xa0 => self.update_queue_field(|q| lo(&mut q.used_ring_address, data_u32)),
-            0xa4 => self.update_queue_field(|q| hi(&mut q.used_ring_address, data_u32)),
-            0x100..=0xfff => {
-                if self.check_device_status(device_status::DRIVER, device_status::FAILED) {
                     self.locked_device().write_config(offset - 0x100, data)
                 } else {
                     warn!("can not write to device config data area before driver is ready");
