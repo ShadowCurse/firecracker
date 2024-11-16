@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::fs::File;
-use std::io::{Seek, SeekFrom, Write};
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::MetadataExt;
 
-use vm_memory::{GuestMemoryError, ReadVolatile, WriteVolatile};
+use vm_memory::GuestMemoryError;
 
 use crate::vstate::memory::{GuestAddress, GuestMemory, GuestMemoryMmap};
 
@@ -22,7 +23,8 @@ pub enum SyncIoError {
 
 #[derive(Debug)]
 pub struct SyncFileEngine {
-    file: File,
+    // file: File,
+    file_mem: &'static mut [u8],
 }
 
 // SAFETY: `File` is send and ultimately a POD.
@@ -30,17 +32,50 @@ unsafe impl Send for SyncFileEngine {}
 
 impl SyncFileEngine {
     pub fn from_file(file: File) -> SyncFileEngine {
-        SyncFileEngine { file }
+        let prot = libc::PROT_READ | libc::PROT_WRITE;
+        let flags = libc::MAP_PRIVATE;
+        let size = file.metadata().unwrap().size();
+
+        let ptr = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                size as usize,
+                prot,
+                flags,
+                file.as_raw_fd(),
+                0,
+            )
+        };
+        let file_mem = unsafe { std::slice::from_raw_parts_mut(ptr.cast(), size as usize) };
+        SyncFileEngine { file_mem }
     }
 
-    #[cfg(test)]
-    pub fn file(&self) -> &File {
-        &self.file
-    }
+    // #[cfg(test)]
+    // pub fn file(&self) -> &File {
+    //     &self.file
+    // }
 
     /// Update the backing file of the engine
     pub fn update_file(&mut self, file: File) {
-        self.file = file
+        unsafe {
+            libc::munmap(self.file_mem.as_mut_ptr().cast(), self.file_mem.len());
+        };
+        let prot = libc::PROT_READ | libc::PROT_WRITE;
+        let flags = libc::MAP_PRIVATE;
+        let size = file.metadata().unwrap().size();
+
+        let ptr = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                size as usize,
+                prot,
+                flags,
+                file.as_raw_fd(),
+                0,
+            )
+        };
+        let file_mem = unsafe { std::slice::from_raw_parts_mut(ptr.cast(), size as usize) };
+        self.file_mem = file_mem;
     }
 
     pub fn read(
@@ -50,12 +85,17 @@ impl SyncFileEngine {
         addr: GuestAddress,
         count: u32,
     ) -> Result<u32, SyncIoError> {
-        self.file
-            .seek(SeekFrom::Start(offset))
-            .map_err(SyncIoError::Seek)?;
-        mem.get_slice(addr, count as usize)
-            .and_then(|mut slice| Ok(self.file.read_exact_volatile(&mut slice)?))
-            .map_err(SyncIoError::Transfer)?;
+        let mem_slice = unsafe {
+            std::slice::from_raw_parts_mut(
+                mem.get_slice(addr, count as usize)
+                    .unwrap()
+                    .ptr_guard_mut()
+                    .as_ptr(),
+                count as usize,
+            )
+        };
+        mem_slice
+            .copy_from_slice(&self.file_mem[offset as usize..offset as usize + count as usize]);
         Ok(count)
     }
 
@@ -66,19 +106,28 @@ impl SyncFileEngine {
         addr: GuestAddress,
         count: u32,
     ) -> Result<u32, SyncIoError> {
-        self.file
-            .seek(SeekFrom::Start(offset))
-            .map_err(SyncIoError::Seek)?;
-        mem.get_slice(addr, count as usize)
-            .and_then(|slice| Ok(self.file.write_all_volatile(&slice)?))
-            .map_err(SyncIoError::Transfer)?;
+        let mem_slice = unsafe {
+            std::slice::from_raw_parts_mut(
+                mem.get_slice(addr, count as usize)
+                    .unwrap()
+                    .ptr_guard_mut()
+                    .as_ptr(),
+                count as usize,
+            )
+        };
+        self.file_mem[offset as usize..offset as usize + count as usize]
+            .copy_from_slice(&mem_slice);
         Ok(count)
     }
 
     pub fn flush(&mut self) -> Result<(), SyncIoError> {
-        // flush() first to force any cached data out of rust buffers.
-        self.file.flush().map_err(SyncIoError::Flush)?;
-        // Sync data out to physical media on host.
-        self.file.sync_all().map_err(SyncIoError::SyncAll)
+        unsafe {
+            libc::msync(
+                self.file_mem.as_mut_ptr().cast(),
+                self.file_mem.len(),
+                libc::MS_ASYNC,
+            )
+        };
+        return Ok(());
     }
 }
