@@ -404,11 +404,46 @@ impl VirtioBlock {
 
     /// Device specific function for peaking inside a queue and processing descriptors.
     pub fn process_queue(&mut self, queue_index: usize) {
+        if false {
+            unsafe {
+                static mut PREVIOUS_CALL_TIME: std::time::Instant = unsafe { std::mem::zeroed() };
+                static mut TOTAL_TIME: u128 = 0;
+                static mut TIME_N: u128 = 0;
+                let now = std::time::Instant::now();
+                log::info!(
+                    "block: time since last call: {:#?}",
+                    now - PREVIOUS_CALL_TIME
+                );
+                TOTAL_TIME += (now - PREVIOUS_CALL_TIME).as_nanos();
+                TIME_N += 1;
+                PREVIOUS_CALL_TIME = now;
+                if TIME_N % 100 == 0 {
+                    log::info!("block: AVG time: {}", TOTAL_TIME as f64 / TIME_N as f64);
+                }
+            }
+        }
+
         // This is safe since we checked in the event handler that the device is activated.
         let mem = self.device_state.mem().unwrap();
 
         let queue = &mut self.queues[queue_index];
         let mut used_any = false;
+
+        if false {
+            unsafe {
+                static mut QUEUE_LEN: u64 = 0;
+                static mut QUEUE_LEN_N: u64 = 0;
+                QUEUE_LEN += queue.len() as u64;
+                QUEUE_LEN_N += 1;
+
+                if QUEUE_LEN_N % 100 == 0 {
+                    log::info!(
+                        "block: AVG queue len: {} ({}/{})",
+                        QUEUE_LEN as f64 / QUEUE_LEN_N as f64, QUEUE_LEN, QUEUE_LEN_N,
+                    );
+                }
+            }
+        }
 
         while let Some(head) = queue.pop_or_enable_notification() {
             self.metrics.remaining_reqs_count.add(queue.len().into());
