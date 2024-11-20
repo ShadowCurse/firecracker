@@ -19,14 +19,15 @@ pub use crate::devices::virtio::block::CacheType;
 use crate::devices::virtio::queue::FIRECRACKER_MAX_QUEUE_SIZE;
 
 /// Size of config space for block device.
-pub const BLOCK_CONFIG_SPACE_SIZE: usize = 8;
+pub const BLOCK_CONFIG_SPACE_SIZE: usize = 40;
 /// Sector shift for block device.
 pub const SECTOR_SHIFT: u8 = 9;
 /// Size of block sector.
 pub const SECTOR_SIZE: u32 = (0x01_u32) << SECTOR_SHIFT;
 /// The number of queues of block device.
-pub const BLOCK_NUM_QUEUES: usize = 1;
-pub const BLOCK_QUEUE_SIZES: [u16; BLOCK_NUM_QUEUES] = [FIRECRACKER_MAX_QUEUE_SIZE];
+pub const BLOCK_NUM_QUEUES: usize = 2;
+pub const BLOCK_QUEUE_SIZES: [u16; BLOCK_NUM_QUEUES] =
+    [FIRECRACKER_MAX_QUEUE_SIZE, FIRECRACKER_MAX_QUEUE_SIZE];
 // The virtio queue can hold up to 256 descriptors, but 1 request spreads across 2-3 descriptors.
 // So we can use 128 IO_URING entries without ever triggering a FullSq Error.
 /// Maximum number of io uring entries we allow in the queue.

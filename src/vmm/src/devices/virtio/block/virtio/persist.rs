@@ -98,7 +98,10 @@ impl Persist<'_> for VirtioBlock {
             state.file_engine_type.into(),
         )?;
 
-        let queue_evts = [EventFd::new(libc::EFD_NONBLOCK).map_err(VirtioBlockError::EventFd)?];
+        let queue_evts = [
+            EventFd::new(libc::EFD_NONBLOCK).map_err(VirtioBlockError::EventFd)?,
+            EventFd::new(libc::EFD_NONBLOCK).map_err(VirtioBlockError::EventFd)?,
+        ];
 
         let queues = state
             .virtio_state

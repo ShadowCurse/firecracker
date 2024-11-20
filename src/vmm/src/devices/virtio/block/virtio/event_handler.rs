@@ -10,14 +10,22 @@ use crate::logger::{error, warn};
 
 impl VirtioBlock {
     const PROCESS_ACTIVATE: u32 = 0;
-    const PROCESS_QUEUE: u32 = 1;
-    const PROCESS_RATE_LIMITER: u32 = 2;
-    const PROCESS_ASYNC_COMPLETION: u32 = 3;
+    const PROCESS_QUEUE_0: u32 = 1;
+    const PROCESS_QUEUE_1: u32 = 2;
+    const PROCESS_RATE_LIMITER: u32 = 3;
+    const PROCESS_ASYNC_COMPLETION: u32 = 4;
 
     fn register_runtime_events(&self, ops: &mut EventOps) {
         if let Err(err) = ops.add(Events::with_data(
             &self.queue_evts[0],
-            Self::PROCESS_QUEUE,
+            Self::PROCESS_QUEUE_0,
+            EventSet::IN,
+        )) {
+            error!("Failed to register queue event: {}", err);
+        }
+        if let Err(err) = ops.add(Events::with_data(
+            &self.queue_evts[1],
+            Self::PROCESS_QUEUE_1,
             EventSet::IN,
         )) {
             error!("Failed to register queue event: {}", err);
@@ -85,7 +93,8 @@ impl MutEventSubscriber for VirtioBlock {
         if self.is_activated() {
             match source {
                 Self::PROCESS_ACTIVATE => self.process_activate_event(ops),
-                Self::PROCESS_QUEUE => self.process_queue_event(),
+                Self::PROCESS_QUEUE_0 => self.process_queue_event(0),
+                Self::PROCESS_QUEUE_1 => self.process_queue_event(1),
                 Self::PROCESS_RATE_LIMITER => self.process_rate_limiter_event(),
                 Self::PROCESS_ASYNC_COMPLETION => self.process_async_completion_event(),
                 _ => warn!("Block: Spurious event received: {:?}", source),

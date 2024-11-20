@@ -18,16 +18,16 @@ use serde::{Deserialize, Serialize};
 use vmm_sys_util::eventfd::EventFd;
 
 use super::io::async_io;
-use super::request::*;
 use super::{
     io as block_io, VirtioBlockError, BLOCK_CONFIG_SPACE_SIZE, BLOCK_QUEUE_SIZES, SECTOR_SHIFT,
     SECTOR_SIZE,
 };
+use super::{request::*, BLOCK_NUM_QUEUES};
 use crate::devices::virtio::block::virtio::metrics::{BlockDeviceMetrics, BlockMetricsPerDevice};
 use crate::devices::virtio::block::CacheType;
 use crate::devices::virtio::device::{DeviceState, IrqTrigger, IrqType, VirtioDevice};
 use crate::devices::virtio::gen::virtio_blk::{
-    VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_RO, VIRTIO_BLK_ID_BYTES, VIRTIO_F_VERSION_1,
+    VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO, VIRTIO_BLK_ID_BYTES, VIRTIO_F_VERSION_1,
 };
 use crate::devices::virtio::gen::virtio_ring::VIRTIO_RING_F_EVENT_IDX;
 use crate::devices::virtio::queue::Queue;
@@ -38,6 +38,46 @@ use crate::utils::u64_to_usize;
 use crate::vmm_config::drive::BlockDeviceConfig;
 use crate::vmm_config::RateLimiterConfig;
 use crate::vstate::memory::GuestMemoryMmap;
+
+#[derive(Default)]
+#[repr(C)]
+struct virtio_blk_config {
+    /* The capacity (in 512-byte sectors). */
+    capacity: u64,
+    /* The maximum segment size (if VIRTIO_BLK_F_SIZE_MAX) */
+    size_max: u32,
+    /* The maximum number of segments (if VIRTIO_BLK_F_SEG_MAX) */
+    seg_max: u32,
+    /* geometry of the device (if VIRTIO_BLK_F_GEOMETRY) */
+    geometry: u32,
+
+    /* block size of device (if VIRTIO_BLK_F_BLK_SIZE) */
+    blk_size: u32,
+
+    /* the next 4 entries are guarded by VIRTIO_BLK_F_TOPOLOGY  */
+    /* exponent for physical block per logical block. */
+    physical_block_exp: u8,
+    /* alignment offset in logical blocks. */
+    alignment_offset: u8,
+    /* minimum I/O size without performance penalty in logical blocks. */
+    min_io_size: u16,
+    /* optimal sustained I/O size in logical blocks. */
+    opt_io_size: u32,
+
+    /* writeback mode (if VIRTIO_BLK_F_CONFIG_WCE) */
+    wce: u8,
+    unused: u8,
+
+    /* number of vqs, only available when VIRTIO_BLK_F_MQ is set */
+    num_queues: u16,
+
+    /* the next 3 entries are guarded by VIRTIO_BLK_F_DISCARD */
+    /*
+     * The maximum discard sectors (in 512-byte sectors) for
+     * one segment.
+     */
+    max_discard_sectors: u32,
+}
 
 /// The engine file type, either Sync or Async (through io_uring).
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -161,10 +201,19 @@ impl DiskProperties {
     /// on the backing file size.
     pub fn virtio_block_config_space(&self) -> Vec<u8> {
         // The config space is little endian.
-        let mut config = Vec::with_capacity(BLOCK_CONFIG_SPACE_SIZE);
-        for i in 0..BLOCK_CONFIG_SPACE_SIZE {
-            config.push(((self.nsectors >> (8 * i)) & 0xff) as u8);
-        }
+        let mut config = vec![0u8; BLOCK_CONFIG_SPACE_SIZE];
+        let c = virtio_blk_config {
+            capacity: self.nsectors,
+            num_queues: BLOCK_NUM_QUEUES as u16,
+            ..Default::default()
+        };
+        let slice: &[u8] = unsafe {
+            std::slice::from_raw_parts(
+                std::mem::transmute(&c),
+                std::mem::size_of::<virtio_blk_config>(),
+            )
+        };
+        config.copy_from_slice(slice);
         config
     }
 }
@@ -251,7 +300,7 @@ pub struct VirtioBlock {
 
     // Transport related fields.
     pub queues: Vec<Queue>,
-    pub queue_evts: [EventFd; 1],
+    pub queue_evts: [EventFd; 2],
     pub device_state: DeviceState,
     pub irq_trigger: IrqTrigger,
 
@@ -300,6 +349,7 @@ impl VirtioBlock {
             .unwrap_or_default();
 
         let mut avail_features = (1u64 << VIRTIO_F_VERSION_1) | (1u64 << VIRTIO_RING_F_EVENT_IDX);
+        avail_features |= 1u64 << VIRTIO_BLK_F_MQ;
 
         if config.cache_type == CacheType::Writeback {
             avail_features |= 1u64 << VIRTIO_BLK_F_FLUSH;
@@ -309,7 +359,10 @@ impl VirtioBlock {
             avail_features |= 1u64 << VIRTIO_BLK_F_RO;
         };
 
-        let queue_evts = [EventFd::new(libc::EFD_NONBLOCK).map_err(VirtioBlockError::EventFd)?];
+        let queue_evts = [
+            EventFd::new(libc::EFD_NONBLOCK).map_err(VirtioBlockError::EventFd)?,
+            EventFd::new(libc::EFD_NONBLOCK).map_err(VirtioBlockError::EventFd)?,
+        ];
 
         let queues = BLOCK_QUEUE_SIZES.iter().map(|&s| Queue::new(s)).collect();
 
@@ -356,9 +409,9 @@ impl VirtioBlock {
     ///
     /// This function is called by the event manager when the guest notifies us
     /// about new buffers in the queue.
-    pub(crate) fn process_queue_event(&mut self) {
+    pub(crate) fn process_queue_event(&mut self, q: usize) {
         self.metrics.queue_event_count.inc();
-        if let Err(err) = self.queue_evts[0].read() {
+        if let Err(err) = self.queue_evts[q].read() {
             error!("Failed to get queue event: {:?}", err);
             self.metrics.event_fails.inc();
         } else if self.rate_limiter.is_blocked() {
@@ -366,13 +419,13 @@ impl VirtioBlock {
         } else if self.is_io_engine_throttled {
             self.metrics.io_engine_throttled_events.inc();
         } else {
-            self.process_virtio_queues();
+            self.process_virtio_queues(q);
         }
     }
 
     /// Process device virtio queue(s).
-    pub fn process_virtio_queues(&mut self) {
-        self.process_queue(0);
+    pub fn process_virtio_queues(&mut self, q: usize) {
+        self.process_queue(q);
     }
 
     pub(crate) fn process_rate_limiter_event(&mut self) {
@@ -439,7 +492,9 @@ impl VirtioBlock {
                 if QUEUE_LEN_N % 100 == 0 {
                     log::info!(
                         "block: AVG queue len: {} ({}/{})",
-                        QUEUE_LEN as f64 / QUEUE_LEN_N as f64, QUEUE_LEN, QUEUE_LEN_N,
+                        QUEUE_LEN as f64 / QUEUE_LEN_N as f64,
+                        QUEUE_LEN,
+                        QUEUE_LEN_N,
                     );
                 }
             }
@@ -634,6 +689,7 @@ impl VirtioDevice for VirtioBlock {
     }
 
     fn read_config(&self, offset: u64, mut data: &mut [u8]) {
+        log::info!("BLOCK: reading config at offset: {offset}");
         let config_len = self.config_space.len() as u64;
         if offset >= config_len {
             error!("Failed to read config space");

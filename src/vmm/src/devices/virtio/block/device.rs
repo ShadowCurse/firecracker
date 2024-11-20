@@ -85,7 +85,10 @@ impl Block {
 
     pub fn process_virtio_queues(&mut self) {
         match self {
-            Self::Virtio(b) => b.process_virtio_queues(),
+            Self::Virtio(b) => {
+                b.process_virtio_queues(0);
+                b.process_virtio_queues(1);
+            }
             Self::VhostUser(_) => {}
         }
     }

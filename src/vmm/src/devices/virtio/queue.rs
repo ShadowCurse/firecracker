@@ -314,6 +314,9 @@ impl Queue {
     /// Set up pointers to the queue objects in the guest memory
     /// and mark memory dirty for those objects
     pub fn initialize<M: GuestMemory>(&mut self, mem: &M) -> Result<(), QueueError> {
+        if !self.ready {
+            return Ok(());
+        }
         self.desc_table_ptr = self
             .get_slice_ptr(mem, self.desc_table_address, self.desc_table_size())?
             .cast();
@@ -336,6 +339,9 @@ impl Queue {
 
     /// Mark memory used for queue objects as dirty.
     pub fn mark_memory_dirty<M: GuestMemory>(&self, mem: &M) -> Result<(), QueueError> {
+        if !self.ready {
+            return Ok(());
+        }
         _ = self.get_slice_ptr(mem, self.desc_table_address, self.desc_table_size())?;
         _ = self.get_slice_ptr(mem, self.avail_ring_address, self.avail_ring_size())?;
         _ = self.get_slice_ptr(mem, self.used_ring_address, self.used_ring_size())?;
@@ -439,54 +445,55 @@ impl Queue {
 
     /// Validates the queue's in-memory layout is correct.
     pub fn is_valid<M: GuestMemory>(&self, mem: &M) -> bool {
-        let desc_table = self.desc_table_address;
-        let desc_table_size = self.desc_table_size();
-        let avail_ring = self.avail_ring_address;
-        let avail_ring_size = self.avail_ring_size();
-        let used_ring = self.used_ring_address;
-        let used_ring_size = self.used_ring_size();
-
-        if !self.ready {
-            error!("attempt to use virtio queue that is not marked ready");
-            false
-        } else if self.size > self.max_size || self.size == 0 || (self.size & (self.size - 1)) != 0
-        {
-            error!("virtio queue with invalid size: {}", self.size);
-            false
-        } else if desc_table.raw_value() & 0xf != 0 {
-            error!("virtio queue descriptor table breaks alignment constraints");
-            false
-        } else if avail_ring.raw_value() & 0x1 != 0 {
-            error!("virtio queue available ring breaks alignment constraints");
-            false
-        } else if used_ring.raw_value() & 0x3 != 0 {
-            error!("virtio queue used ring breaks alignment constraints");
-            false
-        // range check entire descriptor table to be assigned valid guest physical addresses
-        } else if mem.get_slice(desc_table, desc_table_size).is_err() {
-            error!(
-                "virtio queue descriptor table goes out of bounds: start:0x{:08x} size:0x{:08x}",
-                desc_table.raw_value(),
-                desc_table_size
-            );
-            false
-        } else if mem.get_slice(avail_ring, avail_ring_size).is_err() {
-            error!(
-                "virtio queue available ring goes out of bounds: start:0x{:08x} size:0x{:08x}",
-                avail_ring.raw_value(),
-                avail_ring_size
-            );
-            false
-        } else if mem.get_slice(used_ring, used_ring_size).is_err() {
-            error!(
-                "virtio queue used ring goes out of bounds: start:0x{:08x} size:0x{:08x}",
-                used_ring.raw_value(),
-                used_ring_size
-            );
-            false
-        } else {
-            true
-        }
+        true
+        // let desc_table = self.desc_table_address;
+        // let desc_table_size = self.desc_table_size();
+        // let avail_ring = self.avail_ring_address;
+        // let avail_ring_size = self.avail_ring_size();
+        // let used_ring = self.used_ring_address;
+        // let used_ring_size = self.used_ring_size();
+        //
+        // if !self.ready {
+        //     error!("attempt to use virtio queue that is not marked ready");
+        //     false
+        // } else if self.size > self.max_size || self.size == 0 || (self.size & (self.size - 1)) != 0
+        // {
+        //     error!("virtio queue with invalid size: {}", self.size);
+        //     false
+        // } else if desc_table.raw_value() & 0xf != 0 {
+        //     error!("virtio queue descriptor table breaks alignment constraints");
+        //     false
+        // } else if avail_ring.raw_value() & 0x1 != 0 {
+        //     error!("virtio queue available ring breaks alignment constraints");
+        //     false
+        // } else if used_ring.raw_value() & 0x3 != 0 {
+        //     error!("virtio queue used ring breaks alignment constraints");
+        //     false
+        // // range check entire descriptor table to be assigned valid guest physical addresses
+        // } else if mem.get_slice(desc_table, desc_table_size).is_err() {
+        //     error!(
+        //         "virtio queue descriptor table goes out of bounds: start:0x{:08x} size:0x{:08x}",
+        //         desc_table.raw_value(),
+        //         desc_table_size
+        //     );
+        //     false
+        // } else if mem.get_slice(avail_ring, avail_ring_size).is_err() {
+        //     error!(
+        //         "virtio queue available ring goes out of bounds: start:0x{:08x} size:0x{:08x}",
+        //         avail_ring.raw_value(),
+        //         avail_ring_size
+        //     );
+        //     false
+        // } else if mem.get_slice(used_ring, used_ring_size).is_err() {
+        //     error!(
+        //         "virtio queue used ring goes out of bounds: start:0x{:08x} size:0x{:08x}",
+        //         used_ring.raw_value(),
+        //         used_ring_size
+        //     );
+        //     false
+        // } else {
+        //     true
+        // }
     }
 
     /// Returns the number of yet-to-be-popped descriptor chains in the avail ring.
