@@ -147,12 +147,12 @@ def test_block_performance(
     vcpus,
     fio_mode,
     fio_block_size,
-    io_engine,
     metrics,
 ):
     """
     Execute block device emulation benchmarking scenarios.
     """
+    io_engine = "Sync"
     vm = microvm_factory.build(guest_kernel_acpi, rootfs, monitor_memory=False)
     vm.spawn(log_level="Info", emit_metrics=True)
     vm.basic_config(vcpu_count=vcpus, mem_size_mib=GUEST_MEM_MIB)
