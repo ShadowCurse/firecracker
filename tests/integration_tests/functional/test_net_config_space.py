@@ -310,7 +310,8 @@ def _get_net_mem_addr_base(ssh_connection, if_name):
         hex_prefix = "0x"
         for idx, dev in enumerate(virtio_devs):
             _, guest_if_name, _ = ssh_connection.run(
-                cmd.format(sys_virtio_mmio_cmdline, dev, idx)
+                cmd.format(sys_virtio_mmio_cmdline, dev, idx),
+                check=False,
             )
             if guest_if_name.strip() == if_name:
                 return hex_prefix + devs_addr[int(idx)]
