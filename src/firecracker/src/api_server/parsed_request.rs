@@ -9,6 +9,8 @@ use serde_json::Value;
 use vmm::logger::{error, info, log_enabled, Level};
 use vmm::rpc_interface::{VmmAction, VmmActionError, VmmData};
 
+use crate::api_server::request::pmem::parse_put_pmem;
+
 use super::request::actions::parse_put_actions;
 use super::request::balloon::{parse_get_balloon, parse_patch_balloon, parse_put_balloon};
 use super::request::boot_source::parse_put_boot_source;
@@ -89,6 +91,7 @@ impl TryFrom<&Request> for ParsedRequest {
             (Method::Put, "boot-source", Some(body)) => parse_put_boot_source(body),
             (Method::Put, "cpu-config", Some(body)) => parse_put_cpu_config(body),
             (Method::Put, "drives", Some(body)) => parse_put_drive(body, path_tokens.next()),
+            (Method::Put, "pmem", Some(body)) => parse_put_pmem(body, path_tokens.next()),
             (Method::Put, "logger", Some(body)) => parse_put_logger(body),
             (Method::Put, "machine-config", Some(body)) => parse_put_machine_config(body),
             (Method::Put, "metrics", Some(body)) => parse_put_metrics(body),

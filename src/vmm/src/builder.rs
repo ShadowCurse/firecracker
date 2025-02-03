@@ -7,6 +7,7 @@
 use std::convert::TryFrom;
 use std::fmt::Debug;
 use std::io::{self, Seek, SeekFrom};
+use std::os::fd::AsRawFd;
 #[cfg(feature = "gdb")]
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -21,7 +22,7 @@ use linux_loader::loader::pe::PE as Loader;
 use linux_loader::loader::KernelLoader;
 use userfaultfd::Uffd;
 use utils::time::TimestampUs;
-use vm_memory::ReadVolatile;
+use vm_memory::{Address, ReadVolatile};
 #[cfg(target_arch = "aarch64")]
 use vm_superio::Rtc;
 use vm_superio::Serial;
@@ -54,6 +55,7 @@ use crate::devices::virtio::block::device::Block;
 use crate::devices::virtio::device::VirtioDevice;
 use crate::devices::virtio::mmio::MmioTransport;
 use crate::devices::virtio::net::Net;
+use crate::devices::virtio::pmem::device::Pmem;
 use crate::devices::virtio::rng::Entropy;
 use crate::devices::virtio::vsock::{Vsock, VsockUnixBackend};
 use crate::devices::BusDevice;
@@ -328,6 +330,16 @@ pub fn build_microvm_for_boot(
         &mut vmm,
         &mut boot_cmdline,
         vm_resources.net_builder.iter(),
+        event_manager,
+    )?;
+    debug!(
+        "vmm: atthaching {} pmem devices",
+        vm_resources.pmem.devices.len()
+    );
+    attach_pmem_devices(
+        &mut vmm,
+        &mut boot_cmdline,
+        vm_resources.pmem.devices.iter(),
         event_manager,
     )?;
 
@@ -1009,6 +1021,69 @@ fn attach_net_devices<'a, I: Iterator<Item = &'a Arc<Mutex<Net>>> + Debug>(
         let id = net_device.lock().expect("Poisoned lock").id().clone();
         // The device mutex mustn't be locked here otherwise it will deadlock.
         attach_virtio_device(event_manager, vmm, id, net_device.clone(), cmdline, false)?;
+    }
+    Ok(())
+}
+
+fn attach_pmem_devices<'a, I: Iterator<Item = &'a Arc<Mutex<Pmem>>> + Debug>(
+    vmm: &mut Vmm,
+    cmdline: &mut LoaderKernelCmdline,
+    pmem_devices: I,
+    event_manager: &mut EventManager,
+) -> Result<(), StartMicrovmError> {
+    const M: u64 = 2 * 1024 * 1024;
+    const PMEM_SLOTS_START: u32 = 10;
+    let mut addr = vmm.guest_memory.last_addr().unchecked_add(1).0;
+    for (i, dev) in pmem_devices.enumerate() {
+        addr = (addr + M) & !(M - 1);
+        let id = {
+            let mut locked_dev = dev.lock().expect("Poisoned lock");
+
+            if locked_dev.root_device {
+                let s = format!("root=/dev/pmem{i} rw rootflags=dax");
+                cmdline.insert_str(s)?;
+            }
+
+            let mapping_size = locked_dev.config_space.size;
+            let file_size = locked_dev.backing_file_size;
+
+            unsafe {
+                let m = libc::mmap(
+                    std::ptr::null_mut(),
+                    mapping_size as usize,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE,
+                    -1,
+                    0,
+                );
+                _ = libc::mmap(
+                    m,
+                    file_size as usize,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_PRIVATE | libc::MAP_NORESERVE | libc::MAP_FIXED,
+                    locked_dev.backing_file.as_raw_fd(),
+                    0,
+                );
+
+                use kvm_bindings::kvm_userspace_memory_region;
+                let memory_region = kvm_userspace_memory_region {
+                    slot: PMEM_SLOTS_START + i as u32,
+                    guest_phys_addr: addr,
+                    memory_size: mapping_size,
+                    userspace_addr: m as u64,
+                    flags: 0,
+                };
+
+                vmm.vm.fd.set_user_memory_region(memory_region).unwrap();
+            }
+
+            locked_dev.config_space.start = addr;
+            addr += mapping_size;
+
+            locked_dev.id().to_string()
+        };
+
+        attach_virtio_device(event_manager, vmm, id, dev.clone(), cmdline, false)?;
     }
     Ok(())
 }

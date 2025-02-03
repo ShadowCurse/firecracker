@@ -8,6 +8,7 @@
 #[cfg(target_arch = "x86_64")]
 use std::fmt;
 
+use kvm_bindings::KVM_MEM_READONLY;
 #[cfg(target_arch = "x86_64")]
 use kvm_bindings::{
     kvm_clock_data, kvm_irqchip, kvm_pit_config, kvm_pit_state2, KVM_CLOCK_TSC_STABLE,
@@ -16,6 +17,7 @@ use kvm_bindings::{
 use kvm_bindings::{kvm_userspace_memory_region, KVM_MEM_LOG_DIRTY_PAGES};
 // use kvm_ioctls::{Kvm, VmFd};
 use kvm_ioctls::VmFd;
+use log::debug;
 use serde::{Deserialize, Serialize};
 
 #[cfg(target_arch = "aarch64")]
@@ -99,7 +101,7 @@ pub enum RestoreStateError {
 /// A wrapper around creating and using a VM.
 #[derive(Debug)]
 pub struct Vm {
-    fd: VmFd,
+    pub fd: VmFd,
 
     // Arm specific fields.
     // On aarch64 we need to keep around the fd obtained by creating the VGIC device.
@@ -130,7 +132,7 @@ impl Vm {
 
     /// Initializes the guest memory.
     pub fn memory_init(&self, guest_mem: &GuestMemoryMmap) -> Result<(), VmError> {
-        self.set_kvm_memory_regions(guest_mem)?;
+        self.set_kvm_memory_regions(0, false, guest_mem)?;
         #[cfg(target_arch = "x86_64")]
         self.fd
             .set_tss_address(u64_to_usize(crate::arch::x86_64::layout::KVM_TSS_ADDRESS))
@@ -141,17 +143,23 @@ impl Vm {
 
     pub(crate) fn set_kvm_memory_regions(
         &self,
+        slot_offset: u32,
+        read_only: bool,
         guest_mem: &GuestMemoryMmap,
     ) -> Result<(), VmError> {
         guest_mem
             .iter()
-            .zip(0u32..)
+            .zip(slot_offset..)
             .try_for_each(|(region, slot)| {
-                let flags = if region.bitmap().is_some() {
+                let mut flags = if region.bitmap().is_some() {
                     KVM_MEM_LOG_DIRTY_PAGES
                 } else {
                     0
                 };
+
+                if read_only {
+                    flags |= KVM_MEM_READONLY;
+                }
 
                 let memory_region = kvm_userspace_memory_region {
                     slot,
@@ -161,6 +169,8 @@ impl Vm {
                     userspace_addr: guest_mem.get_host_address(region.start_addr()).unwrap() as u64,
                     flags,
                 };
+
+                debug!("vm: setting memory region: {memory_region:#?}");
 
                 // SAFETY: Safe because the fd is a valid KVM file descriptor.
                 unsafe { self.fd.set_user_memory_region(memory_region) }
@@ -449,13 +459,13 @@ pub(crate) mod tests {
         let (_, vm) = setup_vm();
 
         let gm = single_region_mem(0x1000);
-        let res = vm.set_kvm_memory_regions(&gm);
+        let res = vm.set_kvm_memory_regions(0, &gm);
         res.unwrap();
 
         // Trying to set a memory region with a size that is not a multiple of GUEST_PAGE_SIZE
         // will result in error.
         let gm = single_region_mem(0x10);
-        let res = vm.set_kvm_memory_regions(&gm);
+        let res = vm.set_kvm_memory_regions(0, &gm);
         assert_eq!(
             res.unwrap_err().to_string(),
             "Cannot set the memory regions: Invalid argument (os error 22)"

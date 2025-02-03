@@ -27,6 +27,7 @@ use crate::vmm_config::machine_config::{
 use crate::vmm_config::metrics::{init_metrics, MetricsConfig, MetricsConfigError};
 use crate::vmm_config::mmds::{MmdsConfig, MmdsConfigError};
 use crate::vmm_config::net::*;
+use crate::vmm_config::pmem::{PmemBuilder, PmemConfigError, PmemDeviceConfig};
 use crate::vmm_config::vsock::*;
 use crate::vstate::memory::{GuestMemoryExtension, GuestMemoryMmap, MemoryError};
 
@@ -59,6 +60,8 @@ pub enum ResourcesError {
     VsockDevice(#[from] VsockConfigError),
     /// Entropy device error: {0}
     EntropyDevice(#[from] EntropyDeviceError),
+    /// Pmem device error: {0}
+    PmemDevice(#[from] PmemConfigError),
 }
 
 /// Used for configuring a vmm from one single json passed to the Firecracker process.
@@ -86,6 +89,8 @@ pub struct VmmConfig {
     vsock_device: Option<VsockDeviceConfig>,
     #[serde(rename = "entropy")]
     entropy_device: Option<EntropyDeviceConfig>,
+    #[serde(rename = "pmem")]
+    pmem_devices: Vec<PmemDeviceConfig>,
 }
 
 /// A data structure that encapsulates the device configurations
@@ -106,6 +111,8 @@ pub struct VmResources {
     pub net_builder: NetBuilder,
     /// The entropy device builder.
     pub entropy: EntropyDeviceBuilder,
+    /// The pmem devices.
+    pub pmem: PmemBuilder,
     /// The optional Mmds data store.
     // This is initialised on demand (if ever used), so that we don't allocate it unless it's
     // actually used.
@@ -158,6 +165,10 @@ impl VmResources {
 
         for net_config in vmm_config.net_devices.into_iter() {
             resources.build_net_device(net_config)?;
+        }
+
+        for pmem_config in vmm_config.pmem_devices.into_iter() {
+            resources.build_pmem_device(pmem_config)?;
         }
 
         if let Some(vsock_config) = vmm_config.vsock_device {
@@ -357,6 +368,12 @@ impl VmResources {
         Ok(())
     }
 
+    /// Builds a pmem device to be attached when the VM starts.
+    pub fn build_pmem_device(&mut self, body: PmemDeviceConfig) -> Result<(), PmemConfigError> {
+        let _ = self.pmem.build(body)?;
+        Ok(())
+    }
+
     /// Sets a vsock device to be attached when the VM starts.
     pub fn set_vsock_device(&mut self, config: VsockDeviceConfig) -> Result<(), VsockConfigError> {
         self.vsock.insert(config)
@@ -471,7 +488,8 @@ impl VmResources {
                 self.machine_config.huge_pages,
             )
         } else {
-            let regions = crate::arch::arch_memory_regions(self.machine_config.mem_size_mib << 20);
+            let regions =
+                crate::arch::arch_memory_regions(0, self.machine_config.mem_size_mib << 20);
             GuestMemoryMmap::anonymous(
                 regions.into_iter(),
                 self.machine_config.track_dirty_pages,
@@ -495,6 +513,7 @@ impl From<&VmResources> for VmmConfig {
             net_devices: resources.net_builder.configs(),
             vsock_device: resources.vsock.config(),
             entropy_device: resources.entropy.config(),
+            pmem_devices: resources.pmem.configs(),
         }
     }
 }
@@ -604,6 +623,7 @@ mod tests {
             boot_timer: false,
             mmds_size_limit: HTTP_MAX_PAYLOAD_SIZE,
             entropy: Default::default(),
+            pmem: Default::default(),
         }
     }
 

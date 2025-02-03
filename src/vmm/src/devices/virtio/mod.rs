@@ -27,6 +27,7 @@ pub mod test_utils;
 pub mod vhost_user;
 pub mod vhost_user_metrics;
 pub mod vsock;
+pub mod pmem;
 
 /// When the driver initializes the device, it lets the device know about the
 /// completed stages using the Device Status Field.
@@ -56,6 +57,8 @@ pub const TYPE_BLOCK: u32 = 2;
 pub const TYPE_RNG: u32 = 4;
 /// Virtio balloon device ID.
 pub const TYPE_BALLOON: u32 = 5;
+/// Virtio pmem device ID.
+pub const TYPE_PMEM: u32 = 27; 
 
 /// Offset from the base MMIO address of a virtio device used by the guest to notify the device of
 /// queue events.
