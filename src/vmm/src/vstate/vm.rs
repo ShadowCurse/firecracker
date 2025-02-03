@@ -395,7 +395,6 @@ impl Vm {
         }
 
         self.common.guest_memory = new_guest_memory;
-
         Ok(())
     }
 

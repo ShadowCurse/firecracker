@@ -705,7 +705,7 @@ mod tests {
 
         guest_memory.store_dirty_bitmap(&dirty_bitmap, page_size);
 
-        // Assert that the bitmap now reports as being dirty maching the dirty bitmap
+        // Assert that the bitmap now reports as being dirty matching the dirty bitmap
         guest_memory.iter().for_each(|r| {
             assert!(r.bitmap().dirty_at(0));
             assert!(!r.bitmap().dirty_at(page_size));

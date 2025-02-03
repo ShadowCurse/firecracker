@@ -33,6 +33,7 @@ use crate::devices::acpi::vmgenid::VmGenIdError;
 use crate::devices::virtio::balloon::Balloon;
 use crate::devices::virtio::block::device::Block;
 use crate::devices::virtio::net::Net;
+use crate::devices::virtio::pmem::device::Pmem;
 use crate::devices::virtio::rng::Entropy;
 use crate::devices::virtio::vsock::{Vsock, VsockUnixBackend};
 #[cfg(feature = "gdb")]
@@ -229,6 +230,13 @@ pub fn build_microvm_for_boot(
         &vm,
         &mut boot_cmdline,
         vm_resources.net_builder.iter(),
+        event_manager,
+    )?;
+    attach_pmem_devices(
+        &mut device_manager,
+        &vm,
+        &mut boot_cmdline,
+        vm_resources.pmem.devices.iter(),
         event_manager,
     )?;
 
@@ -617,6 +625,40 @@ fn attach_net_devices<'a, I: Iterator<Item = &'a Arc<Mutex<Net>>> + Debug>(
         event_manager.add_subscriber(net_device.clone());
         // The device mutex mustn't be locked here otherwise it will deadlock.
         device_manager.attach_virtio_device(vm, id, net_device.clone(), cmdline, false)?;
+    }
+    Ok(())
+}
+
+fn attach_pmem_devices<'a, I: Iterator<Item = &'a Arc<Mutex<Pmem>>> + Debug>(
+    device_manager: &mut DeviceManager,
+    vm: &Arc<Vm>,
+    cmdline: &mut LoaderKernelCmdline,
+    pmem_devices: I,
+    event_manager: &mut EventManager,
+) -> Result<(), StartMicrovmError> {
+    use vm_memory::GuestMemory;
+    let mut addr = vm.common.guest_memory.last_addr().0 + 1;
+    for (i, device) in pmem_devices.enumerate() {
+        addr = crate::utils::align_up(addr, Pmem::ALIGNMENT);
+        let id = {
+            let mut locked_dev = device.lock().expect("Poisoned lock");
+
+            if locked_dev.root_device {
+                let s = format!("root=/dev/pmem{i} ro rootflags=dax");
+                cmdline.insert_str(s)?;
+            }
+            locked_dev.config_space.start = addr;
+            locked_dev.mem_slot = Pmem::MEM_SLOTS_START + i as u32;
+            locked_dev.set_mem_region(&vm.common.fd);
+
+            let mapping_size = locked_dev.config_space.size;
+            addr += mapping_size;
+
+            locked_dev.id().to_string()
+        };
+
+        event_manager.add_subscriber(device.clone());
+        device_manager.attach_virtio_device(vm, id, device.clone(), cmdline, false)?;
     }
     Ok(())
 }
