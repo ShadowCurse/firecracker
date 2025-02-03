@@ -30,6 +30,10 @@ use crate::devices::virtio::net::persist::{
 };
 use crate::devices::virtio::net::Net;
 use crate::devices::virtio::persist::{MmioTransportConstructorArgs, MmioTransportState};
+use crate::devices::virtio::pmem::device::Pmem;
+use crate::devices::virtio::pmem::persist::{
+    PmemConstructorArgs, PmemPersistError as PmemError, PmemState,
+};
 use crate::devices::virtio::rng::persist::{
     EntropyConstructorArgs, EntropyPersistError as EntropyError, EntropyState,
 };
@@ -40,7 +44,7 @@ use crate::devices::virtio::vsock::persist::{
 use crate::devices::virtio::vsock::{
     Vsock, VsockError, VsockUnixBackend, VsockUnixBackendError, TYPE_VSOCK,
 };
-use crate::devices::virtio::{TYPE_BALLOON, TYPE_BLOCK, TYPE_NET, TYPE_RNG};
+use crate::devices::virtio::{TYPE_BALLOON, TYPE_BLOCK, TYPE_NET, TYPE_PMEM, TYPE_RNG};
 use crate::mmds::data_store::MmdsVersion;
 use crate::resources::{ResourcesError, VmResources};
 use crate::snapshot::Persist;
@@ -72,6 +76,8 @@ pub enum DevicePersistError {
     MmdsConfig(#[from] MmdsConfigError),
     /// Entropy: {0}
     Entropy(#[from] EntropyError),
+    /// Pmem: {0}
+    Pmem(#[from] PmemError),
     /// Resource misconfiguration: {0}. Is the snapshot file corrupted?
     ResourcesError(#[from] ResourcesError),
 }
@@ -141,6 +147,19 @@ pub struct ConnectedEntropyState {
     pub device_info: MMIODeviceInfo,
 }
 
+/// Holds the state of a virtio block device connected to the MMIO space.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectedPmemState {
+    /// Device identifier.
+    pub device_id: String,
+    /// Device state.
+    pub device_state: PmemState,
+    /// Mmio transport state.
+    pub transport_state: MmioTransportState,
+    /// VmmResources.
+    pub device_info: MMIODeviceInfo,
+}
+
 /// Holds the state of a legacy device connected to the MMIO space.
 #[cfg(target_arch = "aarch64")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -194,6 +213,8 @@ pub struct DeviceStates {
     pub mmds_version: Option<MmdsVersionState>,
     /// Entropy device state.
     pub entropy_device: Option<ConnectedEntropyState>,
+    /// Pmem device states.
+    pub pmem_devices: Vec<ConnectedPmemState>,
 }
 
 /// A type used to extract the concrete `Arc<Mutex<T>>` for each of the device
@@ -205,6 +226,7 @@ pub enum SharedDeviceType {
     Balloon(Arc<Mutex<Balloon>>),
     Vsock(Arc<Mutex<Vsock<VsockUnixBackend>>>),
     Entropy(Arc<Mutex<Entropy>>),
+    Pmem(Arc<Mutex<Pmem>>),
 }
 
 pub struct MMIODevManagerConstructorArgs<'a> {
@@ -400,6 +422,15 @@ impl<'a> Persist<'a> for MMIODeviceManager {
                         transport_state,
                         device_info: device_info.clone(),
                     });
+                }
+                TYPE_PMEM => {
+                    let pmem = locked_device.as_mut_any().downcast_mut::<Pmem>().unwrap();
+                    states.pmem_devices.push(ConnectedPmemState {
+                        device_id: devid.clone(),
+                        device_state: pmem.save(),
+                        transport_state,
+                        device_info: device_info.clone(),
+                    })
                 }
                 _ => unreachable!(),
             };
@@ -648,6 +679,30 @@ impl<'a> Persist<'a> for MMIODeviceManager {
                 &entropy_state.device_id,
                 &entropy_state.transport_state,
                 &entropy_state.device_info,
+                constructor_args.event_manager,
+            )?;
+        }
+
+        for pmem_state in &state.pmem_devices {
+            let device = Arc::new(Mutex::new(Pmem::restore(
+                PmemConstructorArgs {
+                    mem,
+                    vm_fd: constructor_args.vm,
+                },
+                &pmem_state.device_state,
+            )?));
+
+            constructor_args
+                .vm_resources
+                .update_from_restored_device(SharedDeviceType::Pmem(device.clone()))?;
+
+            restore_helper(
+                device.clone(),
+                false,
+                device,
+                &pmem_state.device_id,
+                &pmem_state.transport_state,
+                &pmem_state.device_info,
                 constructor_args.event_manager,
             )?;
         }

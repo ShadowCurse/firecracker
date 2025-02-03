@@ -45,3 +45,8 @@ pub const fn usize_to_u64(num: usize) -> u64 {
 pub const fn wrap_usize_to_u32(num: usize) -> Wrapping<u32> {
     Wrapping(((num as u64) & 0xFFFFFFFF) as u32)
 }
+
+pub const fn align_up(addr: u64, align: u64) -> u64 {
+    debug_assert!(align != 0);
+    (addr + align) & !(align - 1)
+}

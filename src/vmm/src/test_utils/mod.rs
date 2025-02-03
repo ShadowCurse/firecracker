@@ -41,7 +41,7 @@ pub fn multi_region_mem(regions: &[(GuestAddress, usize)]) -> GuestMemoryMmap {
 /// Creates a [`GuestMemoryMmap`] of the given size with the contained regions laid out in
 /// accordance with the requirements of the architecture on which the tests are being run.
 pub fn arch_mem(mem_size_bytes: usize) -> GuestMemoryMmap {
-    multi_region_mem(&crate::arch::arch_memory_regions(mem_size_bytes))
+    multi_region_mem(&crate::arch::arch_memory_regions(0, mem_size_bytes))
 }
 
 pub fn create_vmm(

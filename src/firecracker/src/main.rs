@@ -566,6 +566,7 @@ fn build_microvm_from_json(
     let mut vm_resources =
         VmResources::from_json(&config_json, &instance_info, mmds_size_limit, metadata_json)
             .map_err(BuildFromJsonError::ParseFromJson)?;
+
     vm_resources.boot_timer = boot_timer_enabled;
     let vmm = vmm::builder::build_and_boot_microvm(
         &instance_info,

@@ -75,7 +75,7 @@ where
         huge_pages: HugePageConfig,
     ) -> Result<Self, MemoryError> {
         let memfd_file = create_memfd(mem_size_mib, huge_pages.into())?.into_file();
-        let regions = arch_memory_regions(mem_size_mib << 20).into_iter();
+        let regions = arch_memory_regions(0, mem_size_mib << 20).into_iter();
 
         Self::create(
             regions,
@@ -699,7 +699,7 @@ mod tests {
 
         guest_memory.store_dirty_bitmap(&dirty_bitmap, page_size);
 
-        // Assert that the bitmap now reports as being dirty maching the dirty bitmap
+        // Assert that the bitmap now reports as being dirty matching the dirty bitmap
         guest_memory.iter().for_each(|r| {
             assert!(r.bitmap().dirty_at(0));
             assert!(!r.bitmap().dirty_at(page_size));
