@@ -239,7 +239,7 @@ pub struct Request {
     pub r#type: RequestType,
     pub status_addr: GuestAddress,
     sector: u64,
-    iovecs: [libc::iovec; 64],
+    iovecs: [libc::iovec; 254],
     iovecs_n: u32,
     count: u32,
 }
