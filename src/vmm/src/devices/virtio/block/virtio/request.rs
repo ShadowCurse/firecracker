@@ -6,6 +6,7 @@
 // found in the THIRD-PARTY file.
 
 use std::convert::From;
+use std::io::{Seek, SeekFrom};
 use std::os::fd::AsRawFd;
 
 use vm_memory::{GuestMemory, GuestMemoryError};
@@ -269,7 +270,7 @@ impl Request {
             count: 0,
         };
 
-        let data_desc;
+        let mut data_desc;
         let status_desc;
         let desc = avail_desc
             .next_descriptor()
@@ -283,34 +284,40 @@ impl Request {
             }
         } else {
             data_desc = desc;
-            status_desc = data_desc
-                .next_descriptor()
-                .ok_or(VirtioBlockError::DescriptorChainTooShort)?;
+            // status_desc = data_desc
+            //     .next_descriptor()
+            //     .ok_or(VirtioBlockError::DescriptorChainTooShort)?;
 
-            if data_desc.is_write_only() && req.r#type == RequestType::Out {
-                return Err(VirtioBlockError::UnexpectedWriteOnlyDescriptor);
-            }
-            if !data_desc.is_write_only() && req.r#type == RequestType::In {
-                return Err(VirtioBlockError::UnexpectedReadOnlyDescriptor);
-            }
-            if !data_desc.is_write_only() && req.r#type == RequestType::GetDeviceID {
-                return Err(VirtioBlockError::UnexpectedReadOnlyDescriptor);
+            while data_desc.has_next() {
+                if data_desc.is_write_only() && req.r#type == RequestType::Out {
+                    return Err(VirtioBlockError::UnexpectedWriteOnlyDescriptor);
+                }
+                if !data_desc.is_write_only() && req.r#type == RequestType::In {
+                    return Err(VirtioBlockError::UnexpectedReadOnlyDescriptor);
+                }
+                if !data_desc.is_write_only() && req.r#type == RequestType::GetDeviceID {
+                    return Err(VirtioBlockError::UnexpectedReadOnlyDescriptor);
+                }
+
+                req.iovecs[req.iovecs_n as usize] = libc::iovec {
+                    iov_base: mem
+                        .get_slice(data_desc.addr, data_desc.len as usize)
+                        .unwrap()
+                        .as_ptr() as *mut libc::c_void,
+                    iov_len: data_desc.len as usize,
+                };
+                req.iovecs_n += 1;
+                req.count += data_desc.len;
+                // req.data_addr[req.data_n as usize] = data_desc.addr;
+                // req.data_len[req.data_n as usize] = data_desc.len;
+                // req.data_n += 1;
+                // req.data_addr = data_desc.addr;
+                // req.data_len = data_desc.len;
+
+                data_desc = data_desc.next_descriptor().unwrap();
             }
 
-            req.iovecs[req.iovecs_n as usize] = libc::iovec {
-                iov_base: mem
-                    .get_slice(data_desc.addr, data_desc.len as usize)
-                    .unwrap()
-                    .as_ptr() as *mut libc::c_void,
-                iov_len: data_desc.len as usize,
-            };
-            req.iovecs_n += 1;
-            req.count += data_desc.len;
-            // req.data_addr[req.data_n as usize] = data_desc.addr;
-            // req.data_len[req.data_n as usize] = data_desc.len;
-            // req.data_n += 1;
-            // req.data_addr = data_desc.addr;
-            // req.data_len = data_desc.len;
+            status_desc = data_desc;
         }
 
         // check request validity
@@ -378,7 +385,7 @@ impl Request {
     fn to_pending_request(&self, desc_idx: u16) -> PendingRequest {
         PendingRequest {
             r#type: self.r#type,
-            data_len: 0, // self.data_len,
+            data_len: self.count, // self.data_len,
             status_addr: self.status_addr,
             desc_idx,
         }
@@ -398,15 +405,18 @@ impl Request {
 
                 // disk.file_engine
                 //     .read(self.offset(), mem, self.data_addr, self.data_len, pending)
+                let mut file = disk.file_engine.file();
+                _ = file.seek(SeekFrom::Start(self.offset()));
 
                 let buffer: &mut [libc::iovec] = &mut self.iovecs[0..self.iovecs_n as usize];
                 let iov = buffer.as_mut_ptr();
                 let iovcnt = buffer.len().try_into().unwrap();
+                // log::warn!("block: in {} iovec total len: {}", iovcnt, self.count);
 
-                let ret = unsafe { libc::readv(disk.file_engine.file().as_raw_fd(), iov, iovcnt) };
-                // if ret == -1 {
-                //     return Err(IoError::last_os_error());
-                // }
+                let ret = unsafe { libc::readv(file.as_raw_fd(), iov, iovcnt) };
+                if ret == -1 {
+                    panic!("block readv");
+                }
                 Ok(FileEngineOk::Executed(UserDataOk {
                     user_data: pending,
                     count: self.count,
@@ -417,14 +427,18 @@ impl Request {
                 // disk.file_engine
                 //     .write(self.offset(), mem, self.data_addr, self.data_len, pending)
 
+                let mut file = disk.file_engine.file();
+                _ = file.seek(SeekFrom::Start(self.offset()));
+
                 let buffer: &mut [libc::iovec] = &mut self.iovecs[0..self.iovecs_n as usize];
                 let iov = buffer.as_mut_ptr();
                 let iovcnt = buffer.len().try_into().unwrap();
+                // log::warn!("block: out {} iovec total len: {}", iovcnt, self.count);
 
-                let ret = unsafe { libc::writev(disk.file_engine.file().as_raw_fd(), iov, iovcnt) };
-                // if ret == -1 {
-                //     return Err(IoError::last_os_error());
-                // }
+                let ret = unsafe { libc::writev(file.as_raw_fd(), iov, iovcnt) };
+                if ret == -1 {
+                    panic!("block writev");
+                }
                 Ok(FileEngineOk::Executed(UserDataOk {
                     user_data: pending,
                     count: self.count,
@@ -432,16 +446,24 @@ impl Request {
             }
             RequestType::Flush => disk.file_engine.flush(pending),
             RequestType::GetDeviceID => {
-                // let res = ;mem
+                // let res = mem
                 //     .write_slice(&disk.image_id, self.data_addr)
                 //     .map(|_| VIRTIO_BLK_ID_BYTES)
                 //     .map_err(IoErr::GetId);
+                // log::warn!("block: get device id");
                 unsafe {
-                    std::ptr::write_volatile(self.iovecs[0].iov_base as *mut [u8; 20], disk.image_id);
+                    std::ptr::write_volatile(
+                        self.iovecs[0].iov_base as *mut [u8; 20],
+                        disk.image_id,
+                    );
                 }
 
                 // return ProcessingResult::Executed(pending.finish(mem, res, block_metrics));
-                return ProcessingResult::Executed(pending.finish(mem, Ok(20), block_metrics));
+                // return ProcessingResult::Executed(pending.finish(mem, Ok(VIRTIO_BLK_ID_BYTES), block_metrics));
+                return ProcessingResult::Executed(FinishedRequest {
+                    num_bytes_to_mem: self.count,
+                    desc_idx: pending.desc_idx,
+                });
             }
             RequestType::Unsupported(_) => {
                 return ProcessingResult::Executed(pending.finish(mem, Ok(0), block_metrics));
