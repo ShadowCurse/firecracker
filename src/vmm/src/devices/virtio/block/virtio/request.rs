@@ -6,9 +6,11 @@
 // found in the THIRD-PARTY file.
 
 use std::convert::From;
+use std::os::fd::AsRawFd;
 
-use vm_memory::GuestMemoryError;
+use vm_memory::{GuestMemory, GuestMemoryError};
 
+use super::io::{FileEngineOk, UserDataOk};
 use super::{io as block_io, VirtioBlockError, SECTOR_SHIFT, SECTOR_SIZE};
 use crate::devices::virtio::block::virtio::device::DiskProperties;
 use crate::devices::virtio::block::virtio::metrics::BlockDeviceMetrics;
@@ -234,10 +236,11 @@ impl RequestHeader {
 #[derive(Debug, PartialEq, Eq)]
 pub struct Request {
     pub r#type: RequestType,
-    pub data_len: u32,
     pub status_addr: GuestAddress,
     sector: u64,
-    data_addr: GuestAddress,
+    iovecs: [libc::iovec; 64],
+    iovecs_n: u32,
+    count: u32,
 }
 
 impl Request {
@@ -255,9 +258,15 @@ impl Request {
         let mut req = Request {
             r#type: RequestType::from(request_header.request_type),
             sector: request_header.sector,
-            data_addr: GuestAddress(0),
-            data_len: 0,
+            // data_addr: GuestAddress(0),
+            // data_len: 0,
             status_addr: GuestAddress(0),
+            // data_addr: [GuestAddress(0); 64],
+            // data_len: [0; 64],
+            // data_n: 0,
+            iovecs: unsafe { std::mem::zeroed() },
+            iovecs_n: 0,
+            count: 0,
         };
 
         let data_desc;
@@ -288,8 +297,20 @@ impl Request {
                 return Err(VirtioBlockError::UnexpectedReadOnlyDescriptor);
             }
 
-            req.data_addr = data_desc.addr;
-            req.data_len = data_desc.len;
+            req.iovecs[req.iovecs_n as usize] = libc::iovec {
+                iov_base: mem
+                    .get_slice(data_desc.addr, data_desc.len as usize)
+                    .unwrap()
+                    .as_ptr() as *mut libc::c_void,
+                iov_len: data_desc.len as usize,
+            };
+            req.iovecs_n += 1;
+            req.count += data_desc.len;
+            // req.data_addr[req.data_n as usize] = data_desc.addr;
+            // req.data_len[req.data_n as usize] = data_desc.len;
+            // req.data_n += 1;
+            // req.data_addr = data_desc.addr;
+            // req.data_len = data_desc.len;
         }
 
         // check request validity
@@ -297,21 +318,21 @@ impl Request {
             RequestType::In | RequestType::Out => {
                 // Check that the data length is a multiple of 512 as specified in the virtio
                 // standard.
-                if req.data_len % SECTOR_SIZE != 0 {
-                    return Err(VirtioBlockError::InvalidDataLength);
-                }
-                let top_sector = req
-                    .sector
-                    .checked_add(u64::from(req.data_len) >> SECTOR_SHIFT)
-                    .ok_or(VirtioBlockError::InvalidOffset)?;
-                if top_sector > num_disk_sectors {
-                    return Err(VirtioBlockError::InvalidOffset);
-                }
+                // if req.data_len % SECTOR_SIZE != 0 {
+                //     return Err(VirtioBlockError::InvalidDataLength);
+                // }
+                // let top_sector = req
+                //     .sector
+                //     .checked_add(u64::from(req.data_len) >> SECTOR_SHIFT)
+                //     .ok_or(VirtioBlockError::InvalidOffset)?;
+                // if top_sector > num_disk_sectors {
+                //     return Err(VirtioBlockError::InvalidOffset);
+                // }
             }
             RequestType::GetDeviceID => {
-                if req.data_len < VIRTIO_BLK_ID_BYTES {
-                    return Err(VirtioBlockError::InvalidDataLength);
-                }
+                // if req.data_len < VIRTIO_BLK_ID_BYTES {
+                //     return Err(VirtioBlockError::InvalidDataLength);
+                // }
             }
             _ => {}
         }
@@ -336,16 +357,16 @@ impl Request {
         if !rate_limiter.consume(1, TokenType::Ops) {
             return true;
         }
-        // Exercise the rate limiter only if this request is of data transfer type.
-        if self.r#type == RequestType::In || self.r#type == RequestType::Out {
-            // If limiter.consume() fails it means there is no more TokenType::Bytes
-            // budget and rate limiting is in effect.
-            if !rate_limiter.consume(u64::from(self.data_len), TokenType::Bytes) {
-                // Revert the OPS consume().
-                rate_limiter.manual_replenish(1, TokenType::Ops);
-                return true;
-            }
-        }
+        // // Exercise the rate limiter only if this request is of data transfer type.
+        // if self.r#type == RequestType::In || self.r#type == RequestType::Out {
+        //     // If limiter.consume() fails it means there is no more TokenType::Bytes
+        //     // budget and rate limiting is in effect.
+        //     if !rate_limiter.consume(u64::from(self.data_len), TokenType::Bytes) {
+        //         // Revert the OPS consume().
+        //         rate_limiter.manual_replenish(1, TokenType::Ops);
+        //         return true;
+        //     }
+        // }
 
         false
     }
@@ -357,14 +378,14 @@ impl Request {
     fn to_pending_request(&self, desc_idx: u16) -> PendingRequest {
         PendingRequest {
             r#type: self.r#type,
-            data_len: self.data_len,
+            data_len: 0, // self.data_len,
             status_addr: self.status_addr,
             desc_idx,
         }
     }
 
     pub(crate) fn process(
-        self,
+        mut self,
         disk: &mut DiskProperties,
         desc_idx: u16,
         mem: &GuestMemoryMmap,
@@ -374,21 +395,53 @@ impl Request {
         let res = match self.r#type {
             RequestType::In => {
                 let _metric = block_metrics.read_agg.record_latency_metrics();
-                disk.file_engine
-                    .read(self.offset(), mem, self.data_addr, self.data_len, pending)
+
+                // disk.file_engine
+                //     .read(self.offset(), mem, self.data_addr, self.data_len, pending)
+
+                let buffer: &mut [libc::iovec] = &mut self.iovecs[0..self.iovecs_n as usize];
+                let iov = buffer.as_mut_ptr();
+                let iovcnt = buffer.len().try_into().unwrap();
+
+                let ret = unsafe { libc::readv(disk.file_engine.file().as_raw_fd(), iov, iovcnt) };
+                // if ret == -1 {
+                //     return Err(IoError::last_os_error());
+                // }
+                Ok(FileEngineOk::Executed(UserDataOk {
+                    user_data: pending,
+                    count: self.count,
+                }))
             }
             RequestType::Out => {
-                let _metric = block_metrics.write_agg.record_latency_metrics();
-                disk.file_engine
-                    .write(self.offset(), mem, self.data_addr, self.data_len, pending)
+                // let _metric = block_metrics.write_agg.record_latency_metrics();
+                // disk.file_engine
+                //     .write(self.offset(), mem, self.data_addr, self.data_len, pending)
+
+                let buffer: &mut [libc::iovec] = &mut self.iovecs[0..self.iovecs_n as usize];
+                let iov = buffer.as_mut_ptr();
+                let iovcnt = buffer.len().try_into().unwrap();
+
+                let ret = unsafe { libc::writev(disk.file_engine.file().as_raw_fd(), iov, iovcnt) };
+                // if ret == -1 {
+                //     return Err(IoError::last_os_error());
+                // }
+                Ok(FileEngineOk::Executed(UserDataOk {
+                    user_data: pending,
+                    count: self.count,
+                }))
             }
             RequestType::Flush => disk.file_engine.flush(pending),
             RequestType::GetDeviceID => {
-                let res = mem
-                    .write_slice(&disk.image_id, self.data_addr)
-                    .map(|_| VIRTIO_BLK_ID_BYTES)
-                    .map_err(IoErr::GetId);
-                return ProcessingResult::Executed(pending.finish(mem, res, block_metrics));
+                // let res = ;mem
+                //     .write_slice(&disk.image_id, self.data_addr)
+                //     .map(|_| VIRTIO_BLK_ID_BYTES)
+                //     .map_err(IoErr::GetId);
+                unsafe {
+                    std::ptr::write_volatile(self.iovecs[0].iov_base as *mut [u8; 20], disk.image_id);
+                }
+
+                // return ProcessingResult::Executed(pending.finish(mem, res, block_metrics));
+                return ProcessingResult::Executed(pending.finish(mem, Ok(20), block_metrics));
             }
             RequestType::Unsupported(_) => {
                 return ProcessingResult::Executed(pending.finish(mem, Ok(0), block_metrics));

@@ -25,7 +25,8 @@ use crate::devices::virtio::block::virtio::metrics::{BlockDeviceMetrics, BlockMe
 use crate::devices::virtio::block::CacheType;
 use crate::devices::virtio::device::{DeviceState, IrqTrigger, IrqType, VirtioDevice};
 use crate::devices::virtio::gen::virtio_blk::{
-    VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_RO, VIRTIO_BLK_ID_BYTES, VIRTIO_F_VERSION_1,
+    VIRTIO_BLK_F_BLK_SIZE, VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_RO, VIRTIO_BLK_ID_BYTES,
+    VIRTIO_F_VERSION_1, VIRTIO_BLK_F_SEG_MAX,
 };
 use crate::devices::virtio::gen::virtio_ring::VIRTIO_RING_F_EVENT_IDX;
 use crate::devices::virtio::queue::Queue;
@@ -159,6 +160,10 @@ impl DiskProperties {
 #[repr(C)]
 pub struct ConfigSpace {
     pub capacity: u64,
+    pub size_max: u32,
+    pub seg_max: u32,
+    pub geometry: u32,
+    pub blk_size: u32,
 }
 
 // SAFETY: `ConfigSpace` contains only PODs in `repr(C)` or `repr(transparent)`, without padding.
@@ -294,7 +299,10 @@ impl VirtioBlock {
             .map_err(VirtioBlockError::RateLimiter)?
             .unwrap_or_default();
 
-        let mut avail_features = (1u64 << VIRTIO_F_VERSION_1) | (1u64 << VIRTIO_RING_F_EVENT_IDX);
+        let mut avail_features = (1u64 << VIRTIO_F_VERSION_1)
+            | (1u64 << VIRTIO_RING_F_EVENT_IDX)
+            | (1 << VIRTIO_BLK_F_BLK_SIZE)
+            | (1 << VIRTIO_BLK_F_SEG_MAX);
 
         if config.cache_type == CacheType::Writeback {
             avail_features |= 1u64 << VIRTIO_BLK_F_FLUSH;
@@ -310,6 +318,8 @@ impl VirtioBlock {
 
         let config_space = ConfigSpace {
             capacity: disk_properties.nsectors.to_le(),
+            seg_max: (256_u32 - 2).to_le(),
+            blk_size: 4096_u32.to_le(),
             ..Default::default()
         };
 

@@ -77,7 +77,7 @@ impl<T: Debug> FileEngine<T> {
         Ok(())
     }
 
-    #[cfg(test)]
+    // #[cfg(test)]
     pub fn file(&self) -> &File {
         match self {
             FileEngine::Async(engine) => engine.file(),
