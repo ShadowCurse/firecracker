@@ -301,7 +301,7 @@ impl VirtioBlock {
 
         let mut avail_features = (1u64 << VIRTIO_F_VERSION_1)
             | (1u64 << VIRTIO_RING_F_EVENT_IDX)
-            | (1 << VIRTIO_BLK_F_BLK_SIZE)
+            // | (1 << VIRTIO_BLK_F_BLK_SIZE)
             | (1 << VIRTIO_BLK_F_SEG_MAX);
 
         if config.cache_type == CacheType::Writeback {
