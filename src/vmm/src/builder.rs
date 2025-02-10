@@ -1064,6 +1064,10 @@ fn attach_pmem_devices<'a, I: Iterator<Item = &'a Arc<Mutex<Pmem>>> + Debug>(
         attach_virtio_device(event_manager, vmm, id, dev.clone(), cmdline, false)?;
     }
 
+    if regions.is_empty() {
+        return Ok(());
+    }
+
     let pmem_mmap = GuestMemoryMmap::from_regions(regions).unwrap();
     vmm.vm
         .set_kvm_memory_regions(

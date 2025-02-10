@@ -10,6 +10,7 @@ use vm_memory::GuestAddress;
 use vm_memory::GuestMemoryError;
 use vmm_sys_util::eventfd::EventFd;
 
+use crate::devices::virtio::device::IrqType;
 use crate::devices::virtio::device::VirtioDevice;
 use crate::devices::virtio::device::{DeviceState, IrqTrigger};
 use crate::devices::virtio::gen::virtio_blk::VIRTIO_F_VERSION_1;
@@ -139,58 +140,18 @@ impl Pmem {
         &self.drive_id
     }
 
-    fn handle_request(
-        mem: &GuestMemoryMmap,
-        head: DescriptorChain,
-        backing_file: &mut File,
-    ) -> Result<(), PmemError> {
-        if head.is_write_only() {
-            return Err(PmemError::WriteOnlyDescriptor);
-        }
-
-        if head.len as usize != std::mem::size_of::<u32>() {
-            return Err(PmemError::MalformedRequest);
-        }
-
-        let status_descriptor = head
-            .next_descriptor()
-            .ok_or(PmemError::DescriptorChainTooShort)?;
-        if !status_descriptor.is_write_only() {
-            return Err(PmemError::ReadOnlyDescriptor);
-        }
-
-        let req_type: u32 = mem.read_obj(head.addr)?;
-        if req_type != 0 {
-            return Err(PmemError::UnknownRequestType(req_type));
-        }
-
-        match backing_file.sync_all() {
-            Ok(()) => {
-                mem.write_obj(0u32, status_descriptor.addr)?;
-            }
-            Err(err) => {
-                error!("pmem: error while syncing backing file: {err}");
-                mem.write_obj(1u32, status_descriptor.addr)?;
-            }
-        }
-
-        Ok(())
-    }
-
     fn handle_queue(&mut self) -> Result<(), PmemError> {
         // This is safe since we checked in the event handler that the device is activated.
         let mem = self.device_state.mem().unwrap();
 
         while let Some(head) = self.queues[0].pop_or_enable_notification() {
-            let written_length = match Self::handle_request(mem, head, &mut self.backing_file) {
-                Ok(()) => std::mem::size_of::<u32>().try_into().unwrap(),
-                Err(err) => {
-                    error!("pmem: {err:?}");
-                    0
-                }
-            };
+            let status_descriptor = head.next_descriptor().unwrap();
+            mem.write_obj(0u32, status_descriptor.addr)?;
+            self.queues[0].add_used(head.index, 4)?;
+        }
 
-            self.queues[0].add_used(head.index, written_length)?;
+        if self.queues[0].prepare_kick() {
+            self.irq_trigger.trigger_irq(IrqType::Vring).unwrap();
         }
 
         Ok(())
