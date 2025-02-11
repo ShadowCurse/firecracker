@@ -138,8 +138,8 @@ def process_fio_logs(vm, fio_mode, logs_dir, metrics):
 @pytest.mark.timeout(120)
 @pytest.mark.nonci
 @pytest.mark.parametrize("vcpus", [1, 2], ids=["1vcpu", "2vcpu"])
-@pytest.mark.parametrize("fio_mode", ["randread", "randwrite"])
-@pytest.mark.parametrize("fio_block_size", [4096], ids=["bs4096"])
+@pytest.mark.parametrize("fio_mode", ["read", "write", "randread", "randwrite"])
+@pytest.mark.parametrize("fio_block_size", ["4K", "8K", "16K", "32K", "1M"], ids=["bs4K", "bs8K", "bs16K", "bs32K", "bs1M"])
 def test_block_performance(
     microvm_factory,
     guest_kernel_acpi,
@@ -147,12 +147,13 @@ def test_block_performance(
     vcpus,
     fio_mode,
     fio_block_size,
-    io_engine,
+    # io_engine,
     metrics,
 ):
     """
     Execute block device emulation benchmarking scenarios.
     """
+    io_engine = "Sync"
     vm = microvm_factory.build(guest_kernel_acpi, rootfs, monitor_memory=False)
     vm.spawn(log_level="Info", emit_metrics=True)
     vm.basic_config(vcpu_count=vcpus, mem_size_mib=GUEST_MEM_MIB)
@@ -169,7 +170,7 @@ def test_block_performance(
             "performance_test": "test_block_performance",
             "io_engine": io_engine,
             "fio_mode": fio_mode,
-            "fio_block_size": str(fio_block_size),
+            "fio_block_size": fio_block_size,
             **vm.dimensions,
         }
     )

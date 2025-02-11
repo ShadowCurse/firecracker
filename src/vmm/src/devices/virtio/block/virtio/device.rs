@@ -449,19 +449,52 @@ impl VirtioBlock {
                 status_desc = data_desc;
             }
 
+            let request = RequestType::from(request_header.request_type);
             let offset = request_header.sector << SECTOR_SHIFT;
-            let mut file = self.disk.file_engine.file();
-            _ = file.seek(SeekFrom::Start(offset));
 
-            let buffer: &mut [libc::iovec] = &mut iovecs[0..iovecs_n as usize];
-            let iov = buffer.as_mut_ptr();
-            let iovcnt = buffer.len().try_into().unwrap();
+            match request {
+                RequestType::In => {
+                    let mut file = self.disk.file_engine.file();
+                    _ = file.seek(SeekFrom::Start(offset));
 
-            let ret = unsafe { libc::readv(file.as_raw_fd(), iov, iovcnt) };
-            if ret == -1 {
-                panic!("block readv");
+                    let buffer: &mut [libc::iovec] = &mut iovecs[0..iovecs_n as usize];
+                    let iov = buffer.as_mut_ptr();
+                    let iovcnt = buffer.len().try_into().unwrap();
+
+                    let ret = unsafe { libc::readv(file.as_raw_fd(), iov, iovcnt) };
+                    if ret == -1 {
+                        panic!("block readv");
+                    }
+                    mem.write_obj(VIRTIO_BLK_S_OK, status_desc.addr).unwrap();
+                }
+                RequestType::Out => {
+                    let mut file = self.disk.file_engine.file();
+                    _ = file.seek(SeekFrom::Start(offset));
+
+                    let buffer: &mut [libc::iovec] = &mut iovecs[0..iovecs_n as usize];
+                    let iov = buffer.as_mut_ptr();
+                    let iovcnt = buffer.len().try_into().unwrap();
+
+                    let ret = unsafe { libc::writev(file.as_raw_fd(), iov, iovcnt) };
+                    if ret == -1 {
+                        panic!("block writev");
+                    }
+                    mem.write_obj(VIRTIO_BLK_S_OK, status_desc.addr).unwrap();
+                }
+                RequestType::Flush => {
+                    let file = self.disk.file_engine.file();
+                    file.sync_all().unwrap()
+                }
+                RequestType::GetDeviceID => {
+                    unsafe {
+                        std::ptr::write_volatile(
+                            iovecs[0].iov_base as *mut [u8; 20],
+                            self.disk.image_id,
+                        );
+                    }
+                }
+                _ => {}
             }
-            mem.write_obj(VIRTIO_BLK_S_OK, status_desc.addr).unwrap();
 
             Self::add_used_descriptor(queue, head.index, count, &self.irq_trigger, &self.metrics);
         }
