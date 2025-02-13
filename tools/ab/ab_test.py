@@ -29,7 +29,7 @@ from collections import defaultdict
 from pathlib import Path
 
 # Hack to be able to use our test framework code
-sys.path.append(str(Path(__file__).parent.parent / "tests"))
+sys.path.append(str(Path(__file__).parent.parent.parent / "tests"))
 
 # pylint:disable=wrong-import-position
 from framework.ab_test import binary_ab_test, check_regression
