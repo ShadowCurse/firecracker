@@ -176,7 +176,7 @@ pub fn mmap_region_from_file(
 ) -> Result<GuestRegionMmap, MemoryError> {
     debug!("mem: mmap-ing File: {:#?}", file);
     let mut builder = MmapRegionBuilder::new(size)
-        .with_mmap_prot(libc::PROT_READ)
+        .with_mmap_prot(libc::PROT_READ | libc::PROT_WRITE)
         .with_mmap_flags(libc::MAP_NORESERVE | mmap_flags);
 
     let file_offset = FileOffset::new(file.try_clone().map_err(MemoryError::FileError)?, 0);

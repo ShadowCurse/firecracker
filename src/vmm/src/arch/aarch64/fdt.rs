@@ -100,7 +100,7 @@ pub fn create_fdt<T: DeviceInfoForFDT + Clone + Debug>(
     create_psci_node(&mut fdt_writer)?;
     create_devices_node(&mut fdt_writer, device_info)?;
     create_vmgenid_node(&mut fdt_writer, vmgenid)?;
-    create_pmems_node(&mut fdt_writer, pmems)?;
+    // create_pmems_node(&mut fdt_writer, pmems)?;
 
     // End Header node.
     fdt_writer.end_node(root)?;

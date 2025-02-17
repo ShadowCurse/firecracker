@@ -1069,7 +1069,7 @@ fn attach_pmem_devices<'a, I: Iterator<Item = &'a Arc<Mutex<Pmem>>> + Debug>(
             locked_dev.config_space.size = size;
 
             regions.push(region);
-            r.push((addr, size));
+            // r.push((addr, size));
             addr += size;
 
             locked_dev.id().to_string()
@@ -1086,7 +1086,7 @@ fn attach_pmem_devices<'a, I: Iterator<Item = &'a Arc<Mutex<Pmem>>> + Debug>(
     vmm.vm
         .set_kvm_memory_regions(
             vmm.guest_memory.num_regions().try_into().unwrap(),
-            true,
+            false,
             &pmem_mmap,
         )
         .unwrap();
