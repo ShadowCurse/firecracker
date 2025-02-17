@@ -74,6 +74,7 @@ pub fn configure_system<T: DeviceInfoForFDT + Clone + Debug>(
     gic_device: &GICDevice,
     vmgenid: &Option<VmGenId>,
     initrd: &Option<super::InitrdConfig>,
+    pmems: Vec<(u64, u64)>,
 ) -> Result<(), ConfigurationError> {
     let fdt = fdt::create_fdt(
         guest_mem,
@@ -83,6 +84,7 @@ pub fn configure_system<T: DeviceInfoForFDT + Clone + Debug>(
         gic_device,
         vmgenid,
         initrd,
+        pmems,
     )?;
     let fdt_address = GuestAddress(get_fdt_addr(guest_mem));
     guest_mem

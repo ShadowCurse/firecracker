@@ -72,6 +72,7 @@ pub fn create_fdt<T: DeviceInfoForFDT + Clone + Debug>(
     gic_device: &GICDevice,
     vmgenid: &Option<VmGenId>,
     initrd: &Option<InitrdConfig>,
+    pmems: Vec<(u64, u64)>,
 ) -> Result<Vec<u8>, FdtError> {
     // Allocate stuff necessary for storing the blob.
     let mut fdt_writer = FdtWriter::new()?;
@@ -99,6 +100,7 @@ pub fn create_fdt<T: DeviceInfoForFDT + Clone + Debug>(
     create_psci_node(&mut fdt_writer)?;
     create_devices_node(&mut fdt_writer, device_info)?;
     create_vmgenid_node(&mut fdt_writer, vmgenid)?;
+    create_pmems_node(&mut fdt_writer, pmems)?;
 
     // End Header node.
     fdt_writer.end_node(root)?;
@@ -442,6 +444,19 @@ fn create_devices_node<T: DeviceInfoForFDT + Clone + Debug, S: std::hash::BuildH
         create_virtio_node(fdt, ordered_device_info)?;
     }
 
+    Ok(())
+}
+
+fn create_pmems_node(fdt: &mut FdtWriter, pmems: Vec<(u64, u64)>) -> Result<(), FdtError> {
+    for (start, len) in pmems.into_iter() {
+        let compatible = b"pmem-region\0";
+
+        let pmem = fdt.begin_node(&format!("pmem@{:x}", start))?;
+        fdt.property("compatible", compatible)?;
+        fdt.property_array_u64("reg", &[start, len])?;
+        fdt.property_null("volatile")?;
+        fdt.end_node(pmem)?;
+    }
     Ok(())
 }
 

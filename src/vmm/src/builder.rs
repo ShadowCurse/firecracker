@@ -336,7 +336,7 @@ pub fn build_microvm_for_boot(
         "vmm: atthaching {} pmem devices",
         vm_resources.pmem.devices.len()
     );
-    attach_pmem_devices(
+    let pmems = attach_pmem_devices(
         &mut vmm,
         &mut boot_cmdline,
         vm_resources.pmem.devices.iter(),
@@ -364,6 +364,7 @@ pub fn build_microvm_for_boot(
         entry_addr,
         &initrd,
         boot_cmdline,
+        pmems,
     )?;
 
     let vmm = Arc::new(Mutex::new(vmm));
@@ -781,6 +782,7 @@ pub fn configure_system_for_boot(
     entry_addr: GuestAddress,
     initrd: &Option<InitrdConfig>,
     boot_cmdline: LoaderKernelCmdline,
+    pmems: Vec<(u64, u64)>,
 ) -> Result<(), StartMicrovmError> {
     use self::StartMicrovmError::*;
 
@@ -894,6 +896,7 @@ pub fn configure_system_for_boot(
             vmm.vm.get_irqchip(),
             &vmm.acpi_device_manager.vmgenid,
             initrd,
+            pmems,
         )
         .map_err(ConfigureSystem)?;
     }
@@ -1030,34 +1033,45 @@ fn attach_pmem_devices<'a, I: Iterator<Item = &'a Arc<Mutex<Pmem>>> + Debug>(
     cmdline: &mut LoaderKernelCmdline,
     pmem_devices: I,
     event_manager: &mut EventManager,
-) -> Result<(), StartMicrovmError> {
+) -> Result<Vec<(u64, u64)>, StartMicrovmError> {
+    let M = 2 * 1024 * 1024;
     let mut regions = vec![];
-    let mut offset = u64_to_usize(vmm.guest_memory.last_addr().unchecked_add(1).0);
+    let mut addr = vmm.guest_memory.last_addr().unchecked_add(1).0;
     debug!("Last used address: {}", vmm.guest_memory.last_addr().0);
 
+    let mut r = vec![];
     for dev in pmem_devices {
+        addr = (addr + M) & !(M - 1);
         let id = {
             let mut locked_dev = dev.lock().expect("Poisoned lock");
-            let addr = arch::arch_first_contiguous_region(offset, locked_dev.size);
+            let size = locked_dev.size as u64;
+            // let addr = arch::arch_first_contiguous_region(offset, locked_dev.size);
+            assert!(
+                size & (M - 1) == 0,
+                "Pmem backing file is 2M aligned"
+            );
+            let a = GuestAddress(addr);
             debug!(
                 "Creating region for pmem {}: @guest addr: {}",
                 locked_dev.id(),
-                addr.0
+                addr
             );
             let region = mmap_region_from_file(
                 &locked_dev.backing_file,
-                addr,
-                locked_dev.size,
+                a,
+                size as usize,
                 MAP_PRIVATE,
                 false,
             )
             .unwrap();
 
-            locked_dev.config_space.start = addr.0;
-            locked_dev.config_space.size = locked_dev.size as u64;
+            locked_dev.config_space.start = addr;
+            locked_dev.config_space.size = size;
 
             regions.push(region);
-            offset += locked_dev.size;
+            r.push((addr, size));
+            addr += size;
+
             locked_dev.id().to_string()
         };
 
@@ -1065,7 +1079,7 @@ fn attach_pmem_devices<'a, I: Iterator<Item = &'a Arc<Mutex<Pmem>>> + Debug>(
     }
 
     if regions.is_empty() {
-        return Ok(());
+        return Ok(vec![]);
     }
 
     let pmem_mmap = GuestMemoryMmap::from_regions(regions).unwrap();
@@ -1078,7 +1092,7 @@ fn attach_pmem_devices<'a, I: Iterator<Item = &'a Arc<Mutex<Pmem>>> + Debug>(
         .unwrap();
 
     vmm.pmem_memory = Some(pmem_mmap);
-    Ok(())
+    Ok(r)
 }
 
 fn attach_unixsock_vsock_device(
