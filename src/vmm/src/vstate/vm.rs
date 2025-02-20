@@ -101,7 +101,7 @@ pub enum RestoreStateError {
 /// A wrapper around creating and using a VM.
 #[derive(Debug)]
 pub struct Vm {
-    fd: VmFd,
+    pub fd: VmFd,
 
     // Arm specific fields.
     // On aarch64 we need to keep around the fd obtained by creating the VGIC device.

@@ -7,6 +7,7 @@
 use std::convert::TryFrom;
 use std::fmt::Debug;
 use std::io::{self, Seek, SeekFrom};
+use std::os::fd::AsRawFd;
 #[cfg(feature = "gdb")]
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -1035,7 +1036,7 @@ fn attach_pmem_devices<'a, I: Iterator<Item = &'a Arc<Mutex<Pmem>>> + Debug>(
     event_manager: &mut EventManager,
 ) -> Result<Vec<(u64, u64)>, StartMicrovmError> {
     let M = 2 * 1024 * 1024;
-    let mut regions = vec![];
+    // let mut regions = vec![];
     let mut addr = vmm.guest_memory.last_addr().unchecked_add(1).0;
     debug!("Last used address: {}", vmm.guest_memory.last_addr().0);
 
@@ -1044,31 +1045,36 @@ fn attach_pmem_devices<'a, I: Iterator<Item = &'a Arc<Mutex<Pmem>>> + Debug>(
         addr = (addr + M) & !(M - 1);
         let id = {
             let mut locked_dev = dev.lock().expect("Poisoned lock");
-            let size = locked_dev.size as u64;
-            // let addr = arch::arch_first_contiguous_region(offset, locked_dev.size);
-            assert!(
-                size & (M - 1) == 0,
-                "Pmem backing file is 2M aligned"
-            );
-            let a = GuestAddress(addr);
-            debug!(
-                "Creating region for pmem {}: @guest addr: {}",
-                locked_dev.id(),
-                addr
-            );
-            let region = mmap_region_from_file(
-                &locked_dev.backing_file,
-                a,
-                size as usize,
-                MAP_PRIVATE,
-                false,
-            )
-            .unwrap();
+            let mut size = locked_dev.size as u64;
+
+            unsafe {
+                let p = libc::mmap(
+                    std::ptr::null_mut(),
+                    size as usize,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_PRIVATE | libc::MAP_NORESERVE,
+                    locked_dev.backing_file.as_raw_fd(),
+                    0,
+                );
+
+                size = (size + M) & !(M - 1);
+                // assert!(size & (M - 1) == 0, "Pmem backing file is 2M aligned");
+                use kvm_bindings::kvm_userspace_memory_region;
+                let memory_region = kvm_userspace_memory_region {
+                    slot: 5,
+                    guest_phys_addr: addr,
+                    memory_size: size,
+                    userspace_addr: p as u64,
+                    flags: 0,
+                };
+
+                vmm.vm.fd.set_user_memory_region(memory_region).unwrap();
+            }
 
             locked_dev.config_space.start = addr;
             locked_dev.config_space.size = size;
 
-            regions.push(region);
+            // regions.push(region);
             // r.push((addr, size));
             addr += size;
 
@@ -1078,20 +1084,20 @@ fn attach_pmem_devices<'a, I: Iterator<Item = &'a Arc<Mutex<Pmem>>> + Debug>(
         attach_virtio_device(event_manager, vmm, id, dev.clone(), cmdline, false)?;
     }
 
-    if regions.is_empty() {
-        return Ok(vec![]);
-    }
+    // if regions.is_empty() {
+    //     return Ok(vec![]);
+    // }
 
-    let pmem_mmap = GuestMemoryMmap::from_regions(regions).unwrap();
-    vmm.vm
-        .set_kvm_memory_regions(
-            vmm.guest_memory.num_regions().try_into().unwrap(),
-            false,
-            &pmem_mmap,
-        )
-        .unwrap();
+    // let pmem_mmap = GuestMemoryMmap::from_regions(regions).unwrap();
+    // vmm.vm
+    //     .set_kvm_memory_regions(
+    //         vmm.guest_memory.num_regions().try_into().unwrap(),
+    //         false,
+    //         &pmem_mmap,
+    //     )
+    //     .unwrap();
 
-    vmm.pmem_memory = Some(pmem_mmap);
+    // vmm.pmem_memory = Some(pmem_mmap);
     Ok(r)
 }
 
