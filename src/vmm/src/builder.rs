@@ -1048,17 +1048,43 @@ fn attach_pmem_devices<'a, I: Iterator<Item = &'a Arc<Mutex<Pmem>>> + Debug>(
             let mut size = locked_dev.size as u64;
 
             unsafe {
-                let p = libc::mmap(
-                    std::ptr::null_mut(),
-                    size as usize,
-                    libc::PROT_READ | libc::PROT_WRITE,
-                    libc::MAP_PRIVATE | libc::MAP_NORESERVE,
-                    locked_dev.backing_file.as_raw_fd(),
-                    0,
-                );
+                let p = if size & (M - 1) != 0 {
+                    let old_size = size;
+                    log::warn!("file is not aligned for pmem, doing magic");
+                    log::warn!("file size: {:#x}", old_size);
+                    size = (size + M) & !(M - 1);
+                    log::warn!("file new size: {:#x}", size);
 
-                size = (size + M) & !(M - 1);
-                // assert!(size & (M - 1) == 0, "Pmem backing file is 2M aligned");
+                    let p = libc::mmap(
+                        std::ptr::null_mut(),
+                        size as usize,
+                        libc::PROT_READ | libc::PROT_WRITE,
+                        libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE,
+                        -1,
+                        0,
+                    );
+                    log::warn!("mem region ptr: {:#p}", p);
+                    let a = libc::mmap(
+                        p,
+                        old_size as usize,
+                        libc::PROT_READ | libc::PROT_WRITE,
+                        libc::MAP_PRIVATE | libc::MAP_NORESERVE | libc::MAP_FIXED,
+                        locked_dev.backing_file.as_raw_fd(),
+                        0,
+                    );
+                    log::warn!("mem region wit hfixed file ptr: {:#p}", a);
+                    p
+                } else {
+                    libc::mmap(
+                        std::ptr::null_mut(),
+                        size as usize,
+                        libc::PROT_READ | libc::PROT_WRITE,
+                        libc::MAP_PRIVATE | libc::MAP_NORESERVE,
+                        locked_dev.backing_file.as_raw_fd(),
+                        0,
+                    )
+                };
+
                 use kvm_bindings::kvm_userspace_memory_region;
                 let memory_region = kvm_userspace_memory_region {
                     slot: 5,
