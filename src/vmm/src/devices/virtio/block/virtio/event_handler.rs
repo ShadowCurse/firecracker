@@ -86,8 +86,8 @@ impl MutEventSubscriber for VirtioBlock {
             match source {
                 Self::PROCESS_ACTIVATE => self.process_activate_event(ops),
                 Self::PROCESS_QUEUE => self.process_queue_event(),
-                Self::PROCESS_RATE_LIMITER => self.process_rate_limiter_event(),
-                Self::PROCESS_ASYNC_COMPLETION => self.process_async_completion_event(),
+                // Self::PROCESS_RATE_LIMITER => self.process_rate_limiter_event(),
+                // Self::PROCESS_ASYNC_COMPLETION => self.process_async_completion_event(),
                 _ => warn!("Block: Spurious event received: {:?}", source),
             }
         } else {

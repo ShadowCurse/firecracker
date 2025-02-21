@@ -202,9 +202,9 @@ impl PendingRequest {
 #[derive(Debug, Copy, Clone, Default)]
 #[repr(C)]
 pub struct RequestHeader {
-    request_type: u32,
-    _reserved: u32,
-    sector: u64,
+    pub request_type: u32,
+    pub _reserved: u32,
+    pub sector: u64,
 }
 
 // SAFETY: Safe because RequestHeader only contains plain data.
@@ -226,7 +226,7 @@ impl RequestHeader {
     /// When running on a big endian platform, this code should not compile, and support
     /// for explicit little endian reads is required.
     #[cfg(target_endian = "little")]
-    fn read_from(memory: &GuestMemoryMmap, addr: GuestAddress) -> Result<Self, VirtioBlockError> {
+    pub fn read_from(memory: &GuestMemoryMmap, addr: GuestAddress) -> Result<Self, VirtioBlockError> {
         let request_header: RequestHeader = memory
             .read_obj(addr)
             .map_err(VirtioBlockError::GuestMemory)?;
@@ -238,10 +238,10 @@ impl RequestHeader {
 pub struct Request {
     pub r#type: RequestType,
     pub status_addr: GuestAddress,
-    sector: u64,
-    iovecs: [libc::iovec; 254],
-    iovecs_n: u32,
-    count: u32,
+    pub sector: u64,
+    pub iovecs: [libc::iovec; 254],
+    pub iovecs_n: u32,
+    pub count: u32,
 }
 
 impl Request {

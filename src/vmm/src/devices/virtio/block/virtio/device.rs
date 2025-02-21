@@ -9,13 +9,14 @@ use std::cmp;
 use std::convert::From;
 use std::fs::{File, OpenOptions};
 use std::io::{Seek, SeekFrom};
+use std::os::fd::AsRawFd;
 use std::os::linux::fs::MetadataExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use block_io::FileEngine;
 use serde::{Deserialize, Serialize};
-use vm_memory::ByteValued;
+use vm_memory::{ByteValued, Bytes, GuestAddress, GuestMemory};
 use vmm_sys_util::eventfd::EventFd;
 
 use super::io::async_io;
@@ -25,8 +26,8 @@ use crate::devices::virtio::block::virtio::metrics::{BlockDeviceMetrics, BlockMe
 use crate::devices::virtio::block::CacheType;
 use crate::devices::virtio::device::{DeviceState, IrqTrigger, IrqType, VirtioDevice};
 use crate::devices::virtio::gen::virtio_blk::{
-    VIRTIO_BLK_F_BLK_SIZE, VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_RO, VIRTIO_BLK_ID_BYTES,
-    VIRTIO_F_VERSION_1, VIRTIO_BLK_F_SEG_MAX,
+    VIRTIO_BLK_F_BLK_SIZE, VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SEG_MAX,
+    VIRTIO_BLK_ID_BYTES, VIRTIO_F_VERSION_1,
 };
 use crate::devices::virtio::gen::virtio_ring::VIRTIO_RING_F_EVENT_IDX;
 use crate::devices::virtio::queue::Queue;
@@ -382,7 +383,8 @@ impl VirtioBlock {
 
     /// Process device virtio queue(s).
     pub fn process_virtio_queues(&mut self) {
-        self.process_queue(0);
+        // self.process_queue(0);
+        self.process_queue2();
     }
 
     pub(crate) fn process_rate_limiter_event(&mut self) {
@@ -409,6 +411,59 @@ impl VirtioBlock {
             irq_trigger.trigger_irq(IrqType::Vring).unwrap_or_else(|_| {
                 block_metrics.event_fails.inc();
             });
+        }
+    }
+
+    pub fn process_queue2(&mut self) {
+        let mem = self.device_state.mem().unwrap();
+        let queue = &mut self.queues[0];
+
+        let mut iovecs: [libc::iovec; 254] = unsafe { std::mem::zeroed() };
+        while let Some(head) = queue.pop_or_enable_notification() {
+            let mut iovecs_n: u32 = 0;
+            let mut count: u32 = 0;
+
+            let mut data_desc;
+            let status_desc;
+            let request_header = RequestHeader::read_from(mem, head.addr).unwrap();
+
+            let desc = head.next_descriptor().unwrap();
+
+            if !desc.has_next() {
+                status_desc = desc;
+            } else {
+                data_desc = desc;
+
+                while data_desc.has_next() {
+                    iovecs[iovecs_n as usize] = libc::iovec {
+                        iov_base: mem
+                            .get_slice(data_desc.addr, data_desc.len as usize)
+                            .unwrap()
+                            .as_ptr() as *mut libc::c_void,
+                        iov_len: data_desc.len as usize,
+                    };
+                    iovecs_n += 1;
+                    count += data_desc.len;
+                    data_desc = data_desc.next_descriptor().unwrap();
+                }
+                status_desc = data_desc;
+            }
+
+            let offset = request_header.sector << SECTOR_SHIFT;
+            let mut file = self.disk.file_engine.file();
+            _ = file.seek(SeekFrom::Start(offset));
+
+            let buffer: &mut [libc::iovec] = &mut iovecs[0..iovecs_n as usize];
+            let iov = buffer.as_mut_ptr();
+            let iovcnt = buffer.len().try_into().unwrap();
+
+            let ret = unsafe { libc::readv(file.as_raw_fd(), iov, iovcnt) };
+            if ret == -1 {
+                panic!("block readv");
+            }
+            mem.write_obj(VIRTIO_BLK_S_OK, status_desc.addr).unwrap();
+
+            Self::add_used_descriptor(queue, head.index, count, &self.irq_trigger, &self.metrics);
         }
     }
 
