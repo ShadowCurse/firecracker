@@ -1,7 +1,7 @@
 // Copyright 2018 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::ffi::{CStr, CString, OsString};
+use std::ffi::{CStr, CString};
 use std::fs::{self, canonicalize, read_to_string, File, OpenOptions, Permissions};
 use std::io;
 use std::io::Write;
@@ -473,17 +473,12 @@ impl Env {
             .map_err(|err| JailerError::ChangeFileOwner(folder_path.to_owned(), err))
     }
 
-    fn copy_exec_to_chroot(&mut self) -> Result<OsString, JailerError> {
+    fn copy_exec_to_chroot(&mut self) -> Result<PathBuf, JailerError> {
         let exec_file_name = self
             .exec_file_path
             .file_name()
             .ok_or_else(|| JailerError::ExtractFileName(self.exec_file_path.clone()))?;
-        // We do a quick push here to get the global path of the executable inside the chroot,
-        // without having to create a new PathBuf. We'll then do a pop to revert to the actual
-        // chroot_dir right after the copy.
-        // TODO: just now wondering ... is doing a push()/pop() thing better than just creating
-        // a new PathBuf, with something like chroot_dir.join(exec_file_name) ?!
-        self.chroot_dir.push(exec_file_name);
+        let exec_file_name = self.chroot_dir.join(exec_file_name);
 
         // We do a copy instead of a hard-link for 2 reasons
         // 1. hard-linking is not possible if the file is in another device
@@ -491,13 +486,11 @@ impl Env {
         //    Firecracker binary (like the executable .text section), this latter part is not
         //    desirable in Firecracker's threat model. Copying prevents 2 Firecracker processes from
         //    sharing memory.
-        fs::copy(&self.exec_file_path, &self.chroot_dir).map_err(|err| {
-            JailerError::Copy(self.exec_file_path.clone(), self.chroot_dir.clone(), err)
+        fs::copy(&self.exec_file_path, &exec_file_name).map_err(|err| {
+            JailerError::Copy(self.exec_file_path.clone(), exec_file_name.clone(), err)
         })?;
 
-        // Pop exec_file_name.
-        self.chroot_dir.pop();
-        Ok(exec_file_name.to_os_string())
+        Ok(exec_file_name)
     }
 
     fn join_netns(path: &str) -> Result<(), JailerError> {
