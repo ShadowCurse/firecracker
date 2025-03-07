@@ -608,8 +608,11 @@ impl Env {
     }
 
     pub fn run(mut self) -> Result<(), JailerError> {
+        // Create chroot dir
+        fs::create_dir_all(&self.chroot_dir)
+            .map_err(|err| JailerError::CreateDir(self.chroot_dir.to_owned(), err))?;
+
         let exec_file_name = self.copy_exec_to_chroot()?;
-        let chroot_exec_file = PathBuf::from("/").join(exec_file_name);
 
         // Join the specified network namespace, if applicable.
         if let Some(ref path) = self.netns {
@@ -728,6 +731,7 @@ impl Env {
             self.jailer_cpu_time_us += get_time_us(ClockType::ProcessCpu);
         }
 
+        let chroot_exec_file = PathBuf::from("/").join(exec_file_name);
         // If specified, exec the provided binary into a new PID namespace.
         if self.new_pid_ns {
             self.exec_into_new_pid_ns(chroot_exec_file)

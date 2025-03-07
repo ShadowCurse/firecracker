@@ -16,31 +16,71 @@ const CURRENT_DIR: &CStr = c".";
 
 // This uses switching to a new mount namespace + pivot_root(), together with the regular chroot,
 // to provide a hardened jail (at least compared to only relying on chroot).
-pub fn chroot(path: &Path) -> Result<(), JailerError> {
+pub fn chroot(chroot_path: &Path) -> Result<(), JailerError> {
+    let uid = unsafe { libc::getuid() };
+    let gid = unsafe { libc::getgid() };
+
+    eprintln!("before uid: {}", uid);
+    eprintln!("before gid: {}", gid);
+
     // We unshare into a new mount namespace.
     // SAFETY: The call is safe because we're invoking a C library
     // function with valid parameters.
-    SyscallReturnCode(unsafe { libc::unshare(libc::CLONE_NEWNS) })
+    // SyscallReturnCode(unsafe { libc::unshare(libc::CLONE_NEWNS) })
+    SyscallReturnCode(unsafe { libc::unshare(libc::CLONE_NEWNS | libc::CLONE_NEWUSER) })
         .into_empty_result()
         .map_err(JailerError::UnshareNewNs)?;
+
+    unsafe {
+        let uid_map = libc::open(c"/proc/self/uid_map".as_ptr(), libc::O_WRONLY);
+        assert!(0 < uid_map, "cannont open uid_map");
+        let uid_info = format!("0 {} 1", uid);
+        let a = libc::write(uid_map, uid_info.as_ptr().cast(), uid_info.len());
+        assert!(0 < a, "cannot write to uid_map");
+        libc::close(uid_map);
+
+        let setgroups = libc::open(c"/proc/self/setgroups".as_ptr(), libc::O_WRONLY);
+        assert!(0 < setgroups, "cannont open setgroups");
+        let setgroups_info = "deny";
+        let a = libc::write(
+            uid_map,
+            setgroups_info.as_ptr().cast(),
+            setgroups_info.len(),
+        );
+        assert!(0 < a, "cannot write to setgroups");
+        libc::close(setgroups);
+
+        let gid_map = libc::open(c"/proc/self/gid_map".as_ptr(), libc::O_WRONLY);
+        assert!(0 < gid_map, "cannont open gid_map");
+        let gid_info = format!("0 {} 1", gid);
+        let a = libc::write(uid_map, gid_info.as_ptr().cast(), gid_info.len());
+        assert!(0 < a, "cannot write to gid_map");
+        libc::close(gid_map);
+    }
+
+    let uid = unsafe { libc::getuid() };
+    let gid = unsafe { libc::getgid() };
+
+    eprintln!("after uid: {}", uid);
+    eprintln!("after gid: {}", gid);
 
     // Recursively change the propagation type of all the mounts in this namespace to SLAVE, so
     // we can call pivot_root.
     // SAFETY: Safe because we provide valid parameters.
-    SyscallReturnCode(unsafe {
-        libc::mount(
-            null(),
-            ROOT_DIR.as_ptr(),
-            null(),
-            libc::MS_SLAVE | libc::MS_REC,
-            null(),
-        )
-    })
-    .into_empty_result()
-    .map_err(JailerError::MountPropagationSlave)?;
+    // SyscallReturnCode(unsafe {
+    //     libc::mount(
+    //         null(),
+    //         ROOT_DIR.as_ptr(),
+    //         null(),
+    //         libc::MS_SLAVE | libc::MS_REC,
+    //         null(),
+    //     )
+    // })
+    // .into_empty_result()
+    // .map_err(JailerError::MountPropagationSlave)?;
 
     // We need a CString for the following mount call.
-    let chroot_dir = to_cstring(path)?;
+    let chroot_path_c = to_cstring(chroot_path)?;
 
     // Bind mount the jail root directory over itself, so we can go around a restriction
     // imposed by pivot_root, which states that the new root and the old root should not
@@ -48,10 +88,10 @@ pub fn chroot(path: &Path) -> Result<(), JailerError> {
     // SAFETY: Safe because we provide valid parameters.
     SyscallReturnCode(unsafe {
         libc::mount(
-            chroot_dir.as_ptr(),
-            chroot_dir.as_ptr(),
+            chroot_path_c.as_ptr(),
+            chroot_path_c.as_ptr(),
             null(),
-            libc::MS_BIND | libc::MS_REC,
+            libc::MS_BIND,
             null(),
         )
     })
@@ -59,7 +99,7 @@ pub fn chroot(path: &Path) -> Result<(), JailerError> {
     .map_err(JailerError::MountBind)?;
 
     // Change current dir to the chroot dir, so we only need to handle relative paths from now on.
-    env::set_current_dir(path).map_err(JailerError::SetCurrentDir)?;
+    env::set_current_dir(chroot_path).map_err(JailerError::SetCurrentDir)?;
 
     // Create the old_root folder we're going to use for pivot_root, using a relative path.
     // SAFETY: The call is safe because we provide valid arguments.
