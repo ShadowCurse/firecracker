@@ -17,12 +17,19 @@ const CURRENT_DIR: &CStr = c".";
 // This uses switching to a new mount namespace + pivot_root(), together with the regular chroot,
 // to provide a hardened jail (at least compared to only relying on chroot).
 pub fn chroot(chroot_path: &Path) -> Result<(), JailerError> {
+    let uid = unsafe { libc::getuid() };
+
     // We unshare into a new mount namespace.
     // SAFETY: The call is safe because we're invoking a C library
     // function with valid parameters.
-    SyscallReturnCode(unsafe { libc::unshare(libc::CLONE_NEWNS) })
+    // SyscallReturnCode(unsafe { libc::unshare(libc::CLONE_NEWNS) })
+    SyscallReturnCode(unsafe { libc::unshare(libc::CLONE_NEWNS | libc::CLONE_NEWUSER) })
         .into_empty_result()
         .map_err(JailerError::UnshareNewNs)?;
+
+    use std::io::Write;
+    let mut map_id_file = std::fs::File::open("/proc/self/uid_map").unwrap();
+    _ = map_id_file.write(format!("0 {} 1", uid).as_bytes());
 
     // Recursively change the propagation type of all the mounts in this namespace to SLAVE, so
     // we can call pivot_root.
