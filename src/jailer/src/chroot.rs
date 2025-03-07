@@ -36,6 +36,8 @@ pub fn chroot(chroot_path: &Path) -> Result<(), JailerError> {
         assert!(0 < uid_map, "cannont open uid_map");
         let gid_map = libc::open(c"/proc/self/gid_map".as_ptr(), libc::O_WRONLY);
         assert!(0 < gid_map, "cannont open gid_map");
+        let setgroups = libc::open(c"/proc/self/setgroups".as_ptr(), libc::O_WRONLY);
+        assert!(0 < setgroups, "cannont open setgroups");
 
         let uid_info = format!("0 {} 1", uid);
         _ = libc::write(uid_map, uid_info.as_ptr().cast(), uid_info.len());
@@ -43,8 +45,12 @@ pub fn chroot(chroot_path: &Path) -> Result<(), JailerError> {
         let gid_info = format!("0 {} 1", gid);
         _ = libc::write(uid_map, gid_info.as_ptr().cast(), gid_info.len());
 
+        let setgroups_info = "deny";
+        _ = libc::write(uid_map, setgroups_info.as_ptr().cast(), setgroups_info.len());
+
         libc::close(uid_map);
         libc::close(gid_map);
+        libc::close(setgroups);
     }
 
     let uid = unsafe { libc::getuid() };
