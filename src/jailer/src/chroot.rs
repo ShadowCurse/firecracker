@@ -16,7 +16,7 @@ const CURRENT_DIR: &CStr = c".";
 
 // This uses switching to a new mount namespace + pivot_root(), together with the regular chroot,
 // to provide a hardened jail (at least compared to only relying on chroot).
-pub fn chroot(path: &Path) -> Result<(), JailerError> {
+pub fn chroot(chroot_path: &Path) -> Result<(), JailerError> {
     // We unshare into a new mount namespace.
     // SAFETY: The call is safe because we're invoking a C library
     // function with valid parameters.
@@ -27,20 +27,20 @@ pub fn chroot(path: &Path) -> Result<(), JailerError> {
     // Recursively change the propagation type of all the mounts in this namespace to SLAVE, so
     // we can call pivot_root.
     // SAFETY: Safe because we provide valid parameters.
-    SyscallReturnCode(unsafe {
-        libc::mount(
-            null(),
-            ROOT_DIR.as_ptr(),
-            null(),
-            libc::MS_SLAVE | libc::MS_REC,
-            null(),
-        )
-    })
-    .into_empty_result()
-    .map_err(JailerError::MountPropagationSlave)?;
+    // SyscallReturnCode(unsafe {
+    //     libc::mount(
+    //         null(),
+    //         ROOT_DIR.as_ptr(),
+    //         null(),
+    //         libc::MS_SLAVE | libc::MS_REC,
+    //         null(),
+    //     )
+    // })
+    // .into_empty_result()
+    // .map_err(JailerError::MountPropagationSlave)?;
 
     // We need a CString for the following mount call.
-    let chroot_dir = to_cstring(path)?;
+    let chroot_path_c = to_cstring(chroot_path)?;
 
     // Bind mount the jail root directory over itself, so we can go around a restriction
     // imposed by pivot_root, which states that the new root and the old root should not
@@ -48,10 +48,10 @@ pub fn chroot(path: &Path) -> Result<(), JailerError> {
     // SAFETY: Safe because we provide valid parameters.
     SyscallReturnCode(unsafe {
         libc::mount(
-            chroot_dir.as_ptr(),
-            chroot_dir.as_ptr(),
+            chroot_path_c.as_ptr(),
+            chroot_path_c.as_ptr(),
             null(),
-            libc::MS_BIND | libc::MS_REC,
+            libc::MS_BIND,
             null(),
         )
     })
@@ -59,7 +59,7 @@ pub fn chroot(path: &Path) -> Result<(), JailerError> {
     .map_err(JailerError::MountBind)?;
 
     // Change current dir to the chroot dir, so we only need to handle relative paths from now on.
-    env::set_current_dir(path).map_err(JailerError::SetCurrentDir)?;
+    env::set_current_dir(chroot_path).map_err(JailerError::SetCurrentDir)?;
 
     // Create the old_root folder we're going to use for pivot_root, using a relative path.
     // SAFETY: The call is safe because we provide valid arguments.
