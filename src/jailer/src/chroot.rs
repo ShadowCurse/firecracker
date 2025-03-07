@@ -20,6 +20,9 @@ pub fn chroot(chroot_path: &Path) -> Result<(), JailerError> {
     let uid = unsafe { libc::getuid() };
     let gid = unsafe { libc::getgid() };
 
+    eprintln!("before uid: {}", uid);
+    eprintln!("before gid: {}", gid);
+
     // We unshare into a new mount namespace.
     // SAFETY: The call is safe because we're invoking a C library
     // function with valid parameters.
@@ -43,6 +46,12 @@ pub fn chroot(chroot_path: &Path) -> Result<(), JailerError> {
         libc::close(uid_map);
         libc::close(gid_map);
     }
+
+    let uid = unsafe { libc::getuid() };
+    let gid = unsafe { libc::getgid() };
+
+    eprintln!("after uid: {}", uid);
+    eprintln!("after gid: {}", gid);
 
     // Recursively change the propagation type of all the mounts in this namespace to SLAVE, so
     // we can call pivot_root.
