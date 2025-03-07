@@ -22,6 +22,7 @@ thiserror = "2.0.12"
 vmm-sys-util = "0.14.0"
 
 utils = { path = "../utils" }
+caps = "0.5.5"
 
 [lints]
 workspace = true
