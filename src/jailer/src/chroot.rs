@@ -18,6 +18,7 @@ const CURRENT_DIR: &CStr = c".";
 // to provide a hardened jail (at least compared to only relying on chroot).
 pub fn chroot(chroot_path: &Path) -> Result<(), JailerError> {
     let uid = unsafe { libc::getuid() };
+    let gid = unsafe { libc::getgid() };
 
     // We unshare into a new mount namespace.
     // SAFETY: The call is safe because we're invoking a C library
@@ -27,9 +28,21 @@ pub fn chroot(chroot_path: &Path) -> Result<(), JailerError> {
         .into_empty_result()
         .map_err(JailerError::UnshareNewNs)?;
 
-    use std::io::Write;
-    let mut map_id_file = std::fs::File::open("/proc/self/uid_map").unwrap();
-    _ = map_id_file.write(format!("0 {} 1", uid).as_bytes());
+    unsafe {
+        let uid_map = libc::open(c"/proc/self/uid_map".as_ptr(), libc::O_WRONLY);
+        assert!(0 < uid_map, "cannont open uid_map");
+        let gid_map = libc::open(c"/proc/self/gid_map".as_ptr(), libc::O_WRONLY);
+        assert!(0 < gid_map, "cannont open gid_map");
+
+        let uid_info = format!("0 {} 1", uid);
+        _ = libc::write(uid_map, uid_info.as_ptr().cast(), uid_info.len());
+
+        let gid_info = format!("0 {} 1", gid);
+        _ = libc::write(uid_map, gid_info.as_ptr().cast(), gid_info.len());
+
+        libc::close(uid_map);
+        libc::close(gid_map);
+    }
 
     // Recursively change the propagation type of all the mounts in this namespace to SLAVE, so
     // we can call pivot_root.
