@@ -30,19 +30,16 @@ const STDERR_FILENO: libc::c_int = 2;
 // Kernel-based virtual machine (hardware virtualization extensions)
 // minor/major numbers are taken from
 // https://www.kernel.org/doc/html/latest/admin-guide/devices.html
-const DEV_KVM: &CStr = c"/dev/kvm";
 const DEV_KVM_MAJOR: u32 = 10;
 const DEV_KVM_MINOR: u32 = 232;
 
 // TUN/TAP device minor/major numbers are taken from
 // www.kernel.org/doc/Documentation/networking/tuntap.txt
-const DEV_NET_TUN: &CStr = c"/dev/net/tun";
 const DEV_NET_TUN_MAJOR: u32 = 10;
 const DEV_NET_TUN_MINOR: u32 = 200;
 
 // Random number generator device minor/major numbers are taken from
 // https://www.kernel.org/doc/Documentation/admin-guide/devices.txt
-const DEV_URANDOM: &CStr = c"/dev/urandom";
 const DEV_URANDOM_MAJOR: u32 = 1;
 const DEV_URANDOM_MINOR: u32 = 9;
 
@@ -54,16 +51,7 @@ const DEV_URANDOM_MINOR: u32 = 9;
 // so we will have to find it at initialization time parsing /proc/misc.
 // What we do know is the major number for misc devices:
 // https://elixir.bootlin.com/linux/v6.1.51/source/Documentation/admin-guide/devices.txt
-const DEV_UFFD_PATH: &CStr = c"/dev/userfaultfd";
 const DEV_UFFD_MAJOR: u32 = 10;
-
-// Relevant folders inside the jail that we create or/and for which we change ownership.
-// We need /dev in order to be able to create /dev/kvm and /dev/net/tun device.
-// We need /run for the default location of the api socket.
-// Since libc::chown is not recursive, we cannot specify only /dev/net as we want
-// to walk through the entire folder hierarchy.
-const FOLDER_HIERARCHY: [&str; 4] = ["/", "/dev", "/dev/net", "/run"];
-const FOLDER_PERMISSIONS: u32 = 0o700;
 
 // When running with `--new-pid-ns` flag, the PID of the process running the exec_file differs
 // from jailer's and it is stored inside a dedicated file, prefixed with the below extension.
@@ -116,21 +104,21 @@ enum UserfaultfdParseError {
 
 #[derive(Debug)]
 pub struct Env {
-    id: String,
-    chroot_dir: PathBuf,
-    exec_file_path: PathBuf,
-    uid: u32,
-    gid: u32,
-    netns: Option<String>,
-    daemonize: bool,
-    new_pid_ns: bool,
-    start_time_us: u64,
-    start_time_cpu_us: u64,
-    jailer_cpu_time_us: u64,
-    extra_args: Vec<String>,
-    cgroup_conf: Option<CgroupConfiguration>,
-    resource_limits: ResourceLimits,
-    uffd_dev_minor: Option<u32>,
+    pub id: String,
+    pub chroot_dir: PathBuf,
+    pub exec_file_path: PathBuf,
+    pub uid: u32,
+    pub gid: u32,
+    pub netns: Option<String>,
+    pub daemonize: bool,
+    pub new_pid_ns: bool,
+    pub start_time_us: u64,
+    pub start_time_cpu_us: u64,
+    pub jailer_cpu_time_us: u64,
+    pub extra_args: Vec<String>,
+    pub cgroup_conf: Option<CgroupConfiguration>,
+    pub resource_limits: ResourceLimits,
+    pub uffd_dev_minor: Option<u32>,
 }
 
 impl Env {
@@ -440,29 +428,7 @@ impl Env {
             )
         })
         .into_empty_result()
-        .map_err(|err| JailerError::MknodDev(err, dev_path.to_str().unwrap().to_owned()))?;
-
-        // SAFETY: This is safe because dev_path is CStr, and hence null-terminated.
-        SyscallReturnCode(unsafe { libc::chown(dev_path.as_ptr(), self.uid(), self.gid()) })
-            .into_empty_result()
-            // Safe to unwrap as we provided valid file names.
-            .map_err(|err| {
-                JailerError::ChangeFileOwner(PathBuf::from(dev_path.to_str().unwrap()), err)
-            })
-    }
-
-    fn setup_jailed_folder(&self, folder: impl AsRef<Path>) -> Result<(), JailerError> {
-        let folder_path = folder.as_ref();
-        fs::create_dir_all(folder_path)
-            .map_err(|err| JailerError::CreateDir(folder_path.to_owned(), err))?;
-        fs::set_permissions(folder_path, Permissions::from_mode(FOLDER_PERMISSIONS))
-            .map_err(|err| JailerError::Chmod(folder_path.to_owned(), err))?;
-
-        let c_path = CString::new(folder_path.to_str().unwrap()).unwrap();
-        // SAFETY: This is safe because folder was checked for a null-terminator.
-        SyscallReturnCode(unsafe { libc::chown(c_path.as_ptr(), self.uid(), self.gid()) })
-            .into_empty_result()
-            .map_err(|err| JailerError::ChangeFileOwner(folder_path.to_owned(), err))
+        .map_err(|err| JailerError::MknodDev(err, dev_path.to_str().unwrap().to_owned()))
     }
 
     fn copy_exec_to_chroot(&mut self) -> Result<OsString, JailerError> {
@@ -512,8 +478,8 @@ impl Env {
             .stdin(Stdio::inherit())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
-            .uid(self.uid())
-            .gid(self.gid())
+            .uid(self.uid)
+            .gid(self.gid)
             .args(&self.extra_args)
             .exec()
     }
@@ -611,8 +577,11 @@ impl Env {
     }
 
     pub fn run(mut self) -> Result<(), JailerError> {
+        // Create chroot dir
+        fs::create_dir_all(&self.chroot_dir)
+            .map_err(|err| JailerError::CreateDir(self.chroot_dir.to_owned(), err))?;
+
         let exec_file_name = self.copy_exec_to_chroot()?;
-        let chroot_exec_file = PathBuf::from("/").join(exec_file_name);
 
         // Join the specified network namespace, if applicable.
         if let Some(ref path) = self.netns {
@@ -638,14 +607,8 @@ impl Env {
         #[cfg(target_arch = "aarch64")]
         self.copy_midr_el1_info()?;
 
-        // Jail self.
-        chroot(self.chroot_dir())?;
-
-        // This will not only create necessary directories, but will also change ownership
-        // for all of them.
-        FOLDER_HIERARCHY
-            .iter()
-            .try_for_each(|f| self.setup_jailed_folder(f))?;
+        let dev_dir = self.chroot_dir.join("dev");
+        fs::create_dir_all(&dev_dir).unwrap();
 
         // Here we are creating the /dev/kvm and /dev/net/tun devices inside the jailer.
         // Following commands can be translated into bash like this:
@@ -654,14 +617,36 @@ impl Env {
         // $: mknod $dev_net_tun_path c 10 200
         // www.kernel.org/doc/Documentation/networking/tuntap.txt specifies 10 and 200 as the major
         // and minor for the /dev/net/tun device.
-        self.mknod_and_own_dev(DEV_NET_TUN, DEV_NET_TUN_MAJOR, DEV_NET_TUN_MINOR)?;
+        let dev_net_dir = dev_dir.join("net");
+        fs::create_dir_all(&dev_net_dir).unwrap();
+        self.mknod_and_own_dev(
+            CString::new(dev_net_dir.join("tun").to_str().unwrap())
+                .unwrap()
+                .as_c_str(),
+            DEV_NET_TUN_MAJOR,
+            DEV_NET_TUN_MINOR,
+        )?;
+
         // Do the same for /dev/kvm with (major, minor) = (10, 232).
-        self.mknod_and_own_dev(DEV_KVM, DEV_KVM_MAJOR, DEV_KVM_MINOR)?;
+        self.mknod_and_own_dev(
+            CString::new(dev_dir.join("kvm").to_str().unwrap())
+                .unwrap()
+                .as_c_str(),
+            DEV_KVM_MAJOR,
+            DEV_KVM_MINOR,
+        )?;
+
         // And for /dev/urandom with (major, minor) = (1, 9).
         // If the device is not accessible on the host, output a warning to inform user that MMDS
         // version 2 will not be available to use.
         let _ = self
-            .mknod_and_own_dev(DEV_URANDOM, DEV_URANDOM_MAJOR, DEV_URANDOM_MINOR)
+            .mknod_and_own_dev(
+                CString::new(dev_dir.join("urandom").to_str().unwrap())
+                    .unwrap()
+                    .as_c_str(),
+                DEV_URANDOM_MAJOR,
+                DEV_URANDOM_MINOR,
+            )
             .map_err(|err| {
                 println!(
                     "Warning! Could not create /dev/urandom device inside jailer: {}.",
@@ -673,8 +658,19 @@ impl Env {
         // If we have a minor version for /dev/userfaultfd the device is present on the host.
         // Expose the device in the jailed environment.
         if let Some(minor) = self.uffd_dev_minor {
-            self.mknod_and_own_dev(DEV_UFFD_PATH, DEV_UFFD_MAJOR, minor)?;
+            self.mknod_and_own_dev(
+                CString::new(dev_dir.join("userfaultfd").to_str().unwrap())
+                    .unwrap()
+                    .as_c_str(),
+                DEV_UFFD_MAJOR,
+                minor,
+            )?;
         }
+
+        fs::create_dir_all(&self.chroot_dir.join("run")).unwrap();
+
+        // Jail self.
+        chroot(&self)?;
 
         self.jailer_cpu_time_us = get_time_us(ClockType::ProcessCpu) - self.start_time_cpu_us;
 
@@ -731,6 +727,7 @@ impl Env {
             self.jailer_cpu_time_us += get_time_us(ClockType::ProcessCpu);
         }
 
+        let chroot_exec_file = PathBuf::from("/").join(exec_file_name);
         // If specified, exec the provided binary into a new PID namespace.
         if self.new_pid_ns {
             self.exec_into_new_pid_ns(chroot_exec_file)

@@ -879,7 +879,6 @@ cmd_shell() {
             --user "$(id -u):$(id -g)" \
             --ulimit nofile=4096:4096 \
             --ulimit memlock=-1:-1 \
-            --device=/dev/kvm:/dev/kvm \
             --workdir "$CTR_FC_ROOT_DIR" \
             --env PS1="$(whoami)@\h:\w\$ " \
             -- \
