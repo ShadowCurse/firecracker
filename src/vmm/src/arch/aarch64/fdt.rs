@@ -183,7 +183,7 @@ fn create_cpu_nodes(fdt: &mut FdtWriter, vcpu_mpidr: &[u64]) -> Result<(), FdtEr
         }
 
         if l2_cache.is_some() {
-            let l2_cache_phandle: u32 = LAST_CACHE_PHANDLE - i;
+            let l2_cache_phandle: u32 = LAST_CACHE_PHANDLE - i as u32;
             fdt.property_u32("next-level-cache", l2_cache_phandle)?;
         }
 
@@ -194,7 +194,7 @@ fn create_cpu_nodes(fdt: &mut FdtWriter, vcpu_mpidr: &[u64]) -> Result<(), FdtEr
         for i in 0..vcpu_mpidr.len() {
             let l2_node = fdt.begin_node(&format!("l2-cache-{}", i))?;
 
-            let l2_cache_phandle: u32 = LAST_CACHE_PHANDLE - i;
+            let l2_cache_phandle: u32 = LAST_CACHE_PHANDLE - i as u32;
             fdt.property_u32("phandle", l2_cache_phandle)?;
             fdt.property_string("compatible", "cache")?;
             fdt.property_u32("cache-level", u32::from(l2.level))?;
@@ -212,7 +212,7 @@ fn create_cpu_nodes(fdt: &mut FdtWriter, vcpu_mpidr: &[u64]) -> Result<(), FdtEr
                 fdt.property_null(cache_type)?;
             }
             if l3_cache.is_some() {
-                let l3_cache_phandle: u32 = LAST_CACHE_PHANDLE - vcpu_mpidr.len();
+                let l3_cache_phandle: u32 = LAST_CACHE_PHANDLE - vcpu_mpidr.len() as u32;
                 fdt.property_u32("next-level-cache", l3_cache_phandle)?;
             }
 
@@ -223,7 +223,7 @@ fn create_cpu_nodes(fdt: &mut FdtWriter, vcpu_mpidr: &[u64]) -> Result<(), FdtEr
     if let Some(l3) = l3_cache {
         let l3_node = fdt.begin_node(&format!("l3-cache-{}", i))?;
 
-        let l3_cache_phandle: u32 = LAST_CACHE_PHANDLE - vcpu_mpidr.len();
+        let l3_cache_phandle: u32 = LAST_CACHE_PHANDLE - vcpu_mpidr.len() as u32;
         fdt.property_u32("phandle", l3_cache_phandle)?;
         fdt.property_string("compatible", "cache")?;
         fdt.property_u32("cache-level", u32::from(l3.level))?;
