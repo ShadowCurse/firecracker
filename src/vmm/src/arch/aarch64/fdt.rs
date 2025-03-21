@@ -119,14 +119,37 @@ fn create_cpu_nodes(fdt: &mut FdtWriter, vcpu_mpidr: &[u64]) -> Result<(), FdtEr
     read_cache_config(&mut l1_caches, &mut non_l1_caches)
         .map_err(|err| FdtError::ReadCacheInfo(err.to_string()))?;
 
+    let mut l1d_cache: Option<&CacheEntry> = None;
+    let mut l1i_cache: Option<&CacheEntry> = None;
+    let mut l2_cache: Option<&CacheEntry> = None;
+    let mut l3_cache: Option<&CacheEntry> = None;
+
+    for l1 in l1_caches.iter() {
+        if l1.cache_type == CacheType::Data {
+            l1d_cache = Some(l1);
+        }
+        if l1.cache_type == CacheType::Instruction {
+            l1i_cache = Some(l1);
+        }
+    }
+
+    for l in non_l1_caches.iter() {
+        if l.leve == 2 {
+            l2_cache = Some(l);
+        }
+        if l.leve == 3 {
+            l3_cache = Some(l);
+        }
+    }
+
     // See https://github.com/torvalds/linux/blob/master/Documentation/devicetree/bindings/arm/cpus.yaml.
     let cpus = fdt.begin_node("cpus")?;
     // As per documentation, on ARM v8 64-bit systems value should be set to 2.
     fdt.property_u32("#address-cells", 0x02)?;
     fdt.property_u32("#size-cells", 0x0)?;
-    let num_cpus = vcpu_mpidr.len();
-    for (cpu_index, mpidr) in vcpu_mpidr.iter().enumerate() {
-        let cpu = fdt.begin_node(&format!("cpu@{:x}", cpu_index))?;
+
+    for (i, mpidr) in vcpu_mpidr.iter().enumerate() {
+        let cpu = fdt.begin_node(&format!("cpu@{:x}", i))?;
         fdt.property_string("device_type", "cpu")?;
         fdt.property_string("compatible", "arm,arm-v8")?;
         // The power state coordination interface (PSCI) needs to be enabled for
@@ -136,82 +159,89 @@ fn create_cpu_nodes(fdt: &mut FdtWriter, vcpu_mpidr: &[u64]) -> Result<(), FdtEr
         // See http://infocenter.arm.com/help/index.jsp?topic=/com.arm.doc.ddi0488c/BABHBJCI.html.
         fdt.property_u64("reg", mpidr & 0x7FFFFF)?;
 
-        for cache in l1_caches.iter() {
-            // Please check out
-            // https://github.com/devicetree-org/devicetree-specification/releases/download/v0.3/devicetree-specification-v0.3.pdf,
-            // section 3.8.
-            if let Some(size) = cache.size_ {
-                fdt.property_u32(cache.type_.of_cache_size(), size)?;
+        if let Some(l1d) = l1d_cache {
+            if let Some(size) = l1d.size_ {
+                fdt.property_u32(l1d.type_.of_cache_size(), size)?;
             }
-            if let Some(line_size) = cache.line_size {
-                fdt.property_u32(cache.type_.of_cache_line_size(), u32::from(line_size))?;
+            if let Some(line_size) = l1d.line_size {
+                fdt.property_u32(l1d.type_.of_l1_line_size(), u32::from(line_size))?;
             }
-            if let Some(number_of_sets) = cache.number_of_sets {
-                fdt.property_u32(cache.type_.of_cache_sets(), number_of_sets)?;
+            if let Some(number_of_sets) = l1d.number_of_sets {
+                fdt.property_u32(l1d.type_.of_l1_sets(), number_of_sets)?;
+            }
+        }
+        if let Some(l1i) = l1i_cache {
+            if let Some(size) = l1i.size_ {
+                fdt.property_u32(l1i.type_.of_cache_size(), size)?;
+            }
+            if let Some(line_size) = l1i.line_size {
+                fdt.property_u32(l1i.type_.of_l1_line_size(), u32::from(line_size))?;
+            }
+            if let Some(number_of_sets) = l1i.number_of_sets {
+                fdt.property_u32(l1i.type_.of_l1_sets(), number_of_sets)?;
             }
         }
 
-        // Some of the non-l1 caches can be shared amongst CPUs. You can see an example of a shared
-        // scenario in https://github.com/devicetree-org/devicetree-specification/releases/download/v0.3/devicetree-specification-v0.3.pdf,
-        // 3.8.1 Example.
-        let mut prev_level = 1;
-        let mut cache_node: Option<FdtWriterNode> = None;
-        for cache in non_l1_caches.iter() {
-            // We append the next-level-cache node (the node that specifies the cache hierarchy)
-            // in the next iteration. For example,
-            // L2-cache {
-            //      cache-size = <0x8000> ----> first iteration
-            //      next-level-cache = <&l3-cache> ---> second iteration
-            // }
-            // The cpus per unit cannot be 0 since the sysfs will also include the current cpu
-            // in the list of shared cpus so it needs to be at least 1. Firecracker trusts the host.
-            // The operation is safe since we already checked when creating cache attributes that
-            // cpus_per_unit is not 0 (.e look for mask_str2bit_count function).
-            let cache_phandle = LAST_CACHE_PHANDLE
-                - u32::try_from(
-                    num_cpus * (cache.level - 2) as usize
-                        + cpu_index / cache.cpus_per_unit as usize,
-                )
-                .unwrap(); // Safe because the number of CPUs is bounded
-
-            if prev_level != cache.level {
-                fdt.property_u32("next-level-cache", cache_phandle)?;
-                if prev_level > 1 && cache_node.is_some() {
-                    fdt.end_node(cache_node.take().unwrap())?;
-                }
-            }
-
-            if cpu_index % cache.cpus_per_unit as usize == 0 {
-                cache_node = Some(fdt.begin_node(&format!(
-                    "l{}-{}-cache",
-                    cache.level,
-                    cpu_index / cache.cpus_per_unit as usize
-                ))?);
-                fdt.property_u32("phandle", cache_phandle)?;
-                fdt.property_string("compatible", "cache")?;
-                fdt.property_u32("cache-level", u32::from(cache.level))?;
-                if let Some(size) = cache.size_ {
-                    fdt.property_u32(cache.type_.of_cache_size(), size)?;
-                }
-                if let Some(line_size) = cache.line_size {
-                    fdt.property_u32(cache.type_.of_cache_line_size(), u32::from(line_size))?;
-                }
-                if let Some(number_of_sets) = cache.number_of_sets {
-                    fdt.property_u32(cache.type_.of_cache_sets(), number_of_sets)?;
-                }
-                if let Some(cache_type) = cache.type_.of_cache_type() {
-                    fdt.property_null(cache_type)?;
-                }
-                prev_level = cache.level;
-            }
-        }
-        if let Some(node) = cache_node {
-            fdt.end_node(node)?;
+        if l2_cache.is_some() {
+            let l2_cache_phandle: u32 = LAST_CACHE_PHANDLE - i;
+            fdt.property_u32("next-level-cache", l2_cache_phandle)?;
         }
 
         fdt.end_node(cpu)?;
     }
-    fdt.end_node(cpus)?;
+
+    if let Some(l2) = l2_cache {
+        for i in 0..vcpu_mpidr.len() {
+            let l2_node = fdt.begin_node(&format!("l2-cache-{}", i))?;
+
+            let l2_cache_phandle: u32 = LAST_CACHE_PHANDLE - i;
+            fdt.property_u32("phandle", l2_cache_phandle)?;
+            fdt.property_string("compatible", "cache")?;
+            fdt.property_u32("cache-level", u32::from(l2.level))?;
+
+            if let Some(size) = l1i.size_ {
+                fdt.property_u32(l1i.type_.of_cache_size(), size)?;
+            }
+            if let Some(line_size) = l1i.line_size {
+                fdt.property_u32(l1i.type_.of_l1_line_size(), u32::from(line_size))?;
+            }
+            if let Some(number_of_sets) = l1i.number_of_sets {
+                fdt.property_u32(l1i.type_.of_l1_sets(), number_of_sets)?;
+            }
+            if let Some(cache_type) = cache.type_.of_cache_type() {
+                fdt.property_null(cache_type)?;
+            }
+            if l3_cache.is_some() {
+                let l3_cache_phandle: u32 = LAST_CACHE_PHANDLE - vcpu_mpidr.len();
+                fdt.property_u32("next-level-cache", l3_cache_phandle)?;
+            }
+
+            fdt.end_node(l2_node)?;
+        }
+    }
+
+    if let Some(l3) = l3_cache {
+        let l3_node = fdt.begin_node(&format!("l3-cache-{}", i))?;
+
+        let l3_cache_phandle: u32 = LAST_CACHE_PHANDLE - vcpu_mpidr.len();
+        fdt.property_u32("phandle", l3_cache_phandle)?;
+        fdt.property_string("compatible", "cache")?;
+        fdt.property_u32("cache-level", u32::from(l3.level))?;
+
+        if let Some(size) = l1i.size_ {
+            fdt.property_u32(l1i.type_.of_cache_size(), size)?;
+        }
+        if let Some(line_size) = l1i.line_size {
+            fdt.property_u32(l1i.type_.of_l1_line_size(), u32::from(line_size))?;
+        }
+        if let Some(number_of_sets) = l1i.number_of_sets {
+            fdt.property_u32(l1i.type_.of_l1_sets(), number_of_sets)?;
+        }
+        if let Some(cache_type) = cache.type_.of_cache_type() {
+            fdt.property_null(cache_type)?;
+        }
+        fdt.end_node(l3_node)?;
+    }
 
     Ok(())
 }
