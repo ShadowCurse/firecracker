@@ -152,7 +152,7 @@ impl Default for CacheEntry {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq)]
 // Based on https://elixir.free-electrons.com/linux/v4.9.62/source/include/linux/cacheinfo.h#L11.
 pub(crate) enum CacheType {
     Instruction,
