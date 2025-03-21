@@ -164,10 +164,10 @@ fn create_cpu_nodes(fdt: &mut FdtWriter, vcpu_mpidr: &[u64]) -> Result<(), FdtEr
                 fdt.property_u32(l1d.type_.of_cache_size(), size)?;
             }
             if let Some(line_size) = l1d.line_size {
-                fdt.property_u32(l1d.type_.of_l1_line_size(), u32::from(line_size))?;
+                fdt.property_u32(l1d.type_.of_cache_line_size(), u32::from(line_size))?;
             }
             if let Some(number_of_sets) = l1d.number_of_sets {
-                fdt.property_u32(l1d.type_.of_l1_sets(), number_of_sets)?;
+                fdt.property_u32(l1d.type_.of_cache_sets(), number_of_sets)?;
             }
         }
         if let Some(l1i) = l1i_cache {
@@ -175,10 +175,10 @@ fn create_cpu_nodes(fdt: &mut FdtWriter, vcpu_mpidr: &[u64]) -> Result<(), FdtEr
                 fdt.property_u32(l1i.type_.of_cache_size(), size)?;
             }
             if let Some(line_size) = l1i.line_size {
-                fdt.property_u32(l1i.type_.of_l1_line_size(), u32::from(line_size))?;
+                fdt.property_u32(l1i.type_.of_cache_line_size(), u32::from(line_size))?;
             }
             if let Some(number_of_sets) = l1i.number_of_sets {
-                fdt.property_u32(l1i.type_.of_l1_sets(), number_of_sets)?;
+                fdt.property_u32(l1i.type_.of_cache_sets(), number_of_sets)?;
             }
         }
 
@@ -203,10 +203,10 @@ fn create_cpu_nodes(fdt: &mut FdtWriter, vcpu_mpidr: &[u64]) -> Result<(), FdtEr
                 fdt.property_u32(l2.type_.of_cache_size(), size)?;
             }
             if let Some(line_size) = l2.line_size {
-                fdt.property_u32(l2.type_.of_l1_line_size(), u32::from(line_size))?;
+                fdt.property_u32(l2.type_.of_cache_line_size(), u32::from(line_size))?;
             }
             if let Some(number_of_sets) = l2.number_of_sets {
-                fdt.property_u32(l2.type_.of_l1_sets(), number_of_sets)?;
+                fdt.property_u32(l2.type_.of_cache_sets(), number_of_sets)?;
             }
             if let Some(cache_type) = l2.type_.of_cache_type() {
                 fdt.property_null(cache_type)?;
@@ -232,10 +232,10 @@ fn create_cpu_nodes(fdt: &mut FdtWriter, vcpu_mpidr: &[u64]) -> Result<(), FdtEr
             fdt.property_u32(l3.type_.of_cache_size(), size)?;
         }
         if let Some(line_size) = l3.line_size {
-            fdt.property_u32(l3.type_.of_l1_line_size(), u32::from(line_size))?;
+            fdt.property_u32(l3.type_.of_cache_line_size(), u32::from(line_size))?;
         }
         if let Some(number_of_sets) = l3.number_of_sets {
-            fdt.property_u32(l3.type_.of_l1_sets(), number_of_sets)?;
+            fdt.property_u32(l3.type_.of_cache_sets(), number_of_sets)?;
         }
         if let Some(cache_type) = l3.type_.of_cache_type() {
             fdt.property_null(cache_type)?;
