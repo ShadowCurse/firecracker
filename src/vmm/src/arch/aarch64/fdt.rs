@@ -15,6 +15,7 @@ use vm_memory::GuestMemoryError;
 use super::super::{DeviceType, InitrdConfig};
 use super::cache_info::{CacheEntry, read_cache_config};
 use super::gic::GICDevice;
+use crate::arch::aarch64::cache_info::CacheType;
 use crate::devices::acpi::vmgenid::{VMGENID_MEM_SIZE, VmGenId};
 use crate::vstate::memory::{Address, GuestMemory, GuestMemoryMmap};
 
@@ -125,10 +126,10 @@ fn create_cpu_nodes(fdt: &mut FdtWriter, vcpu_mpidr: &[u64]) -> Result<(), FdtEr
     let mut l3_cache: Option<&CacheEntry> = None;
 
     for l1 in l1_caches.iter() {
-        if l1.cache_type == CacheType::Data {
+        if l1.type_ == CacheType::Data {
             l1d_cache = Some(l1);
         }
-        if l1.cache_type == CacheType::Instruction {
+        if l1.type_ == CacheType::Instruction {
             l1i_cache = Some(l1);
         }
     }
@@ -221,7 +222,7 @@ fn create_cpu_nodes(fdt: &mut FdtWriter, vcpu_mpidr: &[u64]) -> Result<(), FdtEr
     }
 
     if let Some(l3) = l3_cache {
-        let l3_node = fdt.begin_node(&format!("l3-cache-{}", i))?;
+        let l3_node = fdt.begin_node("l3-cache")?;
 
         let l3_cache_phandle: u32 = LAST_CACHE_PHANDLE - vcpu_mpidr.len() as u32;
         fdt.property_u32("phandle", l3_cache_phandle)?;
