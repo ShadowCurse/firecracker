@@ -244,6 +244,7 @@ fn create_cpu_nodes(fdt: &mut FdtWriter, vcpu_mpidr: &[u64]) -> Result<(), FdtEr
         fdt.end_node(l3_node)?;
     }
 
+    fdt.end_node(cpus)?;
     Ok(())
 }
 
