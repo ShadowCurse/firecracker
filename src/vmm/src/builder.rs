@@ -1038,7 +1038,7 @@ fn attach_pmem_devices<'a, I: Iterator<Item = &'a Arc<Mutex<Pmem>>> + Debug>(
             let mut locked_dev = dev.lock().expect("Poisoned lock");
 
             if locked_dev.root_device {
-                let s = format!("root=/dev/pmem{i} rw rootflags=dax");
+                let s = format!("root=/dev/pmem{i} ro rootflags=dax");
                 cmdline.insert_str(s)?;
             }
             locked_dev.config_space.start = addr;
