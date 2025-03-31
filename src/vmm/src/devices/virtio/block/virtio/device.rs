@@ -410,10 +410,36 @@ impl VirtioBlock {
         let queue = &mut self.queues[queue_index];
         let mut used_any = false;
 
+        static mut COUNT: u64 = 0;
+        static mut DT: f64 = 0.0;
+        static mut QUEUE_LEN: u64 = 0;
+        static mut MIN_QUEUE_LEN: u64 = 9999999;
+        static mut MAX_QUEUE_LEN: u64 = 0;
+
+        static mut REQ_COUNT: u64 = 0;
+        static mut REQ_LEN: u64 = 0;
+
+        unsafe {
+            COUNT += 1;
+            QUEUE_LEN += queue.len() as u64;
+            if MIN_QUEUE_LEN > queue.len() as u64 {
+                MIN_QUEUE_LEN = queue.len() as u64;
+            }
+            if MAX_QUEUE_LEN < queue.len() as u64 {
+                MAX_QUEUE_LEN = queue.len() as u64;
+            }
+        }
+
+        let s = std::time::Instant::now();
         while let Some(head) = queue.pop_or_enable_notification() {
             self.metrics.remaining_reqs_count.add(queue.len().into());
             let processing_result = match Request::parse(&head, mem, self.disk.nsectors) {
                 Ok(request) => {
+                    unsafe {
+                        REQ_COUNT += 1;
+                        REQ_LEN += request.data_len as u64;
+                    }
+
                     if request.rate_limit(&mut self.rate_limiter) {
                         // Stop processing the queue and return this descriptor chain to the
                         // avail ring, for later processing.
@@ -451,6 +477,20 @@ impl VirtioBlock {
                         &self.metrics,
                     );
                 }
+            }
+        }
+        unsafe {
+            DT += s.elapsed().as_secs_f64();
+
+            if COUNT % 10000 == 0 {
+                let avg_dt = DT / COUNT as f64 * 1000.0 * 1000.0;
+                let avg_q_len = QUEUE_LEN as f64 / COUNT as f64;
+                let min_q_len = MIN_QUEUE_LEN;
+                let max_q_len = MAX_QUEUE_LEN;
+                let avg_req_len = REQ_LEN as f64 / REQ_COUNT as f64;
+                log::warn!(
+                    "AVG DT: {avg_dt:.2}, Q LEN: AVG: {avg_q_len:.2} MIN: {min_q_len} MAX: {max_q_len} AVG REQ LEN: {avg_req_len:.2}"
+                );
             }
         }
 
