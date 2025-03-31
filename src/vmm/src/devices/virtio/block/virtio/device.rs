@@ -421,13 +421,10 @@ impl VirtioBlock {
 
         unsafe {
             COUNT += 1;
-            QUEUE_LEN += queue.len() as u64;
-            if MIN_QUEUE_LEN > queue.len() as u64 {
-                MIN_QUEUE_LEN = queue.len() as u64;
-            }
-            if MAX_QUEUE_LEN < queue.len() as u64 {
-                MAX_QUEUE_LEN = queue.len() as u64;
-            }
+            let ql = queue.len() as u64;
+            QUEUE_LEN += ql;
+            MIN_QUEUE_LEN = MIN_QUEUE_LEN.min(ql);
+            MAX_QUEUE_LEN = MAX_QUEUE_LEN.max(ql);
         }
 
         let s = std::time::Instant::now();
