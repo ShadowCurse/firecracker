@@ -99,7 +99,7 @@ for test in tests:
     if REVISION_A:
         devtool_opts += " --ab"
         pytest_opts = (
-            f"{ab_opts} run build/{REVISION_A}/ build/{REVISION_B} --test {test_path}"
+            f"{ab_opts} run build/{REVISION_A}/ build/{REVISION_B} --test {test_path} -s"
         )
     else:
         # Passing `-m ''` below instructs pytest to collect tests regardless of
