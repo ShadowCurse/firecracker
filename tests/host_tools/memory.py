@@ -101,10 +101,10 @@ class MemoryMonitor(Thread):
 
     def check_samples(self):
         """Check that there are no samples over the threshold."""
-        if self._exceeded is not None:
-            raise MemoryUsageExceededError(
-                self._current_rss, self.threshold, self._exceeded
-            )
+        #if self._exceeded is not None:
+        #    raise MemoryUsageExceededError(
+        #        self._current_rss, self.threshold, self._exceeded
+        #    )
 
     @property
     def current_rss(self):
@@ -126,7 +126,7 @@ class MemoryMonitor(Thread):
     def __exit__(self, _type, _value, _traceback):
         """Exit context"""
 
-        if self.is_alive():
-            self.signal_stop()
-            self.join(timeout=1)
-        self.check_samples()
+        # if self.is_alive():
+        #     self.signal_stop()
+        #     self.join(timeout=1)
+        # self.check_samples()

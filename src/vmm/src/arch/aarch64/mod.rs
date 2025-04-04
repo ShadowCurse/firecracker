@@ -186,28 +186,64 @@ fn get_fdt_addr(mem: &GuestMemoryMmap) -> u64 {
     layout::DRAM_MEM_START
 }
 
+#[repr(C)]
+struct arm64_image_header {
+    code0: u32,
+    code1: u32,
+    text_offset: u64,
+    image_size: u64,
+    flags: u64,
+    res2: u64,
+    res3: u64,
+    res4: u64,
+    magic: u32,
+    res5: u32,
+}
+
 /// Load linux kernel into guest memory.
 pub fn load_kernel(
     kernel: &File,
     guest_memory: &GuestMemoryMmap,
 ) -> Result<EntryPoint, ConfigurationError> {
-    // Need to clone the File because reading from it
-    // mutates it.
-    let mut kernel_file = kernel
-        .try_clone()
-        .map_err(|_| ConfigurationError::KernelFile)?;
+    // // Need to clone the File because reading from it
+    // // mutates it.
+    // let mut kernel_file = kernel
+    //     .try_clone()
+    //     .map_err(|_| ConfigurationError::KernelFile)?;
+    //
+    // let entry_addr = Loader::load(
+    //     guest_memory,
+    //     Some(GuestAddress(get_kernel_start())),
+    //     &mut kernel_file,
+    //     None,
+    // )?;
 
-    let entry_addr = Loader::load(
-        guest_memory,
-        Some(GuestAddress(get_kernel_start())),
-        &mut kernel_file,
-        None,
-    )?;
+    use std::os::fd::AsRawFd;
+    let fd = kernel.as_raw_fd();
+    let a = guest_memory
+        .get_host_address(GuestAddress(get_kernel_start()))
+        .unwrap();
+    let s = std::os::unix::fs::MetadataExt::size(&kernel.metadata().unwrap());
+    unsafe {
+        const PROT: i32 = libc::PROT_READ | libc::PROT_WRITE;
+        const FLAGS: i32 = libc::MAP_PRIVATE | libc::MAP_FIXED | libc::MAP_NORESERVE;
+        let file_mem = libc::mmap(a as *mut libc::c_void, s as usize, PROT, FLAGS, fd, 0);
 
-    Ok(EntryPoint {
-        entry_addr: entry_addr.kernel_load,
-        protocol: BootProtocol::LinuxBoot,
-    })
+        let header: &arm64_image_header = std::mem::transmute(file_mem);
+        let mut offset = header.text_offset;
+        if header.image_size == 0 {
+            offset = 0x80000;
+        }
+        Ok(EntryPoint {
+            entry_addr: GuestAddress(get_kernel_start() + offset),
+            protocol: BootProtocol::LinuxBoot,
+        })
+    }
+
+    // Ok(EntryPoint {
+    //     entry_addr: entry_addr.kernel_load,
+    //     protocol: BootProtocol::LinuxBoot,
+    // })
 }
 
 #[cfg(kani)]
