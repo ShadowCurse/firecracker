@@ -2,8 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use acpi_tables::{Aml, aml};
-use aws_lc_rs::error::Unspecified as RandError;
-use aws_lc_rs::rand;
 use log::{debug, error};
 use serde::{Deserialize, Serialize};
 use vm_memory::{GuestAddress, GuestMemoryError};
@@ -44,8 +42,6 @@ pub enum VmGenIdError {
     Interrupt(#[from] std::io::Error),
     /// Error accessing VMGenID memory: {0}
     GuestMemory(#[from] GuestMemoryError),
-    /// Create generation ID error: {0}
-    GenerationId(#[from] RandError),
     /// Failed to allocate requested resource: {0}
     Allocator(#[from] vm_allocator::Error),
 }
@@ -63,7 +59,7 @@ impl VmGenId {
             guest_address.0, gsi
         );
         let interrupt_evt = EventFdTrigger::new(EventFd::new(libc::EFD_NONBLOCK)?);
-        let gen_id = Self::make_genid()?;
+        let gen_id = Self::make_genid();
 
         // Write generation ID in guest memory
         debug!(
@@ -100,11 +96,8 @@ impl VmGenId {
     }
 
     // Create a 16-bytes random number
-    fn make_genid() -> Result<u128, RandError> {
-        let mut gen_id_bytes = [0u8; 16];
-        rand::fill(&mut gen_id_bytes)
-            .inspect_err(|err| error!("vmgenid: could not create new generation ID: {err}"))?;
-        Ok(u128::from_le_bytes(gen_id_bytes))
+    fn make_genid() -> u128 {
+        0
     }
 
     /// Send an ACPI notification to guest device.
