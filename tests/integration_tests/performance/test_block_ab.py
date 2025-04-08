@@ -152,7 +152,7 @@ def process_fio_logs(vm, fio_mode, logs_dir, metrics):
 
 @pytest.mark.timeout(120)
 @pytest.mark.nonci
-@pytest.mark.parametrize("n", range(5))
+@pytest.mark.parametrize("n", range(20))
 @pytest.mark.parametrize(
     "pin_cpus_host", [True, False], ids=["pin_host", "no_pin_host"]
 )
