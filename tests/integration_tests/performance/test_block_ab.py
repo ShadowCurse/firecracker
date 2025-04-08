@@ -16,10 +16,10 @@ from framework.utils import CmdBuilder, check_output, track_cpu_utilization
 BLOCK_DEVICE_SIZE_MB = 2048
 
 # Time (in seconds) for which fio "warms up"
-WARMUP_SEC = 10
+WARMUP_SEC = 1
 
 # Time (in seconds) for which fio runs after warmup is done
-RUNTIME_SEC = 30
+RUNTIME_SEC = 3
 
 # VM guest memory size
 GUEST_MEM_MIB = 1024
@@ -44,7 +44,7 @@ def prepare_microvm_for_test(microvm):
     check_output("echo 3 > /proc/sys/vm/drop_caches")
 
 
-def run_fio(microvm, mode, block_size):
+def run_fio(microvm, mode, block_size, pin_guest_cpus):
     """Run a fio test in the specified mode with block size bs."""
     cmd = (
         CmdBuilder("fio")
@@ -61,17 +61,22 @@ def run_fio(microvm, mode, block_size):
         .with_arg(f"--size={BLOCK_DEVICE_SIZE_MB}M")
         .with_arg("--ioengine=libaio")
         .with_arg("--iodepth=32")
-        # Set affinity of the entire fio process to a set of vCPUs equal in size to number of workers
-        .with_arg(
-            f"--cpus_allowed={','.join(str(i) for i in range(microvm.vcpus_count))}"
-        )
-        # Instruct fio to pin one worker per vcpu
-        .with_arg("--cpus_allowed_policy=split")
         .with_arg(f"--write_bw_log={mode}")
         .with_arg("--log_avg_msec=1000")
         .with_arg("--output-format=json+")
-        .build()
     )
+
+    if pin_guest_cpus:
+        # Set affinity of the entire fio process to a set of vCPUs equal in size to number of workers
+        cmd = (
+            cmd.with_arg(
+                f"--cpus_allowed={','.join(str(i) for i in range(microvm.vcpus_count))}"
+            )
+            # Instruct fio to pin one worker per vcpu
+            .with_arg("--cpus_allowed_policy=split")
+        )
+
+    cmd = cmd.build()
 
     logs_path = Path(microvm.jailer.chroot_base_with_id()) / "fio_output"
 
@@ -135,8 +140,8 @@ def process_fio_logs(vm, fio_mode, logs_dir, metrics):
 
         total_read += bw_read / 1000
         total_c += 1
-        #print(f"bw_read: {bw_read / 1000} Mb/s")
-        #print(f"bw_write: {bw_write}")
+        # print(f"bw_read: {bw_read / 1000} Mb/s")
+        # print(f"bw_write: {bw_write}")
         if bw_read:
             metrics.put_metric("bw_read", bw_read, "Kilobytes/Second")
         if bw_write:
@@ -147,12 +152,20 @@ def process_fio_logs(vm, fio_mode, logs_dir, metrics):
 
 @pytest.mark.timeout(120)
 @pytest.mark.nonci
-@pytest.mark.parametrize("n", range(10))
+@pytest.mark.parametrize("n", range(5))
+@pytest.mark.parametrize(
+    "pin_cpus_host", [True, False], ids=["pin_host", "no_pin_host"]
+)
+@pytest.mark.parametrize(
+    "pin_cpus_guest", [True, False], ids=["pin_guest", "no_pin_guest"]
+)
 @pytest.mark.parametrize("vcpus", [2], ids=["2vcpu"])
 @pytest.mark.parametrize("fio_mode", ["randread"])
 @pytest.mark.parametrize("fio_block_size", [4096], ids=["bs4096"])
 def test_block_performance(
     n,
+    pin_cpus_host,
+    pin_cpus_guest,
     microvm_factory,
     guest_kernel_acpi,
     rootfs,
@@ -186,9 +199,10 @@ def test_block_performance(
         }
     )
 
-    vm.pin_threads(0)
+    if pin_cpus_host:
+        vm.pin_threads(0)
 
-    logs_dir, cpu_util = run_fio(vm, fio_mode, fio_block_size)
+    logs_dir, cpu_util = run_fio(vm, fio_mode, fio_block_size, pin_cpus_guest)
 
     process_fio_logs(vm, fio_mode, logs_dir, metrics)
 
