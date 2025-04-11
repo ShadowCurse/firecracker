@@ -226,7 +226,7 @@ pub fn load_kernel(
     let s = std::os::unix::fs::MetadataExt::size(&kernel.metadata().unwrap());
     unsafe {
         const PROT: i32 = libc::PROT_READ | libc::PROT_WRITE;
-        const FLAGS: i32 = libc::MAP_PRIVATE | libc::MAP_FIXED | libc::MAP_NORESERVE;
+        const FLAGS: i32 = libc::MAP_PRIVATE | libc::MAP_FIXED | 0x20000; // MAP_POPULATE
         let file_mem = libc::mmap(a as *mut libc::c_void, s as usize, PROT, FLAGS, fd, 0);
 
         let header: &arm64_image_header = std::mem::transmute(file_mem);
