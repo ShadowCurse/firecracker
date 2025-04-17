@@ -29,7 +29,7 @@ def consume_ping_output(ping_putput, request_per_round):
     # Compute percentiles.
 
     pattern_received = ".+ packets transmitted, (.+) received, .*"
-    received = int(re.findall(pattern_received, output[-2]))
+    received = int(re.findall(pattern_received, output[-2])[0])
     assert request_per_round - 1 <= received, "Lost more than 1 packet during ping"
 
     seqs = output[1 : received + 1]
