@@ -6,9 +6,72 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## \[Unreleased\]
+## [Unreleased]
 
 ### Added
+
+- [#5048](https://github.com/firecracker-microvm/firecracker/pull/5048): Added
+  support for [PVH boot mode](docs/pvh.md). This is used when an x86 kernel
+  provides the appropriate ELF Note to indicate that PVH boot mode is supported.
+  Linux kernels newer than 5.0 compiled with `CONFIG_PVH=y` set this ELF Note,
+  as do FreeBSD kernels.
+- [#5065](https://github.com/firecracker-microvm/firecracker/pull/5065) Added
+  support for Intel AMX (Advanced Matrix Extensions). To be able to take and
+  restore a snapshot of Intel AMX state, `Xsave` is used instead of `kvm_xsave`,
+  so users need to regenerate snapshots.
+- [#4731](https://github.com/firecracker-microvm/firecracker/pull/4731): Added
+  support for modifying the host TAP device name during snapshot restore.
+
+### Changed
+
+- [#5118](https://github.com/firecracker-microvm/firecracker/pull/5118): Cleared
+  WAITPKG CPUID bit in CPUID normalization. The feature enables a guest to put a
+  physical processor into an idle state, which is undesirable in a FaaS
+  environment since that is what the host wants to decide.
+- [#5142](https://github.com/firecracker-microvm/firecracker/pull/5142):
+  Clarified what CPU models are supported by each existing CPU template.
+  Firecracker exits with an error if a CPU template is used on an unsupported
+  CPU model.
+
+### Deprecated
+
+- [#4948](https://github.com/firecracker-microvm/firecracker/pull/4948):
+  Deprecated the `page_size_kib` field in the
+  [UFFD handshake](docs/snapshotting/handling-page-faults-on-snapshot-resume.md#registering-memory-to-be-handled-via-userfault-file-descriptors),
+  and replaced it with a `page_size` field. The `page_size_kib` field is
+  misnamed, as the value Firecracker sets it to is actually the page size in
+  _bytes_, not KiB. It will be removed in Firecracker 2.0.
+
+### Removed
+
+### Fixed
+
+- #\[[5074](https://github.com/firecracker-microvm/firecracker/pull/5074)\] Fix
+  the `SendCtrlAltDel` command not working for ACPI-enabled guest kernels, by
+  dropping the i8042.nopnp argument from the default kernel command line
+  Firecracker constructs.
+- [#5122](https://github.com/firecracker-microvm/firecracker/pull/5122): Keep
+  the UFFD Unix domain socket open to prevent the race condition between the
+  guest memory mappings message and the shutdown event that was sometimes
+  causing arrival of an empty message on the UFFD handler side.
+- [#5143](https://github.com/firecracker-microvm/firecracker/pull/5143): Fixed
+  to report `process_startup_time_us` and `process_startup_time_cpu_us` metrics
+  for `api_server` right after the API server starts, while previously reported
+  before applying seccomp filter and starting the API server. Users may observe
+  a bit longer startup time metrics.
+
+## [1.11.0]
+
+### Added
+
+- [#4987](https://github.com/firecracker-microvm/firecracker/pull/4987): Reset
+  physical counter register (`CNTPCT_EL0`) on VM startup. This avoids VM reading
+  the host physical counter value. This is only possible on 6.4 and newer
+  kernels. For older kernels physical counter will still be passed to the guest
+  unmodified. See more info
+  [here](https://github.com/firecracker-microvm/firecracker/blob/main/docs/prod-host-setup.md#arm-only-vm-physical-counter-behaviour)
+- [#5088](https://github.com/firecracker-microvm/firecracker/pull/5088): Added
+  AMD Genoa as a supported and tested platform for Firecracker.
 
 ### Changed
 
@@ -16,6 +79,9 @@ and this project adheres to
   unnecessary fields (`max_connections` and `max_pending_resets`) from the
   snapshot format, bumping the snapshot version to 5.0.0. Users need to
   regenerate snapshots.
+- [#4926](https://github.com/firecracker-microvm/firecracker/pull/4926): Replace
+  underlying implementation for seccompiler from in house one in favor of
+  `libseccomp` which produces smaller and more optimized BPF code.
 
 ### Deprecated
 
@@ -23,14 +89,49 @@ and this project adheres to
 
 ### Fixed
 
-## \[1.10.1\]
+- [#4921](https://github.com/firecracker-microvm/firecracker/pull/4921): Fixed
+  swagger `CpuConfig` definition to include missing aarch64-specific fields.
+- [#4916](https://github.com/firecracker-microvm/firecracker/pull/4916): Fixed
+  `IovDeque` implementation to work with any host page size. This fixes
+  virtio-net device on non 4K host kernels.
+- [#4991](https://github.com/firecracker-microvm/firecracker/pull/4991): Fixed
+  `mem_size_mib` and `track_dirty_pages` being mandatory for all
+  `PATCH /machine-config` requests. Now, they can be omitted which leaves these
+  parts of the machine configuration unchanged.
+- [#5007](https://github.com/firecracker-microvm/firecracker/pull/5007): Fixed
+  watchdog softlockup warning on x86_64 guests when a vCPU is paused during GDB
+  debugging.
+- [#5021](https://github.com/firecracker-microvm/firecracker/pull/5021) If a
+  balloon device is inflated post UFFD-backed snapshot restore, Firecracker now
+  causes `remove` UFFD messages to be sent to the UFFD handler. Previously, no
+  such message would be sent.
+- [#5034](https://github.com/firecracker-microvm/firecracker/pull/5034): Fix an
+  integer underflow in the jailer when computing the value it passes to
+  Firecracker's `--parent-cpu-time-us` values, which caused development builds
+  of Firecracker to crash (but production builds were unaffected as underflows
+  do not panic in release mode).
+- [#5045](https://github.com/firecracker-microvm/firecracker/pull/5045): Fixed
+  an issue where firecracker intermittently receives SIGHUP when using jailer
+  with `--new-pid-ns` but without `--daemonize`.
+- [#4995](https://github.com/firecracker-microvm/firecracker/pull/4995):
+  Firecracker no longer overwrites CPUID leaf 0x80000000 when running AMD
+  hardware, meaning the guest can now discover a greater range of CPUID leaves
+  in the extended function range (this range is host kernel dependent).
+- [#5046](https://github.com/firecracker-microvm/firecracker/pull/5046): Retry
+  KVM_CREATE_VM on EINTR that occasionally happen on heavily loaded hosts to
+  improve reliability of microVM creation.
+- [#5052](https://github.com/firecracker-microvm/firecracker/pull/5052): Build
+  the empty seccomp policy as default for debug builds to avoid crashes on
+  syscalls introduced by debug assertions from Rust 1.80.0.
+
+## [1.10.1]
 
 ### Changed
 
 - [#4907](https://github.com/firecracker-microvm/firecracker/pull/4907): Bumped
   the snapshot version to 4.0.0, so users need to regenerate snapshots.
 
-## \[1.10.0\]
+## [1.10.0]
 
 ### Added
 
@@ -87,7 +188,7 @@ and this project adheres to
   in the restore path. This was leading to inability to connect to the restored
   VM if the offload features were used.
 
-## \[1.9.0\]
+## [1.9.0]
 
 ### Added
 
@@ -95,7 +196,8 @@ and this project adheres to
   VMGenID support for microVMs running on ARM hosts with 6.1 guest kernels.
   Support for VMGenID via DeviceTree bindings exists only on mainline 6.10 Linux
   onwards. Users of Firecracker will need to backport the relevant patches on
-  top of their 6.1 kernels to make use of the feature.
+  top of their 6.1 kernels to make use of the feature. As a result, Firecracker
+  snapshot version is now 3.0.0
 - [#4732](https://github.com/firecracker-microvm/firecracker/pull/4732),
   [#4733](https://github.com/firecracker-microvm/firecracker/pull/4733),
   [#4741](https://github.com/firecracker-microvm/firecracker/pull/4741),
@@ -131,7 +233,7 @@ and this project adheres to
   different assumptions. This PR fixes the emulation code to set the TAP
   features based on the features accepted by the guest.
 
-## \[1.8.0\]
+## [1.8.0]
 
 ### Added
 
@@ -224,7 +326,7 @@ and this project adheres to
   could lead to them seemingly getting stuck in sleep-related syscalls (see also
   https://github.com/firecracker-microvm/firecracker/pull/4099).
 
-## \[1.7.0\]
+## [1.7.0]
 
 ### Added
 
@@ -301,7 +403,7 @@ and this project adheres to
   content is empty, because the 'Content-Length' header field was missing in a
   response.
 
-## \[1.6.0\]
+## [1.6.0]
 
 ### Added
 
@@ -393,7 +495,7 @@ and this project adheres to
   "write-back" of all memory that was updated since the snapshot was originally
   loaded.
 
-## \[1.5.0\]
+## [1.5.0]
 
 ### Added
 
@@ -459,10 +561,10 @@ and this project adheres to
 
 - Fixed a change in behavior of normalize host brand string that breaks
   Firecracker on external instances.
-- Fixed the T2A CPU template not to unset the MMX bit
-  (CPUID.80000001h:EDX\[23\]) and the FXSR bit (CPUID.80000001h:EDX\[24\]).
+- Fixed the T2A CPU template not to unset the MMX bit (CPUID.80000001h:EDX[23])
+  and the FXSR bit (CPUID.80000001h:EDX[24]).
 - Fixed the T2A CPU template to set the RstrFpErrPtrs bit
-  (CPUID.80000008h:EBX\[2\]).
+  (CPUID.80000008h:EBX[2]).
 - Fixed a bug where Firecracker would crash during boot if a guest set up a
   virtio queue that partially overlapped with the MMIO gap. Now Firecracker
   instead correctly refuses to activate the corresponding virtio device.
@@ -481,7 +583,7 @@ and this project adheres to
   misspelled param ("nomodules") being present at the command line, since this
   param will no longer be passed.
 
-## \[1.4.0\]
+## [1.4.0]
 
 ### Added
 
@@ -496,8 +598,8 @@ and this project adheres to
 
 ### Changed
 
-- Set FDP_EXCPTN_ONLY bit (CPUID.7h.0:EBX\[6\]) and ZERO_FCS_FDS bit
-  (CPUID.7h.0:EBX\[13\]) in Intel's CPUID normalization process.
+- Set FDP_EXCPTN_ONLY bit (CPUID.7h.0:EBX[6]) and ZERO_FCS_FDS bit
+  (CPUID.7h.0:EBX[13]) in Intel's CPUID normalization process.
 
 ### Fixed
 
@@ -518,10 +620,9 @@ and this project adheres to
 - Fixed passing through cache information from host in CPUID leaf 0x80000005.
 - Fixed the T2A CPU template to disable SVM (nested virtualization).
 - Fixed the T2A CPU template to set EferLmsleUnsupported bit
-  (CPUID.80000008h:EBX\[20\]), which indicates that EFER\[LMSLE\] is not
-  supported.
+  (CPUID.80000008h:EBX[20]), which indicates that EFER[LMSLE] is not supported.
 
-## \[1.3.0\]
+## [1.3.0]
 
 ### Added
 
@@ -541,7 +642,7 @@ and this project adheres to
 
 - Fixed feature flags in T2 CPU template on Intel Ice Lake.
 
-## \[1.2.0\]
+## [1.2.0]
 
 ### Added
 
@@ -586,7 +687,7 @@ and this project adheres to
   of Firecracker \<= 1.1.3.
 - Improved stability and security when saving CPU MSRs in snapshots.
 
-## \[1.1.0\]
+## [1.1.0]
 
 ### Added
 
@@ -648,7 +749,7 @@ and this project adheres to
 - Fixed incosistency in the swagger definition with the current state of the
   `/vm/config` endpoint.
 
-## \[1.0.0\]
+## [1.0.0]
 
 ### Added
 
@@ -723,7 +824,7 @@ and this project adheres to
 - Fix jailer's cgroup implementation to accept properties that contain multiple
   dots.
 
-## \[0.25.0\]
+## [0.25.0]
 
 ### Added
 
@@ -782,7 +883,7 @@ and this project adheres to
   Epoch, as the name suggests. It was previously using a monotonic clock with an
   undefined starting point.
 
-## \[0.24.0\]
+## [0.24.0]
 
 ### Added
 
@@ -819,7 +920,7 @@ and this project adheres to
 
 - Fixed inconsistency in YAML file InstanceInfo definition
 
-## \[0.23.0\]
+## [0.23.0]
 
 ### Added
 
@@ -870,7 +971,7 @@ and this project adheres to
 - Changed `devtool build` to build jailer binary for `musl` only targets.
   Building jailer binary for `non-musl` targets have been removed.
 
-## \[0.22.0\]
+## [0.22.0]
 
 ### Added
 
@@ -934,7 +1035,7 @@ and this project adheres to
 - Segregated MMDS documentation in MMDS design documentation and MMDS user guide
   documentation.
 
-## \[0.21.0\]
+## [0.21.0]
 
 ### Added
 
@@ -970,7 +1071,7 @@ and this project adheres to
   functionality is available through the PATCH /drives API. See
   `docs/api_requests/patch-block.md`.
 
-## \[0.20.0\]
+## [0.20.0]
 
 ### Added
 
@@ -998,7 +1099,7 @@ and this project adheres to
 
 - Decreased release binary size by 10%.
 
-## \[0.19.0\]
+## [0.19.0]
 
 ### Added
 
@@ -1041,7 +1142,7 @@ and this project adheres to
 - Changed the vsock property `id` to `vsock_id` so that the API client can be
   successfully generated from the swagger definition.
 
-## \[0.18.0\]
+## [0.18.0]
 
 ### Added
 
@@ -1068,7 +1169,7 @@ and this project adheres to
 
 - Removed experimental support for vhost-based vsock devices.
 
-## \[0.17.0\]
+## [0.17.0]
 
 ### Added
 
@@ -1079,7 +1180,7 @@ and this project adheres to
 - Added a signal handler for `SIGBUS` and `SIGSEGV` that immediately terminates
   the process upon intercepting the signal.
 - Added documentation for signal handling utilities.
-- Added \[alpha\] aarch64 support.
+- Added [alpha] aarch64 support.
 - Added metrics for successful read and write operations of MMDS, Net and Block
   devices.
 
@@ -1094,11 +1195,11 @@ and this project adheres to
 - Incorrect handling of bind mounts within the jailed rootfs.
 - Corrected the guide for `Alpine` guest setup.
 
-## \[0.16.0\]
+## [0.16.0]
 
 ### Added
 
-- Added \[alpha\] AMD support.
+- Added [alpha] AMD support.
 - New `devtool` command: `prepare_release`. This updates the Firecracker
   version, crate dependencies and credits in preparation for a new release.
 - New `devtool` command: `tag`. This creates a new git tag for the specified
@@ -1124,13 +1225,13 @@ and this project adheres to
 
 - Removed the `seccomp.bad_syscalls` metric.
 
-## \[0.15.2\]
+## [0.15.2]
 
 ### Fixed
 
 - Corrected the conditional compilation of the seccomp rule for `madvise`.
 
-## \[0.15.1\]
+## [0.15.1]
 
 ### Fixed
 
@@ -1138,7 +1239,7 @@ and this project adheres to
   list to prevent Firecracker from terminating abruptly when allocating memory
   in certain conditions.
 
-## \[0.15.0\]
+## [0.15.0]
 
 ### Added
 
@@ -1163,7 +1264,7 @@ and this project adheres to
 - Vsock devices can be attached when starting Firecracker using the jailer.
 - Vsock devices work properly when seccomp filtering is enabled.
 
-## \[0.14.0\]
+## [0.14.0]
 
 ### Added
 
@@ -1183,7 +1284,7 @@ and this project adheres to
 
 - Fixed build with the `vsock` feature.
 
-## \[0.13.0\]
+## [0.13.0]
 
 ### Added
 
@@ -1210,7 +1311,7 @@ and this project adheres to
 
 - Removed `InstanceHalt` from the list of possible actions.
 
-## \[0.12.0\]
+## [0.12.0]
 
 ### Added
 
@@ -1240,7 +1341,7 @@ and this project adheres to
 - Ensure MMDS compatibility with C5's IMDS implementation.
 - Corrected the swagger specification to ensure `OpenAPI 2.0` compatibility.
 
-## \[0.11.0\]
+## [0.11.0]
 
 ### Added
 
@@ -1270,13 +1371,13 @@ and this project adheres to
 - Fixed bug in `PATCH /drives`, whereby the ID in the path was not checked
   against the ID in the body.
 
-## \[0.10.1\]
+## [0.10.1]
 
 ### Fixed
 
 - The Swagger definition was corrected.
 
-## \[0.10.0\]
+## [0.10.0]
 
 ### Added
 
@@ -1302,7 +1403,7 @@ and this project adheres to
 - The microVM ID prefixes each Firecracker log line. This ID also appears in the
   process `cmdline` so it's now possible to `ps | grep <ID>` for it.
 
-## \[0.9.0\]
+## [0.9.0]
 
 ### Added
 
@@ -1336,7 +1437,7 @@ and this project adheres to
 - Remove the `action_id` parameter for `InstanceStart`, both from the URI and
   the JSON request body.
 
-## \[0.8.0\]
+## [0.8.0]
 
 ### Added
 
@@ -1351,7 +1452,7 @@ and this project adheres to
 - Replaced the `permissions` property of `/drives` resources with a boolean.
 - Removed the `state` property of `/drives` resources.
 
-## \[0.7.0\]
+## [0.7.0]
 
 ### Added
 
@@ -1376,7 +1477,7 @@ and this project adheres to
   guest kernel boot.
 - Fixed network emulation to improve IO performance.
 
-## \[0.6.0\]
+## [0.6.0]
 
 ### Added
 
@@ -1405,7 +1506,7 @@ and this project adheres to
 - It is now possible to create more than one network tun/tap interface inside a
   jailed Firecracker.
 
-## \[0.5.0\]
+## [0.5.0]
 
 ### Added
 
@@ -1444,7 +1545,7 @@ and this project adheres to
 - Removed a leftover file generated by the logger unit tests.
 - Removed `firecracker-v1.0.yaml`.
 
-## \[0.4.0\]
+## [0.4.0]
 
 ### Added
 
@@ -1495,7 +1596,7 @@ and this project adheres to
 - Removed `--vmm-no-api` command line option. Firecracker can only be started
   via the API.
 
-## \[0.3.0\]
+## [0.3.0]
 
 ### Added
 
@@ -1531,7 +1632,7 @@ and this project adheres to
 - Removed support for attaching vsock devices.
 - Removed support for building Firecracker with glibc.
 
-## \[0.2.0\]
+## [0.2.0]
 
 ### Added
 
@@ -1569,7 +1670,7 @@ and this project adheres to
 - Removed `api/swagger/firecracker-mvp.yaml`.
 - Removed `api/swagger/limiters.yaml`.
 
-## \[0.1.1\]
+## [0.1.1]
 
 ### Changed
 
@@ -1584,7 +1685,7 @@ and this project adheres to
 - Fixed an issue which caused compilation problems, due to a compatibility
   breaking transitive dependency in the tokio suite of crates.
 
-## \[0.1.0\]
+## [0.1.0]
 
 ### Added
 

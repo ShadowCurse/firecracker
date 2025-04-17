@@ -45,6 +45,7 @@ pub(crate) struct CacheEntry {
 }
 
 #[derive(Debug)]
+#[cfg_attr(test, allow(dead_code))]
 struct HostCacheStore {
     cache_dir: PathBuf,
 }
@@ -206,6 +207,7 @@ impl CacheType {
     }
 }
 
+#[cfg_attr(test, allow(unused))]
 fn readln_special<T: AsRef<Path>>(file_path: &T) -> Result<String, CacheInfoError> {
     let line = fs::read_to_string(file_path)?;
     Ok(line.trim_end().to_string())
@@ -318,7 +320,7 @@ mod tests {
 
     use super::*;
     use crate::arch::aarch64::cache_info::{
-        read_cache_config, CacheEngine, CacheEntry, CacheStore,
+        CacheEngine, CacheEntry, CacheStore, read_cache_config,
     };
 
     #[derive(Debug)]

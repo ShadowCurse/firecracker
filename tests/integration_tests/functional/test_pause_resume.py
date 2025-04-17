@@ -4,6 +4,7 @@
 
 import platform
 import time
+from subprocess import TimeoutExpired
 
 import pytest
 
@@ -52,16 +53,12 @@ def test_pause_resume(uvm_nano):
     microvm.flush_metrics()
 
     # Verify guest is no longer active.
-    with pytest.raises(ChildProcessError):
-        microvm.ssh.check_output("true")
+    with pytest.raises(TimeoutExpired):
+        microvm.ssh.check_output("true", timeout=1)
 
     # Verify emulation was indeed paused and no events from either
     # guest or host side were handled.
     verify_net_emulation_paused(microvm.flush_metrics())
-
-    # Verify guest is no longer active.
-    with pytest.raises(ChildProcessError):
-        microvm.ssh.check_output("true")
 
     # Pausing the microVM when it is already `Paused` is allowed
     # (microVM remains in `Paused` state).
@@ -71,6 +68,7 @@ def test_pause_resume(uvm_nano):
     microvm.api.vm.patch(state="Resumed")
 
     # Verify guest is active again.
+    microvm.ssh.check_output("true")
 
     # Resuming the microVM when it is already `Resumed` is allowed
     # (microVM remains in the running state).
@@ -143,7 +141,12 @@ def test_kvmclock_ctrl(uvm_plain_any):
     microvm = uvm_plain_any
     microvm.help.enable_console()
     microvm.spawn()
-    microvm.basic_config()
+
+    # With 2 vCPUs under certain conditions soft lockup warnings can rarely be in dmesg causing this test to fail.
+    # Example of the warning: `watchdog: BUG: soft lockup - CPU#0 stuck for (x)s! [(udev-worker):758]`
+    # With 1 vCPU this intermittent issue doesn't occur. If the KVM_CLOCK_CTRL IOCTL is not made
+    # the test will fail with 1 vCPU, so we can assert the call to the IOCTL is made.
+    microvm.basic_config(vcpu_count=1)
     microvm.add_net_iface()
     microvm.start()
 

@@ -41,9 +41,9 @@ def test_high_ingress_traffic(uvm_plain_any):
     time.sleep(1)
 
     # Start iperf3 client on the host. Send 1Gbps UDP traffic.
-    # If the net device breaks, iperf will freeze. We have to use a timeout.
+    # If the net device breaks, iperf will freeze, and we'll hit the pytest timeout
     utils.check_output(
-        "timeout 31 {} {} -c {} -u -V -b 1000000000 -t 30".format(
+        "{} {} -c {} -u -V -b 1000000000 -t 30".format(
             test_microvm.netns.cmd_prefix(),
             IPERF_BINARY_HOST,
             guest_ip,
@@ -83,15 +83,27 @@ def test_multi_queue_unsupported(uvm_plain):
             guest_mac="AA:FC:00:00:00:01",
         )
 
+    # clean TAP device
+    utils.run_cmd(f"{microvm.netns.cmd_prefix()} ip link del name {tapname}")
 
-def run_udp_offload_test(vm):
+
+@pytest.fixture
+def uvm_any(microvm_factory, uvm_ctor, guest_kernel, rootfs):
+    """Return booted and restored uvm with no CPU templates"""
+    return uvm_ctor(microvm_factory, guest_kernel, rootfs, None)
+
+
+def test_tap_offload(uvm_any):
     """
+    Verify that tap offload features are configured for a booted/restored VM.
+
     - Start a socat UDP server in the guest.
     - Try to send a UDP message with UDP offload enabled.
 
     If tap offload features are not configured, an attempt to send a message will fail with EIO "Input/output error".
     More info (search for "TUN_F_CSUM is a must"): https://blog.cloudflare.com/fr-fr/virtual-networking-101-understanding-tap/
     """
+    vm = uvm_any
     port = "81"
     out_filename = "/tmp/out.txt"
     message = "x"
@@ -99,48 +111,12 @@ def run_udp_offload_test(vm):
     # Start a UDP server in the guest
     # vm.ssh.check_output(f"nohup socat UDP-LISTEN:{port} - > {out_filename} &")
     vm.ssh.check_output(
-        f"nohup socat UDP-LISTEN:{port} OPEN:{out_filename},creat > /dev/null 2>&1 &"
+        f"nohup socat UDP4-LISTEN:{port} OPEN:{out_filename},creat > /dev/null 2>&1 &"
     )
 
     # Try to send a UDP message from host with UDP offload enabled
-    cmd = f"ip netns exec {vm.ssh_iface().netns} python3 ./host_tools/udp_offload.py {vm.ssh_iface().host} {port}"
-    ret = utils.run_cmd(cmd)
-
-    # Check that the transmission was successful
-    assert ret.returncode == 0, f"{ret.stdout=} {ret.stderr=}"
+    vm.netns.check_output(f"python3 ./host_tools/udp_offload.py {vm.ssh.host} {port}")
 
     # Check that the server received the message
-    ret = vm.ssh.run(f"cat {out_filename}")
+    ret = vm.ssh.run(f"sync ; cat {out_filename}")
     assert ret.stdout == message, f"{ret.stdout=} {ret.stderr=}"
-
-
-def test_tap_offload_booted(uvm_plain_any):
-    """
-    Verify that tap offload features are configured for a booted VM.
-    """
-    vm = uvm_plain_any
-    vm.spawn()
-    vm.basic_config()
-    vm.add_net_iface()
-    vm.start()
-
-    run_udp_offload_test(vm)
-
-
-def test_tap_offload_restored(microvm_factory, guest_kernel, rootfs_ubuntu_22):
-    """
-    Verify that tap offload features are configured for a restored VM.
-    """
-    src = microvm_factory.build(guest_kernel, rootfs_ubuntu_22, monitor_memory=False)
-    src.spawn()
-    src.basic_config()
-    src.add_net_iface()
-    src.start()
-    snapshot = src.snapshot_full()
-    src.kill()
-
-    dst = microvm_factory.build()
-    dst.spawn()
-    dst.restore_from_snapshot(snapshot, resume=True)
-
-    run_udp_offload_test(dst)

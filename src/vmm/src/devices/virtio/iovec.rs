@@ -100,7 +100,10 @@ impl IoVecBuffer {
         head: DescriptorChain,
     ) -> Result<Self, IoVecError> {
         let mut new_buffer = Self::default();
-        new_buffer.load_descriptor_chain(mem, head)?;
+        // SAFETY: descriptor chain cannot be referencing the same memory location as another chain
+        unsafe {
+            new_buffer.load_descriptor_chain(mem, head)?;
+        }
         Ok(new_buffer)
     }
 
@@ -194,7 +197,7 @@ impl IoVecBuffer {
                     Err(VolatileMemoryError::IOError(err))
                         if err.kind() == ErrorKind::Interrupted =>
                     {
-                        continue
+                        continue;
                     }
                     Ok(bytes_read) => break bytes_read,
                     Err(volatile_memory_error) => return Err(volatile_memory_error),
@@ -264,10 +267,11 @@ impl<const L: u16> IoVecBufferMut<L> {
             // We use get_slice instead of `get_host_address` here in order to have the whole
             // range of the descriptor chain checked, i.e. [addr, addr + len) is a valid memory
             // region in the GuestMemoryMmap.
-            let slice = mem.get_slice(desc.addr, desc.len as usize).map_err(|err| {
-                self.vecs.pop_back(nr_iovecs);
-                err
-            })?;
+            let slice = mem
+                .get_slice(desc.addr, desc.len as usize)
+                .inspect_err(|_| {
+                    self.vecs.pop_back(nr_iovecs);
+                })?;
             // We need to mark the area of guest memory that will be mutated through this
             // IoVecBufferMut as dirty ahead of time, as we loose access to all
             // vm-memory related information after converting down to iovecs.
@@ -288,9 +292,8 @@ impl<const L: u16> IoVecBufferMut<L> {
             length = length
                 .checked_add(desc.len)
                 .ok_or(IoVecError::OverflowedDescriptor)
-                .map_err(|err| {
+                .inspect_err(|_| {
                     self.vecs.pop_back(nr_iovecs);
-                    err
                 })?;
 
             next_descriptor = desc.next_descriptor();
@@ -328,7 +331,8 @@ impl<const L: u16> IoVecBufferMut<L> {
         head: DescriptorChain,
     ) -> Result<(), IoVecError> {
         self.clear();
-        let _ = self.append_descriptor_chain(mem, head)?;
+        // SAFETY: descriptor chain cannot be referencing the same memory location as another chain
+        let _ = unsafe { self.append_descriptor_chain(mem, head)? };
         Ok(())
     }
 
@@ -358,7 +362,10 @@ impl<const L: u16> IoVecBufferMut<L> {
         head: DescriptorChain,
     ) -> Result<Self, IoVecError> {
         let mut new_buffer = Self::new()?;
-        new_buffer.load_descriptor_chain(mem, head)?;
+        // SAFETY: descriptor chain cannot be referencing the same memory location as another chain
+        unsafe {
+            new_buffer.load_descriptor_chain(mem, head)?;
+        }
         Ok(new_buffer)
     }
 
@@ -455,7 +462,7 @@ impl<const L: u16> IoVecBufferMut<L> {
                     Err(VolatileMemoryError::IOError(err))
                         if err.kind() == ErrorKind::Interrupted =>
                     {
-                        continue
+                        continue;
                     }
                     Ok(bytes_read) => break bytes_read,
                     Err(volatile_memory_error) => return Err(volatile_memory_error),
@@ -486,7 +493,7 @@ mod tests {
 
     use crate::devices::virtio::iov_deque::IovDeque;
     use crate::devices::virtio::queue::{
-        Queue, FIRECRACKER_MAX_QUEUE_SIZE, VIRTQ_DESC_F_NEXT, VIRTQ_DESC_F_WRITE,
+        FIRECRACKER_MAX_QUEUE_SIZE, Queue, VIRTQ_DESC_F_NEXT, VIRTQ_DESC_F_WRITE,
     };
     use crate::devices::virtio::test_utils::VirtQueue;
     use crate::test_utils::multi_region_mem;
@@ -811,17 +818,17 @@ mod verification {
     use std::mem::ManuallyDrop;
 
     use libc::{c_void, iovec};
-    use vm_memory::bitmap::BitmapSlice;
     use vm_memory::VolatileSlice;
+    use vm_memory::bitmap::BitmapSlice;
 
     use super::IoVecBuffer;
+    use crate::arch::GUEST_PAGE_SIZE;
     use crate::devices::virtio::iov_deque::IovDeque;
     // Redefine `IoVecBufferMut` and `IovDeque` with specific length. Otherwise
     // Rust will not know what to do.
     type IoVecBufferMutDefault = super::IoVecBufferMut<FIRECRACKER_MAX_QUEUE_SIZE>;
     type IovDequeDefault = IovDeque<FIRECRACKER_MAX_QUEUE_SIZE>;
 
-    use crate::arch::PAGE_SIZE;
     use crate::devices::virtio::queue::FIRECRACKER_MAX_QUEUE_SIZE;
 
     // Maximum memory size to use for our buffers. For the time being 1KB.
@@ -912,8 +919,8 @@ mod verification {
         // SAFETY: safe because the layout has non-zero size
         let mem = unsafe {
             std::alloc::alloc(std::alloc::Layout::from_size_align_unchecked(
-                2 * PAGE_SIZE,
-                PAGE_SIZE,
+                2 * GUEST_PAGE_SIZE,
+                GUEST_PAGE_SIZE,
             ))
         };
         IovDequeDefault {

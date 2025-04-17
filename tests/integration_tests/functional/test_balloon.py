@@ -7,6 +7,7 @@ import time
 from subprocess import TimeoutExpired
 
 import pytest
+import requests
 from tenacity import retry, stop_after_attempt, wait_fixed
 
 from framework.utils import check_output, get_free_mem_ssh
@@ -32,9 +33,11 @@ def get_stable_rss_mem_by_pid(pid, percentage_delta=1):
     first_rss = get_rss_from_pmap()
     time.sleep(1)
     second_rss = get_rss_from_pmap()
-    print(f"RSS readings: {first_rss}, {second_rss}")
     abs_diff = abs(first_rss - second_rss)
     abs_delta = 100 * abs_diff / first_rss
+    print(
+        f"RSS readings: old: {first_rss} new: {second_rss} abs_diff: {abs_diff} abs_delta: {abs_delta}"
+    )
     assert abs_delta < percentage_delta or abs_diff < 2**10
     return second_rss
 
@@ -62,18 +65,10 @@ def lower_ssh_oom_chance(ssh_connection):
 
 def make_guest_dirty_memory(ssh_connection, amount_mib=32):
     """Tell the guest, over ssh, to dirty `amount` pages of memory."""
-    logger = logging.getLogger("make_guest_dirty_memory")
-
     lower_ssh_oom_chance(ssh_connection)
 
-    cmd = f"/usr/local/bin/fillmem {amount_mib}"
     try:
-        exit_code, stdout, stderr = ssh_connection.run(cmd, timeout=1.0)
-        # add something to the logs for troubleshooting
-        if exit_code != 0:
-            logger.error("while running: %s", cmd)
-            logger.error("stdout: %s", stdout)
-            logger.error("stderr: %s", stderr)
+        _ = ssh_connection.run(f"/usr/local/bin/fillmem {amount_mib}", timeout=1.0)
     except TimeoutExpired:
         # It's ok if this expires. Sometimes the SSH connection
         # gets killed by the OOM killer *after* the fillmem program
@@ -215,12 +210,20 @@ def test_deflate_on_oom(uvm_plain_any, deflate_on_oom):
     balloon_size_before = test_microvm.api.balloon_stats.get().json()["actual_mib"]
     make_guest_dirty_memory(test_microvm.ssh, 128)
 
-    balloon_size_after = test_microvm.api.balloon_stats.get().json()["actual_mib"]
-    print(f"size before: {balloon_size_before} size after: {balloon_size_after}")
-    if deflate_on_oom:
-        assert balloon_size_after < balloon_size_before, "Balloon did not deflate"
+    try:
+        balloon_size_after = test_microvm.api.balloon_stats.get().json()["actual_mib"]
+    except requests.exceptions.ConnectionError:
+        assert (
+            not deflate_on_oom
+        ), "Guest died even though it should have deflated balloon to alleviate memory pressure"
+
+        test_microvm.mark_killed()
     else:
-        assert balloon_size_after >= balloon_size_before, "Balloon deflated"
+        print(f"size before: {balloon_size_before} size after: {balloon_size_after}")
+        if deflate_on_oom:
+            assert balloon_size_after < balloon_size_before, "Balloon did not deflate"
+        else:
+            assert balloon_size_after >= balloon_size_before, "Balloon deflated"
 
 
 # pylint: disable=C0103
@@ -484,9 +487,7 @@ def test_balloon_snapshot(microvm_factory, guest_kernel, rootfs):
     assert first_reading > second_reading
 
     snapshot = vm.snapshot_full()
-    microvm = microvm_factory.build()
-    microvm.spawn()
-    microvm.restore_from_snapshot(snapshot, resume=True)
+    microvm = microvm_factory.build_from_snapshot(snapshot)
 
     # Get the firecracker from snapshot pid, and open an ssh connection.
     firecracker_pid = microvm.firecracker_pid
