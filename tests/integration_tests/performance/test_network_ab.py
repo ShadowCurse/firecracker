@@ -63,7 +63,7 @@ def test_network_latency(network_microvm, metrics, n):
 
     rounds = 15
     request_per_round = 30
-    delay = 0.2
+    delay = 0.0
 
     metrics.set_dimensions(
         {
