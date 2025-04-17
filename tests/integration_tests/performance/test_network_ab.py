@@ -54,8 +54,9 @@ def network_microvm(request, microvm_factory, guest_kernel_acpi, rootfs):
 
 
 @pytest.mark.nonci
+@pytest.mark.parametrize("n", range(100))
 @pytest.mark.parametrize("network_microvm", [1], indirect=True)
-def test_network_latency(network_microvm, metrics):
+def test_network_latency(network_microvm, metrics, n):
     """
     Test network latency by sending pings from the guest to the host.
     """
