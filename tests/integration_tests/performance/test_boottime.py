@@ -107,9 +107,12 @@ def test_boottime(
         timestamps = find_events(vm.log_data)
         build_time = timestamps["build microvm for boot"]["duration"]
         metrics.put_metric("build_time", build_time.microseconds, unit="Microseconds")
+        bt = boottime_us - build_time.microseconds
         metrics.put_metric(
             "guest_boot_time",
             boottime_us - build_time.microseconds,
             unit="Microseconds",
         )
+        print("Timesstamps: ", timestamps)
+        print(f"boottime: {bt}")
         vm.kill()
