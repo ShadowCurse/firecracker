@@ -496,6 +496,13 @@ impl Vcpu {
             return Ok(VcpuEmulation::Interrupted);
         }
 
+        unsafe {
+            static mut PRINT: bool = true;
+            if (PRINT) {
+                warn!("Boot time: {:#?}", std::time::Instant::now() - crate::TIME);
+                PRINT = false;
+            }
+        }
         match self.kvm_vcpu.fd.run() {
             Err(ref err) if err.errno() == libc::EINTR => {
                 self.kvm_vcpu.fd.set_kvm_immediate_exit(0);

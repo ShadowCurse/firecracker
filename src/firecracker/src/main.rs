@@ -92,6 +92,9 @@ impl From<MainError> for FcExitCode {
 }
 
 fn main() -> ExitCode {
+    unsafe { 
+        vmm::TIME = std::time::Instant::now();
+    }
     let result = main_exec();
     if let Err(err) = result {
         error!("{err}");

@@ -158,6 +158,8 @@ pub use crate::vstate::vm::Vm;
 /// Shorthand type for the EventManager flavour used by Firecracker.
 pub type EventManager = BaseEventManager<Arc<Mutex<dyn MutEventSubscriber>>>;
 
+pub static mut TIME: std::time::Instant = unsafe { std::mem::MaybeUninit::zeroed().assume_init() };
+
 // Since the exit code names e.g. `SIGBUS` are most appropriate yet trigger a test error with the
 // clippy lint `upper_case_acronyms` we have disabled this lint for this enum.
 /// Vmm exit-code type.
