@@ -802,6 +802,14 @@ cmd_test() {
     # do not leave behind env.list file
     rm env.list
 
+    # archive everything in the `test_result` to speed up upload/download
+    # to s3 if we are in CI
+    if [ -n "$BUILDKITE" ] && [ "$BUILDKITE" = "true" ]; then
+      tar -czf data.tar -C test_results .
+      rm -r test_results/*
+      mv data.tar test_results
+    fi
+
     return $ret
 }
 
