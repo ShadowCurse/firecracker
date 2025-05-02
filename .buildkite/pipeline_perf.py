@@ -99,13 +99,13 @@ for test in tests:
     if REVISION_A:
         devtool_opts += " --ab"
         pytest_opts = (
-            f"{ab_opts} run build/{REVISION_A}/ build/{REVISION_B} --test {test_path}"
+            f"{ab_opts} run build/{REVISION_A}/ build/{REVISION_B} --test {test_path} -s"
         )
     else:
         # Passing `-m ''` below instructs pytest to collect tests regardless of
         # their markers (e.g. it will collect both tests marked as nonci, and
         # tests without any markers).
-        pytest_opts += f" -m '' {test_path}"
+        pytest_opts += f" -s -m '' {test_path}"
 
     pipeline.build_group(
         command=pipeline.devtool_test(devtool_opts, pytest_opts),

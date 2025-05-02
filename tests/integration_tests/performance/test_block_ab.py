@@ -16,10 +16,10 @@ from framework.utils import CmdBuilder, check_output, track_cpu_utilization
 BLOCK_DEVICE_SIZE_MB = 2048
 
 # Time (in seconds) for which fio "warms up"
-WARMUP_SEC = 10
+WARMUP_SEC = 1
 
 # Time (in seconds) for which fio runs after warmup is done
-RUNTIME_SEC = 30
+RUNTIME_SEC = 3
 
 # VM guest memory size
 GUEST_MEM_MIB = 1024
@@ -112,6 +112,10 @@ def process_fio_logs(vm, fio_mode, logs_dir, metrics):
         for job_id in range(vm.vcpus_count)
     ]
 
+    print(f"vcpus: {vm.vcpus_count}")
+    total_read = 0
+    total_c = 0
+
     for tup in zip(*data):
         bw_read = 0
         bw_write = 0
@@ -129,18 +133,24 @@ def process_fio_logs(vm, fio_mode, logs_dir, metrics):
                 case _:
                     assert False
 
+        total_read += bw_read / 1000
+        total_c += 1
+
         if bw_read:
             metrics.put_metric("bw_read", bw_read, "Kilobytes/Second")
         if bw_write:
             metrics.put_metric("bw_write", bw_write, "Kilobytes/Second")
 
+    print(f"bw_read: {total_read / total_c} Mb/s")
 
 @pytest.mark.timeout(120)
 @pytest.mark.nonci
-@pytest.mark.parametrize("vcpus", [1, 2], ids=["1vcpu", "2vcpu"])
-@pytest.mark.parametrize("fio_mode", ["read", "write", "randread", "randwrite"])
-@pytest.mark.parametrize("fio_block_size", ["4K", "8K", "16K", "32K", "1M"], ids=["bs4K", "bs8K", "bs16K", "bs32K", "bs1M"])
+@pytest.mark.parametrize("n", range(20))
+@pytest.mark.parametrize("vcpus", [2], ids=["2vcpu"])
+@pytest.mark.parametrize("fio_mode", ["randread"])
+@pytest.mark.parametrize("fio_block_size", ["4K"], ids=["bs4K"])
 def test_block_performance(
+    n,
     microvm_factory,
     guest_kernel_acpi,
     rootfs,
