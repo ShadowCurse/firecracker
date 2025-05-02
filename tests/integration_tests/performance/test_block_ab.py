@@ -4,7 +4,6 @@
 
 import concurrent
 import os
-import shutil
 from pathlib import Path
 
 import pytest
@@ -44,7 +43,7 @@ def prepare_microvm_for_test(microvm):
     check_output("echo 3 > /proc/sys/vm/drop_caches")
 
 
-def run_fio(microvm, mode, block_size):
+def run_fio(microvm, mode, block_size, test_output_dir):
     """Run a fio test in the specified mode with block size bs."""
     cmd = (
         CmdBuilder("fio")
@@ -70,15 +69,9 @@ def run_fio(microvm, mode, block_size):
         .with_arg(f"--write_bw_log={mode}")
         .with_arg("--log_avg_msec=1000")
         .with_arg("--output-format=json+")
+        .with_arg("--output=/tmp/fio.json")
         .build()
     )
-
-    logs_path = Path(microvm.jailer.chroot_base_with_id()) / "fio_output"
-
-    if logs_path.is_dir():
-        shutil.rmtree(logs_path)
-
-    logs_path.mkdir()
 
     prepare_microvm_for_test(microvm)
 
@@ -96,10 +89,10 @@ def run_fio(microvm, mode, block_size):
         assert rc == 0, stderr
         assert stderr == ""
 
-        microvm.ssh.scp_get("/tmp/*.log", logs_path)
-        microvm.ssh.check_output("rm /tmp/*.log")
+        microvm.ssh.scp_get("/tmp/fio.json", test_output_dir)
+        microvm.ssh.scp_get("/tmp/*.log", test_output_dir)
 
-        return logs_path, cpu_load_future.result()
+        return cpu_load_future.result()
 
 
 def process_fio_logs(vm, fio_mode, logs_dir, metrics):
@@ -149,6 +142,7 @@ def test_block_performance(
     fio_block_size,
     io_engine,
     metrics,
+    results_dir,
 ):
     """
     Execute block device emulation benchmarking scenarios.
@@ -176,9 +170,9 @@ def test_block_performance(
 
     vm.pin_threads(0)
 
-    logs_dir, cpu_util = run_fio(vm, fio_mode, fio_block_size)
+    cpu_util = run_fio(vm, fio_mode, fio_block_size, results_dir)
 
-    process_fio_logs(vm, fio_mode, logs_dir, metrics)
+    process_fio_logs(vm, fio_mode, results_dir, metrics)
 
     for thread_name, values in cpu_util.items():
         for value in values:
@@ -197,6 +191,7 @@ def test_block_vhost_user_performance(
     fio_mode,
     fio_block_size,
     metrics,
+    results_dir,
 ):
     """
     Execute block device emulation benchmarking scenarios.
@@ -225,9 +220,9 @@ def test_block_vhost_user_performance(
     next_cpu = vm.pin_threads(0)
     vm.disks_vhost_user["scratch"].pin(next_cpu)
 
-    logs_dir, cpu_util = run_fio(vm, fio_mode, fio_block_size)
+    cpu_util = run_fio(vm, fio_mode, fio_block_size, results_dir)
 
-    process_fio_logs(vm, fio_mode, logs_dir, metrics)
+    process_fio_logs(vm, fio_mode, results_dir, metrics)
 
     for thread_name, values in cpu_util.items():
         for value in values:
