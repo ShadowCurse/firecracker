@@ -85,7 +85,7 @@ def run_fio(microvm, mode, block_size, test_output_dir):
         )
 
         # Print the fio command in the log and run it
-        rc, _, stderr = microvm.ssh.run(f"cd /tmp; {cmd}")
+        rc, stdout, stderr = microvm.ssh.run(f"cd /tmp; {cmd}")
         assert rc == 0, stderr
         assert stderr == ""
 
