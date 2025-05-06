@@ -21,6 +21,7 @@ while still preventing the latter: We run cargo audit twice, once on main HEAD, 
 of both invocations is the same, the test passes (with us being alerted to this situtation via a special pipeline that
 does not block PRs). If not, it fails, preventing PRs from introducing new vulnerable dependencies.
 """
+import os
 import statistics
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -103,7 +104,7 @@ DEFAULT_B_DIRECTORY = FC_WORKSPACE_DIR / "build" / "cargo_target" / DEFAULT_TARG
 
 
 def binary_ab_test(
-    test_runner: Callable[[Path, bool], T],
+    test_runner: Callable[[str, Path, bool], T],
     comparator: Callable[[T, T], U] = default_comparator,
     *,
     a_directory: Path = DEFAULT_A_DIRECTORY,
@@ -113,8 +114,14 @@ def binary_ab_test(
     Similar to `git_ab_test`, but instead of locally checking out different revisions, it operates on
     directories containing firecracker/jailer binaries
     """
-    result_a = test_runner(a_directory, True)
-    result_b = test_runner(b_directory, False)
+    result_a = test_runner("A", a_directory, True)
+    result_b = test_runner("B", b_directory, False)
+
+    # put results back into the place, where buildkite will
+    # expect them to be
+    os.mkdir("test_results")
+    os.rename("A", "test_results/A")
+    os.rename("B", "test_results/B")
 
     return result_a, result_b, comparator(result_a, result_b)
 
