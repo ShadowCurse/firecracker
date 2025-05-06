@@ -19,6 +19,7 @@ collected this way must be the same. Then, we match corresponding dimensions
 between the two runs, performing statistical regression test across all the list-
 valued properties collected.
 """
+
 import argparse
 import json
 import os
@@ -157,6 +158,7 @@ def collect_data(binary_dir: Path, tests: list[str]):
     binary_dir = binary_dir.resolve()
 
     print(f"Collecting samples with {binary_dir}")
+    test_report_path = f"test_results/{tag}/test-report.json"
     subprocess.run(
         ["./tools/test.sh", f"--binary-dir={binary_dir}", *tests, "-m", ""],
         env=os.environ
@@ -166,9 +168,8 @@ def collect_data(binary_dir: Path, tests: list[str]):
         },
         check=True,
     )
-    return load_data_series(
-        Path("test_results/test-report.json"), binary_dir, reemit=True
-    )
+
+    return load_data_series(Path(test_report_path), binary_dir, reemit=True)
 
 
 def analyze_data(
