@@ -320,7 +320,7 @@ class BKPipeline:
         """
         depends_on_build = kwargs.pop("depends_on_build", True)
         combined = overlay_dict(self.per_instance, kwargs)
-        combined["parallelism"] = 10
+        combined["parallelism"] = 50
         return self.add_step(
             group(*args, **combined), depends_on_build=depends_on_build
         )
