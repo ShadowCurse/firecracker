@@ -140,14 +140,6 @@ def emit_fio_metrics(logs_dir, metrics):
         if bw_write:
             metrics.put_metric("bw_write", sum(bw_write), "Kilobytes/Second")
 
-    for lat_read, lat_write in process_fio_log_files(logs_dir, "*_clat.*.log"):
-        # latency values in fio logs are in nanoseconds, but cloudwatch only supports
-        # microseconds as the more granular unit, so need to divide by 1000.
-        for value in lat_read:
-            metrics.put_metric("clat_read", value / 1000, "Microseconds")
-        for value in lat_write:
-            metrics.put_metric("clat_write", value / 1000, "Microseconds")
-
 
 @pytest.mark.nonci
 @pytest.mark.parametrize("vcpus", [1, 2], ids=["1vcpu", "2vcpu"])
