@@ -17,12 +17,12 @@ from common import BKPipeline
 # has to be the node associated with the NUMA node from which we picked CPUs.
 perf_test = {
     "virtio-block-sync": {
-        "label": "💿 Virtio Sync Block Performance",
+        "label": "💿 Virtio Block Performance",
         "tests": "integration_tests/performance/test_block_ab.py::test_block_performance -k 'not Async'",
         "devtool_opts": "-c 1-10 -m 0",
     },
     "virtio-block-async": {
-        "label": "💿 Virtio Async Block Performance",
+        "label": "💿 Virtio Block Performance",
         "tests": "integration_tests/performance/test_block_ab.py::test_block_performance -k Async",
         "devtool_opts": "-c 1-10 -m 0",
     },
