@@ -32,6 +32,7 @@ if __name__ == "__main__":
         "./tools/devtool -y test --no-build -- -m nonci -n4 integration_tests/functional/test_snapshot_phase1.py",
         "pwd",
         "ls -al",
+        "ls -al test_results",
         # punch holes in mem snapshot tiles and tar them so they are preserved in S3
         "find test_results/test_snapshot_phase1 -type f -name mem |xargs -P4 -t -n1 fallocate -d",
         "mv -v test_results/test_snapshot_phase1 snapshot_artifacts",
