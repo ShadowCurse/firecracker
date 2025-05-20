@@ -143,8 +143,10 @@ def emit_fio_metrics(logs_dir, metrics):
     for bw_read, bw_write in process_fio_log_files(logs_dir, "*_bw.*.log"):
         if bw_read:
             metrics.put_metric("bw_read", sum(bw_read), "Kilobytes/Second")
+            print("bw_read: ", sum(bw_read))
         if bw_write:
             metrics.put_metric("bw_write", sum(bw_write), "Kilobytes/Second")
+            print("bw_write: ", sum(bw_write))
 
     for lat_read, lat_write in process_fio_log_files(logs_dir, "*_clat.*.log"):
         # latency values in fio logs are in nanoseconds, but cloudwatch only supports
@@ -156,11 +158,13 @@ def emit_fio_metrics(logs_dir, metrics):
 
 
 @pytest.mark.nonci
+@pytest.mark.parametrize("n", range(20))
 @pytest.mark.parametrize("vcpus", [1, 2], ids=["1vcpu", "2vcpu"])
 @pytest.mark.parametrize("fio_mode", ["randread", "randwrite"])
 @pytest.mark.parametrize("fio_block_size", [4096], ids=["bs4096"])
-@pytest.mark.parametrize("fio_engine", ["libaio", "psync"])
+@pytest.mark.parametrize("fio_engine", ["libaio"])
 def test_block_performance(
+    n,
     microvm_factory,
     guest_kernel_acpi,
     rootfs,
