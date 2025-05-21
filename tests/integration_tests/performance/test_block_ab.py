@@ -200,13 +200,13 @@ def test_block_performance(
 
     vm.pin_threads(0)
 
-    wfe_events_before = Path("/sys/kernel/debug/kvm/{vm.firecracker_pid}-25/wfe_exit_stat").read_text()
-    wfi_events_before = Path("/sys/kernel/debug/kvm/{vm.firecracker_pid}-25/wfi_exit_stat").read_text()
+    wfe_events_before = Path(f"/sys/kernel/debug/kvm/{vm.firecracker_pid}-25/wfe_exit_stat").read_text()
+    wfi_events_before = Path(f"/sys/kernel/debug/kvm/{vm.firecracker_pid}-25/wfi_exit_stat").read_text()
 
     cpu_util = run_fio(vm, fio_mode, fio_block_size, results_dir, fio_engine)
 
-    wfe_events_after = Path("/sys/kernel/debug/kvm/{vm.firecracker_pid}-25/wfe_exit_stat").read_text()
-    wfi_events_after = Path("/sys/kernel/debug/kvm/{vm.firecracker_pid}-25/wfi_exit_stat").read_text()
+    wfe_events_after = Path(f"/sys/kernel/debug/kvm/{vm.firecracker_pid}-25/wfe_exit_stat").read_text()
+    wfi_events_after = Path(f"/sys/kernel/debug/kvm/{vm.firecracker_pid}-25/wfi_exit_stat").read_text()
 
     Path(results_dir / "wfe.json").write_text(json.dumps({"before": wfe_events_before, "after": wfe_events_after}))
     Path(results_dir / "wfi.json").write_text(json.dumps({"before": wfi_events_before, "after": wfi_events_after}))
