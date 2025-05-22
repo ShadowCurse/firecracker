@@ -29,6 +29,10 @@ and this project adheres to
 
 ### Fixed
 
+- [#5222](https://github.com/firecracker-microvm/firecracker/pull/5222): Fixed
+  `IovDeque` wraparound logic which prevented it from working properly on
+  systems with non 4K pages.
+
 ## [1.12.0]
 
 ### Added
