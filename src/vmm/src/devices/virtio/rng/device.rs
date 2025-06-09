@@ -295,7 +295,7 @@ impl VirtioDevice for Entropy {
     fn activate(&mut self, mem: GuestMemoryMmap) -> Result<(), ActivateError> {
         for q in self.queues.iter_mut() {
             q.initialize(&mem)
-                .map_err(ActivateError::QueueMemoryError)?;
+                .map_err(ActivateError::QueueError)?;
         }
 
         self.activate_event.write(1).map_err(|_| {
