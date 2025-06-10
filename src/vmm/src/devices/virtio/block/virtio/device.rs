@@ -57,12 +57,14 @@ pub struct DiskProperties {
     pub image_id: [u8; VIRTIO_BLK_ID_BYTES as usize],
 }
 
+use std::os::unix::fs::OpenOptionsExt;
 impl DiskProperties {
     // Helper function that opens the file with the proper access permissions
     fn open_file(disk_image_path: &str, is_disk_read_only: bool) -> Result<File, VirtioBlockError> {
         OpenOptions::new()
             .read(true)
             .write(!is_disk_read_only)
+            .custom_flags(libc::O_DIRECT)
             .open(PathBuf::from(&disk_image_path))
             .map_err(|x| VirtioBlockError::BackingFile(x, disk_image_path.to_string()))
     }
