@@ -412,49 +412,91 @@ impl VirtioBlock {
         let queue = &mut self.queues[queue_index];
         let mut used_any = false;
 
-        while let Some(head) = queue.pop_or_enable_notification()? {
-            self.metrics.remaining_reqs_count.add(queue.len().into());
-            let processing_result = match Request::parse(&head, mem, self.disk.nsectors) {
-                Ok(request) => {
-                    if request.rate_limit(&mut self.rate_limiter) {
-                        // Stop processing the queue and return this descriptor chain to the
-                        // avail ring, for later processing.
+        loop {
+            let mut current_len = queue.take_queue();
+            // log::warn!("queue len: {current_len}");
+
+            // while let Some(head) = queue.pop_or_enable_notification()? {
+            // while let Some(head) = queue.pop()? {
+            while current_len != 0 {
+                current_len -= 1;
+                let head = queue.pop().unwrap().unwrap();
+                self.metrics.remaining_reqs_count.add(queue.len().into());
+                let processing_result = match Request::parse(&head, mem, self.disk.nsectors) {
+                    Ok(request) => {
+                        if request.rate_limit(&mut self.rate_limiter) {
+                            // Stop processing the queue and return this descriptor chain to the
+                            // avail ring, for later processing.
+                            queue.undo_pop();
+                            self.metrics.rate_limiter_throttled_events.inc();
+                            break;
+                        }
+
+                        used_any = true;
+                        request.process(&mut self.disk, head.index, mem, &self.metrics)
+                    }
+                    Err(err) => {
+                        error!("Failed to parse available descriptor chain: {:?}", err);
+                        self.metrics.execute_fails.inc();
+                        ProcessingResult::Executed(FinishedRequest {
+                            num_bytes_to_mem: 0,
+                            desc_idx: head.index,
+                        })
+                    }
+                };
+
+                match processing_result {
+                    ProcessingResult::Submitted => {}
+                    ProcessingResult::Throttled => {
                         queue.undo_pop();
-                        self.metrics.rate_limiter_throttled_events.inc();
+                        self.is_io_engine_throttled = true;
                         break;
                     }
+                    ProcessingResult::Executed(finished) => {
+                        // queue
+                        //     .add_used(head.index, finished.num_bytes_to_mem)
+                        //     .unwrap();
 
-                    used_any = true;
-                    request.process(&mut self.disk, head.index, mem, &self.metrics)
-                }
-                Err(err) => {
-                    error!("Failed to parse available descriptor chain: {:?}", err);
-                    self.metrics.execute_fails.inc();
-                    ProcessingResult::Executed(FinishedRequest {
-                        num_bytes_to_mem: 0,
-                        desc_idx: head.index,
-                    })
-                }
-            };
+                        queue.write_used_element(0, head.index, finished.num_bytes_to_mem).unwrap();
 
-            match processing_result {
-                ProcessingResult::Submitted => {}
-                ProcessingResult::Throttled => {
-                    queue.undo_pop();
-                    self.is_io_engine_throttled = true;
-                    break;
-                }
-                ProcessingResult::Executed(finished) => {
-                    Self::add_used_descriptor(
-                        queue,
-                        head.index,
-                        finished.num_bytes_to_mem,
-                        &self.irq_trigger,
-                        &self.metrics,
-                    );
+                        use std::num::Wrapping;
+                        queue.num_added += Wrapping(1);
+                        queue.next_used += Wrapping(1);
+
+                        // if queue.prepare_kick() {
+                        //     self.irq_trigger.trigger_irq(IrqType::Vring).unwrap()
+                        // }
+                    }
                 }
             }
+            // This fence ensures all descriptor writes are visible before the index update is.
+            use std::sync::atomic::{Ordering, fence};
+            fence(Ordering::Release);
+            // log::warn!("used_ring_idx: {}", queue.next_used.0);
+            queue.used_ring_idx_set(queue.next_used.0);
+
+            if queue.prepare_kick() {
+                // log::warn!("kick");
+                self.irq_trigger.trigger_irq(IrqType::Vring).unwrap();
+            }
+
+            let current_len = queue.len();
+            // log::warn!("after queue len: {current_len}");
+            
+            if self.queue_evts[0].read().is_err() {
+                // log::warn!("no pending event");
+                if current_len == 0 {
+                    break;
+                } else {
+                    log::warn!("############################ no notif");
+                }
+            } else {
+                // log::warn!("############## has pending event");
+                self.queue_evts[0].write(1);
+                break;
+            }
         }
+
 
         if let FileEngine::Async(ref mut engine) = self.disk.file_engine {
             if let Err(err) = engine.kick_submission_queue() {
@@ -630,8 +672,7 @@ impl VirtioDevice for VirtioBlock {
 
     fn activate(&mut self, mem: GuestMemoryMmap) -> Result<(), ActivateError> {
         for q in self.queues.iter_mut() {
-            q.initialize(&mem)
-                .map_err(ActivateError::QueueError)?;
+            q.initialize(&mem).map_err(ActivateError::QueueError)?;
         }
 
         let event_idx = self.has_feature(u64::from(VIRTIO_RING_F_EVENT_IDX));

@@ -526,6 +526,22 @@ impl Queue {
         (Wrapping(self.avail_ring_idx_get()) - self.next_avail).0
     }
 
+    /// Returns the current queue len and bumps the used ring event to tell guest when to notify FC
+    pub fn take_queue(&mut self) -> u16 {
+        fence(Ordering::Acquire);
+        let idx = self.avail_ring_idx_get();
+        // log::warn!("avail_ring_idx_get: {idx}");
+
+        self.used_ring_avail_event_set(idx);
+
+        (Wrapping(idx) - self.next_avail).0
+    }
+
+    pub fn current_avail_used_event(&self) -> u16 {
+        fence(Ordering::SeqCst);
+        self.avail_ring_used_event_get()
+    }
+
     /// Checks if the driver has made any descriptor chains available in the avail ring.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
