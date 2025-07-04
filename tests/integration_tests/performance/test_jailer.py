@@ -52,7 +52,7 @@ def test_jailer_startup(
         {
             "instance": global_props.instance,
             "cpu_model": global_props.cpu_model,
-            "performance_test": "test_jailer_startup",
+            "performance_test": "test_jailer_startup_new",
             "parallel": str(parallel),
             "mounts": str(mounts),
         }
