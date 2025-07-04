@@ -806,6 +806,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "jailer_caps"
+version = "0.1.0"
+dependencies = [
+ "caps",
+]
+
+[[package]]
 name = "jiff"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
