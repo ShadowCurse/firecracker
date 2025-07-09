@@ -33,11 +33,17 @@ def clean_up_mounts(tmp_path):
         utils.check_output(f"umount {mounts_paths}/{d}")
 
 
+import subprocess
+import signal
+import shlex
+import time
+
+
 @pytest.mark.nonci
 @pytest.mark.parametrize("parallel", [1, 5, 10])
 @pytest.mark.parametrize("mounts", [0, 100, 300, 500])
 def test_jailer_startup(
-    jailer_time_bin, tmp_path, microvm_factory, parallel, mounts, metrics
+    jailer_time_bin, tmp_path, microvm_factory, parallel, mounts, metrics, results_dir
 ):
     """
     Test the overhead of jailer startup without and with bind mounts
@@ -71,6 +77,16 @@ def test_jailer_startup(
         cmd = [str(jailer_binary), *jailer.construct_param_list()]
         cmds.append(cmd)
 
+    bpf_result_file = f"{results_dir}/bpf.txt"
+    bpf_cmd = f"bpftrace host_tools/jailer_bpftrace.txt -o {bpf_result_file}"
+
+    bpftrace = subprocess.Popen(
+        shlex.split(bpf_cmd),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    time.sleep(1)
+
     with ProcessPoolExecutor(max_workers=parallel) as executor:
         # Submit all commands and get results
         results = executor.map(utils.check_output, cmds)
@@ -83,6 +99,10 @@ def test_jailer_startup(
                 int(end_time) - int(start_time),
                 unit="Microseconds",
             )
+
+    time.sleep(1)
+    os.kill(bpftrace.pid, signal.SIGINT)
+    bpftrace.communicate()
 
     clean_up_mounts(tmp_path)
     shutil.rmtree(DEFAULT_CHROOT_PATH)
