@@ -1,0 +1,7 @@
+tracepoint:syscalls:sys_enter_mount{ @start_mount[pid] = nsecs; }
+tracepoint:syscalls:sys_exit_mount { @delta_mount[pid, comm] += nsecs - @start_mount[pid]; @count_mount = count(); }
+tracepoint:syscalls:sys_enter_unshare{ @start_unshare[pid] = nsecs; }
+tracepoint:syscalls:sys_exit_unshare { @delta_unshare[pid, comm] += nsecs - @start_unshare[pid]; @count_unshare = count(); }
+tracepoint:syscalls:sys_enter_pivot_root{ @start_pivot_root[pid] = nsecs; }
+tracepoint:syscalls:sys_exit_pivot_root { @delta_pivot_root[pid, comm] += nsecs - @start_pivot_root[pid]; @count_pivot_root = count(); }
+END { clear(@start_mount); clear(@start_unshare); clear(@start_pivot_root); }

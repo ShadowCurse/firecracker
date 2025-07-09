@@ -783,6 +783,8 @@ cmd_test() {
         --cpuset-cpus="$cpuset_cpus" \
         --cpuset-mems="$cpuset_mems" \
         --env-file env.list \
+        -v /lib/modules/:/lib/modules:ro \
+        -v /sys/kernel/debug/:/sys/kernel/debug:rw \
         -- \
         $test_script "$@"
 
