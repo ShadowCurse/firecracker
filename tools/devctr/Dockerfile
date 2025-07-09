@@ -85,6 +85,7 @@ RUN apt-get update \
         libcap2 \
         # for debugging
         gdb strace trace-cmd \
+        bpftrace \
     && rm -rf /var/lib/apt/lists/* \
     && pip3 install --upgrade poetry
 
