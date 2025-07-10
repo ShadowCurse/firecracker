@@ -94,6 +94,8 @@ pub fn chroot(env: &Env) -> Result<(), JailerError> {
     // We need a CString for the following mount call.
     let chroot_path_c = CString::new(env.chroot_dir.to_str().unwrap()).unwrap();
 
+    unsafe { libc::mount(null(), ROOT_DIR.as_ptr(), null(), libc::MS_PRIVATE, null()) };
+
     // Bind mount the jail root directory over itself, so we can go around a restriction
     // imposed by pivot_root, which states that the new root and the old root should not
     // be on the same filesystem.
