@@ -72,6 +72,7 @@ def test_jailer_startup(
             exec_file=jailer_time_bin,
             # Don't deamonize to get the stdout
             daemonize=False,
+            new_pid_ns = True,
         )
         jailer.setup()
 
