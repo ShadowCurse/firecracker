@@ -45,6 +45,7 @@ impl PmemBuilder {
 
     /// Build a device from the config
     pub fn build(&mut self, config: PmemDeviceConfig) -> Result<(), PmemConfigError> {
+        // TODO do we need to reorder these like we do with block devices.
         let pmem = Pmem::new(
             config.id,
             config.path_on_host,
