@@ -21,7 +21,7 @@ pub enum PmemConfigError {
 #[serde(deny_unknown_fields)]
 pub struct PmemDeviceConfig {
     /// Unique identifier of the device.
-    pub drive_id: String,
+    pub id: String,
     /// Path of the drive.
     pub path_on_host: String,
     /// Use this pmem device for rootfs
@@ -30,17 +30,8 @@ pub struct PmemDeviceConfig {
     pub shared: bool,
 }
 
-/// Only provided fields will be updated. I.e. if any optional fields
-/// are missing, they will not be updated.
-#[derive(Debug, Default, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PmemDeviceUpdateConfig {
-    /// The drive ID, as provided by the user at creation time.
-    pub drive_id: String,
-
-    /// New block file path on the host. Only provided data will be updated.
-    pub path_on_host: Option<String>,
-}
+/// Pmem device can be full updated, so just reuse existing type.
+pub type PmemDeviceUpdateConfig = PmemDeviceConfig;
 
 /// Wrapper for the collection that holds all the Pmem devices.
 #[derive(Debug, Default)]
@@ -58,7 +49,7 @@ impl PmemBuilder {
     /// Build a device from the config
     pub fn build(&mut self, config: PmemDeviceConfig) -> Result<(), PmemConfigError> {
         let pmem = Pmem::new(
-            config.drive_id,
+            config.id,
             config.path_on_host,
             config.is_root_device,
             config.shared,

@@ -14,6 +14,7 @@ use super::{Vmm, VmmError};
 use crate::EventManager;
 use crate::builder::StartMicrovmError;
 use crate::cpu_config::templates::{CustomCpuTemplate, GuestConfigError};
+use crate::devices::virtio::pmem::device::Pmem;
 use crate::logger::{LoggerConfig, info, warn, *};
 use crate::mmds::data_store::{self, Mmds};
 use crate::persist::{CreateSnapshotError, RestoreFromSnapshotError, VmInfo};
@@ -33,8 +34,8 @@ use crate::vmm_config::mmds::{MmdsConfig, MmdsConfigError};
 use crate::vmm_config::net::{
     NetworkInterfaceConfig, NetworkInterfaceError, NetworkInterfaceUpdateConfig,
 };
+use crate::vmm_config::pmem::{PmemConfigError, PmemDeviceConfig, PmemDeviceUpdateConfig};
 use crate::vmm_config::serial::SerialConfig;
-use crate::vmm_config::pmem::{PmemConfigError, PmemDeviceConfig};
 use crate::vmm_config::snapshot::{CreateSnapshotParams, LoadSnapshotParams, SnapshotType};
 use crate::vmm_config::vsock::{VsockConfigError, VsockDeviceConfig};
 use crate::vmm_config::{self, RateLimiterUpdate};
@@ -76,6 +77,8 @@ pub enum VmmAction {
     /// Add a new block device or update one that already exists using the `BlockDeviceConfig` as
     /// input. This action can only be called before the microVM has booted.
     InsertBlockDevice(BlockDeviceConfig),
+    /// Add a virtio-pmem device.
+    InsertPmemDevice(PmemDeviceConfig),
     /// Add a new network interface config or update one that already exists using the
     /// `NetworkInterfaceConfig` as input. This action can only be called before the microVM has
     /// booted.
@@ -107,8 +110,6 @@ pub enum VmmAction {
     /// Set the entropy device using `EntropyDeviceConfig` as input. This action can only be called
     /// before the microVM has booted.
     SetEntropyDevice(EntropyDeviceConfig),
-    /// Add a virtio-pmem device.
-    InsertPmemDevice(PmemDeviceConfig),
     /// Launch the microVM. This action can only be called before the microVM has booted.
     StartMicroVm,
     /// Send CTRL+ALT+DEL to the microVM, using the i8042 keyboard function. If an AT-keyboard
@@ -121,6 +122,8 @@ pub enum VmmAction {
     UpdateBalloonStatistics(BalloonUpdateStatsConfig),
     /// Update existing block device properties such as `path_on_host` or `rate_limiter`.
     UpdateBlockDevice(BlockDeviceUpdateConfig),
+    /// Update existing pmem device properties.
+    UpdatePmemDevice(PmemDeviceUpdateConfig),
     /// Update a network interface, after microVM start. Currently, the only updatable properties
     /// are the RX and TX rate limiters.
     UpdateNetworkInterface(NetworkInterfaceUpdateConfig),
@@ -437,6 +440,7 @@ impl<'a> PrebootApiController<'a> {
             GetVmInstanceInfo => Ok(VmmData::InstanceInformation(self.instance_info.clone())),
             GetVmmVersion => Ok(VmmData::VmmVersion(self.instance_info.vmm_version.clone())),
             InsertBlockDevice(config) => self.insert_block_device(config),
+            InsertPmemDevice(config) => self.insert_pmem_device(config),
             InsertNetworkDevice(config) => self.insert_net_device(config),
             LoadSnapshot(config) => self
                 .load_snapshot(&config)
@@ -452,7 +456,6 @@ impl<'a> PrebootApiController<'a> {
             StartMicroVm => self.start_microvm(),
             UpdateMachineConfiguration(config) => self.update_machine_config(config),
             SetEntropyDevice(config) => self.set_entropy_device(config),
-            InsertPmemDevice(config) => self.insert_pmem_device(config),
             // Operations not allowed pre-boot.
             CreateSnapshot(_)
             | FlushMetrics
@@ -462,6 +465,7 @@ impl<'a> PrebootApiController<'a> {
             | UpdateBalloon(_)
             | UpdateBalloonStatistics(_)
             | UpdateBlockDevice(_)
+            | UpdatePmemDevice(_)
             | UpdateNetworkInterface(_) => Err(VmmActionError::OperationNotSupportedPreBoot),
             #[cfg(target_arch = "x86_64")]
             SendCtrlAltDel => Err(VmmActionError::OperationNotSupportedPreBoot),
@@ -693,6 +697,7 @@ impl RuntimeApiController {
                 .map(|_| VmmData::Empty)
                 .map_err(VmmActionError::BalloonUpdate),
             UpdateBlockDevice(new_cfg) => self.update_block_device(new_cfg),
+            UpdatePmemDevice(new_cfg) => self.update_pmem_device(new_cfg),
             UpdateNetworkInterface(netif_update) => self.update_net_rate_limiters(netif_update),
 
             // Operations not allowed post-boot.
@@ -701,8 +706,8 @@ impl RuntimeApiController {
             | ConfigureMetrics(_)
             | ConfigureSerial(_)
             | InsertBlockDevice(_)
-            | InsertNetworkDevice(_)
             | InsertPmemDevice(_)
+            | InsertNetworkDevice(_)
             | LoadSnapshot(_)
             | PutCpuConfiguration(_)
             | SetBalloonDevice(_)
@@ -838,6 +843,21 @@ impl RuntimeApiController {
             )
             .map_err(DriveError::DeviceUpdate)?;
         }
+        Ok(VmmData::Empty)
+    }
+
+    fn update_pmem_device(
+        &mut self,
+        new_cfg: PmemDeviceUpdateConfig,
+    ) -> Result<VmmData, VmmActionError> {
+        let vmm = self.vmm.lock().expect("Poisoned lock");
+
+        vmm.device_manager
+            .try_with_virtio_device_with_id(&new_cfg.id.clone(), |pmem: &mut Pmem| {
+                pmem.update_config(new_cfg)
+            })
+            .map_err(VmmError::FindDeviceError)?;
+
         Ok(VmmData::Empty)
     }
 

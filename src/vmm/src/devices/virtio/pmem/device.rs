@@ -279,11 +279,17 @@ impl Pmem {
 
     pub fn config(&self) -> PmemDeviceConfig {
         PmemDeviceConfig {
-            drive_id: self.drive_id.clone(),
+            id: self.drive_id.clone(),
             path_on_host: self.backing_file_path.clone(),
             is_root_device: false,
             shared: self.shared,
         }
+    }
+
+    pub fn update_config(&self, new_config: PmemDeviceConfig) -> Result<(), PmemError> {
+        _ = self;
+        _ = new_config;
+        Ok(()
     }
 }
 

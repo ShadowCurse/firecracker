@@ -107,6 +107,7 @@ impl TryFrom<&Request> for ParsedRequest {
             (Method::Put, _, None) => method_to_error(Method::Put),
             (Method::Patch, "balloon", Some(body)) => parse_patch_balloon(body, path_tokens.next()),
             (Method::Patch, "drives", Some(body)) => parse_patch_drive(body, path_tokens.next()),
+            (Method::Patch, "pmem", Some(body)) => parse_patch_pmem(body, path_tokens.next()),
             (Method::Patch, "machine-config", Some(body)) => parse_patch_machine_config(body),
             (Method::Patch, "mmds", Some(body)) => parse_patch_mmds(body),
             (Method::Patch, "network-interfaces", Some(body)) => {
