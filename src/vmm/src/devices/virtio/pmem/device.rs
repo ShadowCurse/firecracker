@@ -285,12 +285,6 @@ impl Pmem {
             shared: self.shared,
         }
     }
-
-    pub fn update_config(&self, new_config: PmemDeviceConfig) -> Result<(), PmemError> {
-        _ = self;
-        _ = new_config;
-        Ok(()
-    }
 }
 
 #[derive(Copy, Clone, Debug, Default)]

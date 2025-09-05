@@ -30,9 +30,6 @@ pub struct PmemDeviceConfig {
     pub shared: bool,
 }
 
-/// Pmem device can be full updated, so just reuse existing type.
-pub type PmemDeviceUpdateConfig = PmemDeviceConfig;
-
 /// Wrapper for the collection that holds all the Pmem devices.
 #[derive(Debug, Default)]
 pub struct PmemBuilder {

@@ -37,36 +37,6 @@ pub(crate) fn parse_put_pmem(
     }
 }
 
-pub(crate) fn parse_patch_pmem(
-    body: &Body,
-    id_from_path: Option<&str>,
-) -> Result<ParsedRequest, RequestError> {
-    METRICS.patch_api_requests.pmem_count.inc();
-    let id = if let Some(id) = id_from_path {
-        checked_id(id)?
-    } else {
-        METRICS.patch_api_requests.pmem_fails.inc();
-        return Err(RequestError::EmptyID);
-    };
-
-    let update_cfg: PmemDeviceUpdateConfig =
-        serde_json::from_slice::<PmemDeviceUpdateConfig>(body.raw()).inspect_err(|_| {
-            METRICS.patch_api_requests.pmem_fails.inc();
-        })?;
-
-    if id != update_cfg.drive_id {
-        METRICS.patch_api_requests.pmem_fails.inc();
-        return Err(RequestError::Generic(
-            StatusCode::BadRequest,
-            String::from("The id from the path does not match the id from the body!"),
-        ));
-    }
-
-    Ok(ParsedRequest::new_sync(VmmAction::UpdateBlockDevice(
-        update_cfg,
-    )))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -101,37 +71,5 @@ mod tests {
             shared: true,
         };
         assert_eq!(r, VmmAction::InsertPmemDevice(expected_config));
-    }
-
-    #[test]
-    fn test_parse_patch_pmem_request() {
-        parse_patch_drive(&Body::new("invalid_payload"), None).unwrap_err();
-        parse_patch_drive(&Body::new("invalid_payload"), Some("id")).unwrap_err();
-
-        let body = r#"{
-            "drive_id": "bar",
-        }"#;
-        parse_patch_pmem(&Body::new(body), Some("1")).unwrap_err();
-
-        let body = r#"{
-            "foo": "bar",
-        }"#;
-        parse_patch_pmem(&Body::new(body), Some("1")).unwrap_err();
-
-        let body = r#"{
-            "drive_id": "1000",
-            "path_on_host": "other_path",
-            "is_root_device": false,
-            "shared": false
-        }"#;
-        let r = vmm_action_from_request(parse_patch_pmem(&Body::new(body), Some("1000")).unwrap());
-
-        let expected_config = PmemDeviceUpdateConfig {
-            id: "1000".to_string(),
-            path_on_host: "other_path".to_string(),
-            is_root_device: false,
-            shared: false,
-        };
-        assert_eq!(r, VmmAction::UpdatePmemDevice(expected_config));
     }
 }
