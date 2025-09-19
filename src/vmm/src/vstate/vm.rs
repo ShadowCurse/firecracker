@@ -15,8 +15,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 #[cfg(target_arch = "x86_64")]
 use kvm_bindings::KVM_IRQCHIP_IOAPIC;
 use kvm_bindings::{
-    KVM_IRQ_ROUTING_IRQCHIP, KVM_IRQ_ROUTING_MSI, KVM_MEM_LOG_DIRTY_PAGES, KVM_MSI_VALID_DEVID,
-    KvmIrqRouting, kvm_irq_routing_entry, kvm_userspace_memory_region,
+    kvm_irq_routing_entry, kvm_userspace_memory_region, KvmIrqRouting, KVM_IRQ_ROUTING_IRQCHIP, KVM_IRQ_ROUTING_MSI, KVM_MEM_LOG_DIRTY_PAGES, KVM_MEM_READONLY, KVM_MSI_VALID_DEVID
 };
 use kvm_ioctls::VmFd;
 use log::{debug, error};
@@ -371,11 +370,13 @@ impl Vm {
             return Err(VmError::NotEnoughMemorySlots(self.common.max_memslots));
         }
 
-        let flags = if region.bitmap().is_some() {
-            KVM_MEM_LOG_DIRTY_PAGES
-        } else {
-            0
-        };
+        let mut flags = 0;
+        if region.bitmap().is_some() {
+            flags |= KVM_MEM_LOG_DIRTY_PAGES;
+        }
+        if region.prot() & libc::PROT_WRITE == 0 {
+            flags |= KVM_MEM_READONLY;
+        }
 
         let memory_region = kvm_userspace_memory_region {
             slot: next_slot,
@@ -395,7 +396,6 @@ impl Vm {
         }
 
         self.common.guest_memory = new_guest_memory;
-
         Ok(())
     }
 

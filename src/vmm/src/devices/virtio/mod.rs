@@ -27,6 +27,7 @@ pub mod transport;
 pub mod vhost_user;
 pub mod vhost_user_metrics;
 pub mod vsock;
+pub mod pmem;
 
 /// When the driver initializes the device, it lets the device know about the
 /// completed stages using the Device Status Field.

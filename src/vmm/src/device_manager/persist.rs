@@ -30,6 +30,10 @@ use crate::devices::virtio::net::persist::{
     NetConstructorArgs, NetPersistError as NetError, NetState,
 };
 use crate::devices::virtio::persist::{MmioTransportConstructorArgs, MmioTransportState};
+use crate::devices::virtio::pmem::device::Pmem;
+use crate::devices::virtio::pmem::persist::{
+    PmemConstructorArgs, PmemPersistError as PmemError, PmemState,
+};
 use crate::devices::virtio::rng::Entropy;
 use crate::devices::virtio::rng::persist::{
     EntropyConstructorArgs, EntropyPersistError as EntropyError, EntropyState,
@@ -72,6 +76,8 @@ pub enum DevicePersistError {
     MmdsConfig(#[from] MmdsConfigError),
     /// Entropy: {0}
     Entropy(#[from] EntropyError),
+    /// Pmem: {0}
+    Pmem(#[from] PmemError),
     /// Resource misconfiguration: {0}. Is the snapshot file corrupted?
     ResourcesError(#[from] ResourcesError),
     /// Could not activate device: {0}
@@ -125,6 +131,8 @@ pub struct DeviceStates {
     pub mmds: Option<MmdsState>,
     /// Entropy device state.
     pub entropy_device: Option<VirtioDeviceState<EntropyState>>,
+    /// Pmem device states.
+    pub pmem_devices: Vec<VirtioDeviceState<PmemState>>,
 }
 
 /// A type used to extract the concrete `Arc<Mutex<T>>` for each of the device
@@ -136,6 +144,7 @@ pub enum SharedDeviceType {
     Balloon(Arc<Mutex<Balloon>>),
     Vsock(Arc<Mutex<Vsock<VsockUnixBackend>>>),
     Entropy(Arc<Mutex<Entropy>>),
+    Pmem(Arc<Mutex<Pmem>>),
 }
 
 pub struct MMIODevManagerConstructorArgs<'a> {
@@ -334,6 +343,16 @@ impl<'a> Persist<'a> for MMIODeviceManager {
                         transport_state,
                         device_info,
                     });
+                }
+                virtio_ids::VIRTIO_ID_PMEM => {
+                    let pmem = locked_device.as_mut_any().downcast_mut::<Pmem>().unwrap();
+                    let device_state = pmem.save();
+                    states.pmem_devices.push(VirtioDeviceState {
+                        device_id,
+                        device_state,
+                        transport_state,
+                        device_info,
+                    })
                 }
                 _ => unreachable!(),
             };
@@ -545,6 +564,31 @@ impl<'a> Persist<'a> for MMIODeviceManager {
                 &entropy_state.device_id,
                 &entropy_state.transport_state,
                 &entropy_state.device_info,
+                constructor_args.event_manager,
+            )?;
+        }
+
+        for pmem_state in &state.pmem_devices {
+            let device = Arc::new(Mutex::new(Pmem::restore(
+                PmemConstructorArgs {
+                    mem,
+                    vm: vm.as_ref(),
+                },
+                &pmem_state.device_state,
+            )?));
+
+            constructor_args
+                .vm_resources
+                .update_from_restored_device(SharedDeviceType::Pmem(device.clone()))?;
+
+            restore_helper(
+                device.clone(),
+                pmem_state.device_state.virtio_state.activated,
+                false,
+                device,
+                &pmem_state.device_id,
+                &pmem_state.transport_state,
+                &pmem_state.device_info,
                 constructor_args.event_manager,
             )?;
         }

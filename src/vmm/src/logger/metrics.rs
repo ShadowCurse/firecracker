@@ -393,6 +393,10 @@ pub struct PutRequestsMetrics {
     pub drive_count: SharedIncMetric,
     /// Number of failures in attaching a block device.
     pub drive_fails: SharedIncMetric,
+    /// Number of PUTs triggering a pmem attach.
+    pub pmem_count: SharedIncMetric,
+    /// Number of failures in attaching a pmem device.
+    pub pmem_fails: SharedIncMetric,
     /// Number of PUTs for initializing the logging system.
     pub logger_count: SharedIncMetric,
     /// Number of failures in initializing the logging system.
@@ -436,6 +440,8 @@ impl PutRequestsMetrics {
             boot_source_fails: SharedIncMetric::new(),
             drive_count: SharedIncMetric::new(),
             drive_fails: SharedIncMetric::new(),
+            pmem_count: SharedIncMetric::new(),
+            pmem_fails: SharedIncMetric::new(),
             logger_count: SharedIncMetric::new(),
             logger_fails: SharedIncMetric::new(),
             machine_cfg_count: SharedIncMetric::new(),
@@ -463,6 +469,10 @@ pub struct PatchRequestsMetrics {
     pub drive_count: SharedIncMetric,
     /// Number of failures in PATCHing a block device.
     pub drive_fails: SharedIncMetric,
+    /// Number of tries to PATCH a pmem device.
+    pub pmem_count: SharedIncMetric,
+    /// Number of failures in PATCHing a pmem device.
+    pub pmem_fails: SharedIncMetric,
     /// Number of tries to PATCH a net device.
     pub network_count: SharedIncMetric,
     /// Number of failures in PATCHing a net device.
@@ -482,6 +492,8 @@ impl PatchRequestsMetrics {
         Self {
             drive_count: SharedIncMetric::new(),
             drive_fails: SharedIncMetric::new(),
+            pmem_count: SharedIncMetric::new(),
+            pmem_fails: SharedIncMetric::new(),
             network_count: SharedIncMetric::new(),
             network_fails: SharedIncMetric::new(),
             machine_cfg_count: SharedIncMetric::new(),
