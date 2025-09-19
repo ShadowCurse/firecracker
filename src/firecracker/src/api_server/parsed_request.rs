@@ -10,6 +10,7 @@ use vmm::logger::{Level, error, info, log_enabled};
 use vmm::rpc_interface::{VmmAction, VmmActionError, VmmData};
 
 use super::ApiServer;
+
 use super::request::actions::parse_put_actions;
 use super::request::balloon::{parse_get_balloon, parse_patch_balloon, parse_put_balloon};
 use super::request::boot_source::parse_put_boot_source;
@@ -24,6 +25,7 @@ use super::request::machine_configuration::{
 use super::request::metrics::parse_put_metrics;
 use super::request::mmds::{parse_get_mmds, parse_patch_mmds, parse_put_mmds};
 use super::request::net::{parse_patch_net, parse_put_net};
+use super::request::pmem::parse_put_pmem;
 use super::request::snapshot::{parse_patch_vm_state, parse_put_snapshot};
 use super::request::version::parse_get_version;
 use super::request::vsock::parse_put_vsock;
@@ -90,6 +92,7 @@ impl TryFrom<&Request> for ParsedRequest {
             (Method::Put, "boot-source", Some(body)) => parse_put_boot_source(body),
             (Method::Put, "cpu-config", Some(body)) => parse_put_cpu_config(body),
             (Method::Put, "drives", Some(body)) => parse_put_drive(body, path_tokens.next()),
+            (Method::Put, "pmem", Some(body)) => parse_put_pmem(body, path_tokens.next()),
             (Method::Put, "logger", Some(body)) => parse_put_logger(body),
             (Method::Put, "serial", Some(body)) => parse_put_serial(body),
             (Method::Put, "machine-config", Some(body)) => parse_put_machine_config(body),
