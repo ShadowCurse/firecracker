@@ -16,6 +16,8 @@ use crate::devices::virtio::block::{BlockError, CacheType};
 /// Errors associated with the operations allowed on a drive.
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
 pub enum DriveError {
+    /// Attempt to add block as a root device while the root device defined as a pmem device
+    AddingSecondRootDevice,
     /// Unable to create the virtio block device: {0}
     CreateBlockDevice(BlockError),
     /// Cannot create RateLimiter: {0}
@@ -99,7 +101,7 @@ impl BlockBuilder {
     }
 
     /// Specifies whether there is a root block device already present in the list.
-    fn has_root_device(&self) -> bool {
+    pub fn has_root_device(&self) -> bool {
         // If there is a root device, it would be at the top of the list.
         if let Some(block) = self.devices.front() {
             block.lock().expect("Poisoned lock").root_device()
@@ -127,10 +129,18 @@ impl BlockBuilder {
     /// Inserts a `Block` in the block devices list using the specified configuration.
     /// If a block with the same id already exists, it will overwrite it.
     /// Inserting a secondary root block device will fail.
-    pub fn insert(&mut self, config: BlockDeviceConfig) -> Result<(), DriveError> {
+    pub fn insert(
+        &mut self,
+        config: BlockDeviceConfig,
+        has_pmem_root: bool,
+    ) -> Result<(), DriveError> {
         let position = self.get_index_of_drive_id(&config.drive_id);
         let has_root_device = self.has_root_device();
         let configured_as_root = config.is_root_device;
+
+        if configured_as_root && has_pmem_root {
+            return Err(DriveError::AddingSecondRootDevice);
+        }
 
         // Don't allow adding a second root block device.
         // If the new device cfg is root and not an update to the existing root, fail fast.
