@@ -7,6 +7,7 @@ use std::os::fd::AsRawFd;
 use std::sync::{Arc, Mutex};
 
 use kvm_ioctls::VmFd;
+use serde::{Deserialize, Serialize};
 use vm_memory::mmap::{MmapRegionBuilder, MmapRegionError};
 use vm_memory::{GuestAddress, GuestMemoryError};
 use vmm_sys_util::eventfd::EventFd;
@@ -15,6 +16,7 @@ use crate::devices::virtio::ActivateError;
 use crate::devices::virtio::device::{ActiveState, DeviceState, VirtioDevice};
 use crate::devices::virtio::generated::virtio_config::VIRTIO_F_VERSION_1;
 use crate::devices::virtio::generated::virtio_ids::VIRTIO_ID_PMEM;
+use crate::devices::virtio::pmem::PMEM_QUEUE_SIZE;
 use crate::devices::virtio::pmem::metrics::{PmemMetrics, PmemMetricsPerDevice};
 use crate::devices::virtio::queue::{DescriptorChain, InvalidAvailIdx, Queue, QueueError};
 use crate::devices::virtio::transport::{VirtioInterrupt, VirtioInterruptType};
@@ -23,8 +25,6 @@ use crate::logger::{IncMetric, error};
 use crate::utils::u64_to_usize;
 use crate::vmm_config::pmem::PmemConfig;
 use crate::vstate::memory::{ByteValued, Bytes, GuestMemoryMmap, GuestMmapRegion};
-
-pub const PMEM_QUEUE_SIZE: u16 = 256;
 
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
 pub enum PmemError {
@@ -54,7 +54,7 @@ const VIRTIO_PMEM_REQ_TYPE_FLUSH: u32 = 0;
 const SUCCESS: i32 = 0;
 const FAILURE: i32 = -1;
 
-#[derive(Debug, Default, Copy, Clone)]
+#[derive(Debug, Default, Copy, Clone, Serialize, Deserialize)]
 #[repr(C)]
 pub struct ConfigSpace {
     // Physical address of the first byte of the persistent memory region.
