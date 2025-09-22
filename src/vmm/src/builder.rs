@@ -5,6 +5,7 @@
 
 use std::fmt::Debug;
 use std::io;
+use std::ops::DerefMut;
 #[cfg(feature = "gdb")]
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -13,6 +14,7 @@ use event_manager::SubscriberOps;
 use linux_loader::cmdline::Cmdline as LoaderKernelCmdline;
 use userfaultfd::Uffd;
 use utils::time::TimestampUs;
+use vm_allocator::AllocPolicy;
 #[cfg(target_arch = "aarch64")]
 use vm_memory::GuestAddress;
 
@@ -33,6 +35,7 @@ use crate::devices::acpi::vmgenid::VmGenIdError;
 use crate::devices::virtio::balloon::Balloon;
 use crate::devices::virtio::block::device::Block;
 use crate::devices::virtio::net::Net;
+use crate::devices::virtio::pmem::device::Pmem;
 use crate::devices::virtio::rng::Entropy;
 use crate::devices::virtio::vsock::{Vsock, VsockUnixBackend};
 #[cfg(feature = "gdb")]
@@ -217,6 +220,13 @@ pub fn build_microvm_for_boot(
         &vm,
         &mut boot_cmdline,
         vm_resources.net_builder.iter(),
+        event_manager,
+    )?;
+    attach_pmem_devices(
+        &mut device_manager,
+        &vm,
+        &mut boot_cmdline,
+        vm_resources.pmem.devices.iter(),
         event_manager,
     )?;
 
@@ -609,6 +619,47 @@ fn attach_net_devices<'a, I: Iterator<Item = &'a Arc<Mutex<Net>>> + Debug>(
     Ok(())
 }
 
+fn attach_pmem_devices<'a, I: Iterator<Item = &'a Arc<Mutex<Pmem>>> + Debug>(
+    device_manager: &mut DeviceManager,
+    vm: &Arc<Vm>,
+    cmdline: &mut LoaderKernelCmdline,
+    pmem_devices: I,
+    event_manager: &mut EventManager,
+) -> Result<(), StartMicrovmError> {
+    for (i, device) in pmem_devices.enumerate() {
+        let id = {
+            let mut locked_dev = device.lock().expect("Poisoned lock");
+
+            if locked_dev.config.root_device {
+                cmdline.insert_str(format!("root=/dev/pmem{i}"))?;
+                match locked_dev.config.read_only {
+                    true => cmdline.insert_str("ro")?,
+                    false => cmdline.insert_str("rw")?,
+                }
+            }
+
+            let mut resource_allocator_lock = vm.resource_allocator();
+            let resource_allocator = resource_allocator_lock.deref_mut();
+            let addr = resource_allocator
+                .past_mmio64_memory
+                .allocate(
+                    locked_dev.config_space.size,
+                    Pmem::ALIGNMENT,
+                    AllocPolicy::FirstMatch,
+                )
+                .unwrap();
+            locked_dev.config_space.start = addr.start();
+            locked_dev.set_mem_region(11, vm.fd());
+
+            locked_dev.id().to_string()
+        };
+
+        event_manager.add_subscriber(device.clone());
+        device_manager.attach_virtio_device(vm, id, device.clone(), cmdline, false)?;
+    }
+    Ok(())
+}
+
 fn attach_unixsock_vsock_device(
     device_manager: &mut DeviceManager,
     vm: &Arc<Vm>,
@@ -655,6 +706,7 @@ pub(crate) mod tests {
     use crate::vmm_config::drive::{BlockBuilder, BlockDeviceConfig};
     use crate::vmm_config::entropy::{EntropyDeviceBuilder, EntropyDeviceConfig};
     use crate::vmm_config::net::{NetBuilder, NetworkInterfaceConfig};
+    use crate::vmm_config::pmem::{PmemBuilder, PmemConfig};
     use crate::vmm_config::vsock::tests::default_config;
     use crate::vmm_config::vsock::{VsockBuilder, VsockDeviceConfig};
     use crate::vstate::vm::tests::setup_vm_with_memory;
@@ -873,6 +925,34 @@ pub(crate) mod tests {
                 .get_virtio_device(virtio_ids::VIRTIO_ID_RNG, ENTROPY_DEV_ID)
                 .is_some()
         );
+    }
+
+    pub(crate) fn insert_pmem_devices(
+        vmm: &mut Vmm,
+        cmdline: &mut Cmdline,
+        event_manager: &mut EventManager,
+        configs: Vec<PmemConfig>,
+    ) -> Vec<TempFile> {
+        let mut builder = PmemBuilder::default();
+        let mut files = Vec::new();
+        for mut config in configs {
+            let tmp_file = TempFile::new().unwrap();
+            tmp_file.as_file().set_len(0x20_0000).unwrap();
+            let tmp_file_path = tmp_file.as_path().to_str().unwrap().to_string();
+            files.push(tmp_file);
+            config.path_on_host = tmp_file_path;
+            builder.build(config, false).unwrap();
+        }
+
+        attach_pmem_devices(
+            &mut vmm.device_manager,
+            &vmm.vm,
+            cmdline,
+            builder.devices.iter(),
+            event_manager,
+        )
+        .unwrap();
+        files
     }
 
     #[cfg(target_arch = "x86_64")]
@@ -1120,6 +1200,28 @@ pub(crate) mod tests {
                     .is_some()
             );
         }
+    }
+
+    #[test]
+    fn test_attach_pmem_devices() {
+        let mut event_manager = EventManager::new().expect("Unable to create EventManager");
+
+        let id = String::from("root");
+        let configs = vec![PmemConfig {
+            id: id.clone(),
+            path_on_host: "".into(),
+            root_device: true,
+            read_only: true,
+        }];
+        let mut vmm = default_vmm();
+        let mut cmdline = default_kernel_cmdline();
+        _ = insert_pmem_devices(&mut vmm, &mut cmdline, &mut event_manager, configs);
+        assert!(cmdline_contains(&cmdline, "root=/dev/pmem0 ro"));
+        assert!(
+            vmm.device_manager
+                .get_virtio_device(virtio_ids::VIRTIO_ID_PMEM, id.as_str())
+                .is_some()
+        );
     }
 
     #[test]
