@@ -10,7 +10,7 @@
 use std::convert::From;
 use std::fmt::Debug;
 use std::net::Ipv4Addr;
-use std::result::Result;
+use Result;
 
 use crate::dumbo::pdu::bytes::{InnerBytes, NetworkBytes, NetworkBytesMut};
 use crate::dumbo::pdu::{Incomplete, ethernet};

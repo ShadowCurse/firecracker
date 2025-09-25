@@ -6,7 +6,6 @@
 // SPDX-License-Identifier: Apache-2.0 AND BSD-3-Clause
 
 use std::sync::{Arc, Barrier};
-use std::{io, result};
 
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
 pub enum Error {
@@ -55,7 +54,7 @@ pub trait PciDevice: Send {
         None
     }
     /// Relocates the BAR to a different address in guest address space.
-    fn move_bar(&mut self, _old_base: u64, _new_base: u64) -> result::Result<(), io::Error> {
+    fn move_bar(&mut self, _old_base: u64, _new_base: u64) -> Result<(), std::io::Error> {
         Ok(())
     }
 }
@@ -71,5 +70,5 @@ pub trait DeviceRelocation: Send + Sync {
         new_base: u64,
         len: u64,
         pci_dev: &mut dyn PciDevice,
-    ) -> result::Result<(), io::Error>;
+    ) -> Result<(), std::io::Error>;
 }

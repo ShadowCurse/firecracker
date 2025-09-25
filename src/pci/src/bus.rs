@@ -37,7 +37,6 @@ pub enum PciRootError {
     /// Valid PCI device identifier but already used.
     AlreadyInUsePciDeviceSlot(usize),
 }
-pub type Result<T> = std::result::Result<T, PciRootError>;
 
 /// Emulates the PCI Root bridge device.
 pub struct PciRoot {
@@ -111,12 +110,12 @@ impl PciBus {
         }
     }
 
-    pub fn add_device(&mut self, device_id: u32, device: Arc<Mutex<dyn PciDevice>>) -> Result<()> {
+    pub fn add_device(&mut self, device_id: u32, device: Arc<Mutex<dyn PciDevice>>) -> Result<(), PciRootError> {
         self.devices.insert(device_id, device);
         Ok(())
     }
 
-    pub fn next_device_id(&mut self) -> Result<u32> {
+    pub fn next_device_id(&mut self) -> Result<u32, PciRootError> {
         for (idx, device_id) in self.device_ids.iter_mut().enumerate() {
             if !(*device_id) {
                 *device_id = true;
@@ -465,7 +464,7 @@ mod tests {
             _new_base: u64,
             _len: u64,
             _pci_dev: &mut dyn crate::PciDevice,
-        ) -> std::result::Result<(), std::io::Error> {
+        ) -> Result<(), std::io::Error> {
             self.reloc_cnt
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(())

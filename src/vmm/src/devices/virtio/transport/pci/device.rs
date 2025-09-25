@@ -256,7 +256,6 @@ pub enum VirtioPciDeviceError {
     /// Error creating MSI configuration: {0}
     Msi(#[from] pci::MsixError),
 }
-pub type Result<T> = std::result::Result<T, VirtioPciDeviceError>;
 
 pub struct VirtioPciDevice {
     id: String,
@@ -348,7 +347,7 @@ impl VirtioPciDevice {
         pci_device_bdf: u32,
         msix_vectors: Arc<MsiVectorGroup>,
         msix_config_state: Option<MsixConfigState>,
-    ) -> Result<Arc<Mutex<MsixConfig>>> {
+    ) -> Result<Arc<Mutex<MsixConfig>>, VirtioPciDeviceError> {
         let msix_config = Arc::new(Mutex::new(MsixConfig::new(
             msix_vectors.num_vectors(),
             msix_vectors,
@@ -367,7 +366,7 @@ impl VirtioPciDevice {
     pub fn allocate_bars(
         &mut self,
         mmio64_allocator: &mut AddressAllocator,
-    ) -> std::result::Result<(), PciDeviceError> {
+    ) -> Result<(), PciDeviceError> {
         let device_clone = self.device.clone();
         let device = device_clone.lock().unwrap();
 
@@ -402,7 +401,7 @@ impl VirtioPciDevice {
         device: Arc<Mutex<dyn VirtioDevice>>,
         msi_vectors: Arc<MsiVectorGroup>,
         pci_device_bdf: u32,
-    ) -> Result<Self> {
+    ) -> Result<Self, VirtioPciDeviceError> {
         let num_queues = device.lock().expect("Poisoned lock").queues().len();
 
         let msix_config = Self::msix_config(pci_device_bdf, msi_vectors.clone(), None)?;
@@ -453,7 +452,7 @@ impl VirtioPciDevice {
         device: Arc<Mutex<dyn VirtioDevice>>,
         msi_vectors: Arc<MsiVectorGroup>,
         state: VirtioPciDeviceState,
-    ) -> Result<Self> {
+    ) -> Result<Self, VirtioPciDeviceError> {
         let msix_config = Self::msix_config(
             state.pci_device_bdf.into(),
             msi_vectors.clone(),
@@ -524,7 +523,7 @@ impl VirtioPciDevice {
         self.configuration.get_bar_addr(VIRTIO_BAR_INDEX as usize)
     }
 
-    fn add_pci_capabilities(&mut self) -> std::result::Result<(), PciDeviceError> {
+    fn add_pci_capabilities(&mut self) -> Result<(), PciDeviceError> {
         // Add pointers to the different configuration structures from the PCI capabilities.
         let common_cap = VirtioPciCap::new(
             PciCapabilityType::Common,
@@ -639,7 +638,7 @@ impl VirtioPciDevice {
     }
 
     /// Register the IoEvent notification for a VirtIO device
-    pub fn register_notification_ioevent(&self, vm: &Vm) -> std::result::Result<(), errno::Error> {
+    pub fn register_notification_ioevent(&self, vm: &Vm) -> Result<(), errno::Error> {
         let bar_addr = self.config_bar_addr();
         for (i, queue_evt) in self
             .device
@@ -712,7 +711,7 @@ impl VirtioInterruptMsix {
 }
 
 impl VirtioInterrupt for VirtioInterruptMsix {
-    fn trigger(&self, int_type: VirtioInterruptType) -> std::result::Result<(), std::io::Error> {
+    fn trigger(&self, int_type: VirtioInterruptType) -> Result<(), std::io::Error> {
         let vector = match int_type {
             VirtioInterruptType::Config => self.config_vector.load(Ordering::Acquire),
             VirtioInterruptType::Queue(queue_index) => *self
@@ -825,7 +824,7 @@ impl PciDevice for VirtioPciDevice {
         &mut self,
         old_base: u64,
         new_base: u64,
-    ) -> std::result::Result<(), std::io::Error> {
+    ) -> Result<(), std::io::Error> {
         // We only update our idea of the bar in order to support free_bars() above.
         // The majority of the reallocation is done inside DeviceManager.
         if self.bar_address == old_base {

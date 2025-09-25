@@ -4,7 +4,6 @@
 //
 
 use std::sync::Arc;
-use std::{io, result};
 
 use byteorder::{ByteOrder, LittleEndian};
 use serde::{Deserialize, Serialize};
@@ -25,9 +24,9 @@ const MSIX_ENABLE_BIT: u8 = 15;
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
 pub enum Error {
     /// Failed enabling the interrupt route.
-    EnableInterruptRoute(io::Error),
+    EnableInterruptRoute(std::io::Error),
     /// Failed updating the interrupt route.
-    UpdateInterruptRoute(io::Error),
+    UpdateInterruptRoute(std::io::Error),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -90,7 +89,7 @@ impl MsixConfig {
         interrupt_source_group: Arc<dyn InterruptSourceGroup>,
         devid: u32,
         state: Option<MsixConfigState>,
-    ) -> result::Result<Self, Error> {
+    ) -> Result<Self, Error> {
         assert!(msix_vectors <= MAX_MSIX_VECTORS_PER_DEVICE);
 
         let (table_entries, pba_entries, masked, enabled) = if let Some(state) = state {

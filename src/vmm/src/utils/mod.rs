@@ -11,7 +11,7 @@ pub mod signal;
 pub mod sm;
 
 use std::num::Wrapping;
-use std::result::Result;
+use Result;
 
 /// How many bits to left-shift by to convert MiB to bytes
 const MIB_TO_BYTES_SHIFT: usize = 20;

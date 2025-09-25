@@ -7,7 +7,7 @@
 use std::convert::From;
 use std::net::Ipv4Addr;
 use std::num::NonZeroUsize;
-use std::result::Result;
+use Result;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 

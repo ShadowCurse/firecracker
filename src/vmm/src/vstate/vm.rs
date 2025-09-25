@@ -137,7 +137,7 @@ impl<'a> Persist<'a> for MsiVectorGroup {
     fn restore(
         constructor_args: Self::ConstructorArgs,
         state: &Self::State,
-    ) -> std::result::Result<Self, Self::Error> {
+    ) -> Result<Self, Self::Error> {
         let mut irq_routes = Vec::with_capacity(state.len());
 
         for gsi in state {

@@ -11,7 +11,7 @@ use std::cmp::min;
 use std::fmt::Debug;
 use std::net::Ipv4Addr;
 use std::num::NonZeroU16;
-use std::result::Result;
+use Result;
 
 use bitflags::bitflags;
 
