@@ -140,3 +140,44 @@ def test_pmem_add_as_root_ro(uvm_plain_any, rootfs, microvm_factory):
     snapshot = vm.snapshot_full()
     restored_vm = microvm_factory.build_from_snapshot(snapshot)
     check_pmem_exist(restored_vm, 0, True, True, align(rootfs_size), "squashfs")
+
+
+def test_pmem_dax_memory_saving(
+    microvm_factory,
+    guest_kernel_acpi,
+    rootfs_rw,
+):
+    """
+    Test that booting from pmem with DAX enabled indeed saves memory in the
+    guest by not needing guest to use its page cache
+    """
+
+    vm = microvm_factory.build(
+        guest_kernel_acpi, rootfs_rw, pci=True, monitor_memory=False
+    )
+    vm.spawn()
+    vm.basic_config()
+    vm.add_net_iface()
+    vm.start()
+    _, stdout, _ = vm.ssh.check_output("free")
+    # Get the `buffer/cache` of the `free` command which represents
+    # kernel page cache size
+    block_cache_usage = int(stdout.splitlines()[1].split()[5])
+
+    vm_pmem = microvm_factory.build(
+        guest_kernel_acpi, rootfs_rw, pci=True, monitor_memory=False
+    )
+    vm_pmem.spawn()
+    vm_pmem.basic_config(
+        add_root_device=False,
+        boot_args="reboot=k panic=1 nomodule swiotlb=noforce console=ttyS0 rootflags=dax",
+    )
+    vm_pmem.add_net_iface()
+    vm_pmem.add_pmem("pmem", rootfs_rw, True, True)
+    vm_pmem.start()
+    _, stdout, _ = vm_pmem.ssh.check_output("free")
+    pmem_cache_usage = int(stdout.splitlines()[1].split()[5])
+
+    assert (
+        pmem_cache_usage < block_cache_usage
+    ), f"{block_cache_usage} <= {pmem_cache_usage}"
