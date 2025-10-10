@@ -65,6 +65,11 @@ perf_test = {
         "tests": "integration_tests/performance/test_jailer.py",
         "devtool_opts": "-c 1-10 -m 0",
     },
+    "pmem": {
+        "label": "💿 Pmem Performance",
+        "tests": "integration_tests/performance/test_pmem.py integration_tests/performance/test_boottime.py::test_boottime -k 'not Async'",
+        "devtool_opts": "-c 1-10 -m 0",
+    },
 }
 
 REVISION_A = os.environ.get("REVISION_A")
