@@ -73,8 +73,49 @@ pub struct ConfigSpace {
 // SAFETY: `ConfigSpace` contains only PODs in `repr(c)`, without padding.
 unsafe impl ByteValued for ConfigSpace {}
 
+/// Trait defining system level interractions of the Pmem device. Creating
+/// different implementations of it allows for better testing of the Pmem.
+pub trait PmemSystem: Sized + Send + Sync {
+    fn open_file(path: &str, write: bool) -> Result<(File, u64), std::io::Error>;
+    unsafe fn mmap(
+        addr: *mut libc::c_void,
+        len: libc::size_t,
+        prot: libc::c_int,
+        flags: libc::c_int,
+        fd: libc::c_int,
+        offset: libc::off_t,
+    ) -> *mut libc::c_void;
+    unsafe fn msync(addr: *mut libc::c_void, len: libc::size_t, size: libc::c_int) -> libc::c_int;
+}
+
+/// Default implementation of system interactions for Pmem device
 #[derive(Debug)]
-pub struct Pmem {
+pub struct DefaultPmemSystem;
+impl PmemSystem for DefaultPmemSystem {
+    fn open_file(path: &str, write: bool) -> Result<(File, u64), std::io::Error> {
+        let file = OpenOptions::new().read(true).write(write).open(path)?;
+        let file_len = file.metadata().unwrap().len();
+        Ok((file, file_len))
+    }
+    unsafe fn mmap(
+        addr: *mut libc::c_void,
+        len: libc::size_t,
+        prot: libc::c_int,
+        flags: libc::c_int,
+        fd: libc::c_int,
+        offset: libc::off_t,
+    ) -> *mut libc::c_void {
+        unsafe { libc::mmap(addr, len, prot, flags, fd, offset) }
+    }
+    unsafe fn msync(addr: *mut libc::c_void, len: libc::size_t, size: libc::c_int) -> libc::c_int {
+        unsafe { libc::msync(addr, len, size) }
+    }
+}
+
+pub type Pmem = PmemImpl<DefaultPmemSystem>;
+
+#[derive(Debug)]
+pub struct PmemImpl<T: PmemSystem = DefaultPmemSystem> {
     // VirtIO fields
     pub avail_features: u64,
     pub acked_features: u64,
@@ -93,9 +134,11 @@ pub struct Pmem {
     pub metrics: Arc<PmemMetrics>,
 
     pub config: PmemConfig,
+
+    _phantom: std::marker::PhantomData<T>,
 }
 
-impl Pmem {
+impl<T: PmemSystem + 'static> PmemImpl<T> {
     // Pmem devices need to have address and size to be
     // a multiple of 2MB
     pub const ALIGNMENT: u64 = 2 * 1024 * 1024;
@@ -127,6 +170,7 @@ impl Pmem {
             mmap_ptr,
             metrics: PmemMetricsPerDevice::alloc(config.id.clone()),
             config,
+            _phantom: Default::default(),
         })
     }
 
@@ -134,12 +178,7 @@ impl Pmem {
         path: &str,
         read_only: bool,
     ) -> Result<(File, u64, u64, u64), PmemError> {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(!read_only)
-            .open(path)
-            .map_err(PmemError::BackingFile)?;
-        let file_len = file.metadata().unwrap().len();
+        let (file, file_len) = T::open_file(path, !read_only).map_err(PmemError::BackingFile)?;
         if (file_len == 0) {
             return Err(PmemError::BackingFileZeroSize);
         }
@@ -154,7 +193,7 @@ impl Pmem {
             // SAFETY: We are calling the system call with valid arguments and checking the returned
             // value
             unsafe {
-                let r = libc::mmap(
+                let r = T::mmap(
                     std::ptr::null_mut(),
                     u64_to_usize(file_len),
                     prot,
@@ -177,7 +216,7 @@ impl Pmem {
             // file on top. The remaining gap between the end of the mmaped file and
             // the actual end of the memory region is backed by PRIVATE | ANONYMOUS memory.
             unsafe {
-                let mmap_ptr = libc::mmap(
+                let mmap_ptr = T::mmap(
                     std::ptr::null_mut(),
                     u64_to_usize(mmap_len),
                     prot,
@@ -188,7 +227,15 @@ impl Pmem {
                 if mmap_ptr == libc::MAP_FAILED {
                     return Err(PmemError::BackingFile(std::io::Error::last_os_error()));
                 }
-                let r = libc::mmap(
+                let r = T::mmap(
+                    mmap_ptr,
+                    u64_to_usize(file_len),
+                    prot,
+                    libc::MAP_SHARED | libc::MAP_NORESERVE | libc::MAP_FIXED,
+                    file.as_raw_fd(),
+                    0,
+                );
+                let r = T::mmap(
                     mmap_ptr,
                     u64_to_usize(file_len),
                     prot,
@@ -293,7 +340,7 @@ impl Pmem {
         // SAFETY: We are calling the system call with valid arguments and checking the returned
         // value
         unsafe {
-            let ret = libc::msync(
+            let ret = T::msync(
                 self.mmap_ptr as *mut libc::c_void,
                 u64_to_usize(self.file_len),
                 libc::MS_SYNC,
@@ -322,7 +369,7 @@ impl Pmem {
     }
 }
 
-impl VirtioDevice for Pmem {
+impl<T: PmemSystem + 'static> VirtioDevice for PmemImpl<T> {
     impl_device_type!(VIRTIO_ID_PMEM);
 
     fn avail_features(&self) -> u64 {
