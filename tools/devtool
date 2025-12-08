@@ -133,6 +133,17 @@ TARGET_PREFIX="$(uname -m)-unknown-linux-"
 # Container path to directory where we store built CI artifacts.
 CTR_CI_ARTIFACTS_PATH="${CTR_FC_ROOT_DIR}/resources/$(uname -m)"
 
+# Function to return current s3 path to artifacts. If custom path is needed
+# define `S3_ARTIFACTS_PATH` variable.
+get_s3_artifacts_path() {
+    if [ -n "${S3_ARTIFACTS_PATH}" ]; then
+      echo $S3_ARTIFACTS_PATH
+    else
+      echo $(aws s3 ls s3://spec.ccfc.min/firecracker-ci/ --no-sign-request | grep "PRE" | sort -k2 | tail -1 | awk '{print "s3://spec.ccfc.min/firecracker-ci/" $2}')
+    fi
+}
+
+
 # Check if Docker is available and exit if it's not.
 # Upon returning from this call, the caller can be certain Docker is available.
 #
@@ -571,9 +582,8 @@ ensure_ci_artifacts() {
     fi
 
     # Fetch all the artifacts so they are local
-    say "Fetching CI artifacts from S3"
-    FC_VERSION=$(cmd_sh "cd src/firecracker/src; cargo pkgid | cut -d# -f2 | cut -d. -f1-2")
-    S3_URL=s3://spec.ccfc.min/firecracker-ci/v$FC_VERSION/$(uname -m)
+    S3_URL=$(get_s3_artifacts_path)/$(uname -m)
+    say "Fetching CI artifacts from S3: " $S3_URL
     ARTIFACTS=$MICROVM_IMAGES_DIR/$(uname -m)
     if [ ! -d "$ARTIFACTS" ]; then
         mkdir -pv $ARTIFACTS
