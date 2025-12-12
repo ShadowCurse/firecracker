@@ -116,7 +116,11 @@ CTR_TEST_RESULTS_DIR="${CTR_FC_ROOT_DIR}/test_results"
 CTR_CARGO_TARGET_DIR="$CTR_FC_BUILD_DIR/cargo_target"
 
 # Path to the microVM images cache dir
-MICROVM_IMAGES_DIR="build/img"
+ARTIFACTS_DIR="build/artifacts"
+
+# File with a single line specifing the name of the
+# currently used artifacts
+ARTIFACTS_CURRENT_DIR_FILE="build/current_artifacts"
 
 # Full path to the public key mapping on the guest
 PUB_KEY_PATH=/root/.ssh/id_rsa.pub
@@ -135,12 +139,18 @@ CTR_CI_ARTIFACTS_PATH="${CTR_FC_ROOT_DIR}/resources/$(uname -m)"
 
 # Function to return current s3 path to artifacts. If custom path is needed
 # define `S3_ARTIFACTS_PATH` variable.
-get_s3_artifacts_path() {
+get_s3_artifacts_url() {
     if [ -n "${S3_ARTIFACTS_PATH}" ]; then
       echo $S3_ARTIFACTS_PATH
     else
       echo $(aws s3 ls s3://spec.ccfc.min/firecracker-ci/ --no-sign-request | grep "PRE" | sort -k2 | tail -1 | awk '{print "s3://spec.ccfc.min/firecracker-ci/" $2}')
     fi
+}
+# Function to return local path to artifacts. Accepts the url from function above
+# as an argument.
+get_local_artifacts_path() {
+    S3_PATH=$1
+    echo $ARTIFACTS_DIR/"${S3_PATH//\//-}"
 }
 
 
@@ -582,15 +592,20 @@ ensure_ci_artifacts() {
     fi
 
     # Fetch all the artifacts so they are local
-    S3_URL=$(get_s3_artifacts_path)/$(uname -m)
-    say "Fetching CI artifacts from S3: " $S3_URL
-    ARTIFACTS=$MICROVM_IMAGES_DIR/$(uname -m)
-    if [ ! -d "$ARTIFACTS" ]; then
-        mkdir -pv $ARTIFACTS
-        aws s3 sync --no-sign-request "$S3_URL" "$ARTIFACTS"
+    ARTIFACTS_S3_URL=$(get_s3_artifacts_url)
+    ARTIFACTS_S3_URL_ARCH=$ARTIFACTS_S3_URL/$(uname -m)
+    ARTIFACTS_LOCAL_PATH=$(get_local_artifacts_path $ARTIFACTS_S3_URL)/$(uname -m)
+
+    say "Fetching CI artifacts from S3: " $ARTIFACTS_S3_URL_ARCH " into: " $ARTIFACTS_LOCAL_PATH
+    if [ ! -d "$ARTIFACTS_LOCAL_PATH" ]; then
+        mkdir -pv $ARTIFACTS_LOCAL_PATH
+        aws s3 sync --no-sign-request "$ARTIFACTS_S3_URL_ARCH" "$ARTIFACTS_LOCAL_PATH"
         ok_or_die "Failed to download CI artifacts using awscli!"
-        cmd_sh "./tools/setup-ci-artifacts.sh"
+        cmd_sh "./tools/setup-ci-artifacts.sh" $ARTIFACTS_LOCAL_PATH
     fi
+    # cmd_sh "./tools/setup-ci-artifacts.sh" $ARTIFACTS_LOCAL_PATH
+
+    echo $ARTIFACTS_LOCAL_PATH > $ARTIFACTS_CURRENT_DIR_FILE
 }
 
 apply_linux_61_tweaks() {

@@ -399,7 +399,7 @@ def microvm_factory(request, record_property, results_dir, netns_factory):
             uvm_data.joinpath("host-dmesg.log").write_text(
                 utils.run_cmd(["dmesg", "-dPx"]).stdout
             )
-            shutil.copy(f"/firecracker/build/img/{platform.machine()}/id_rsa", uvm_data)
+            shutil.copy(f"/firecracker/build/current_artifacts/id_rsa", uvm_data)
             if Path(uvm.screen_log).exists():
                 shutil.copy(uvm.screen_log, uvm_data)
 
