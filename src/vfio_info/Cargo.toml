@@ -1,0 +1,13 @@
+[package]
+name = "vfio_info"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+vmm = { path = "../vmm" }
+
+[lints]
+workspace = true
+
+[profile.dev]
+panic = "unwind"
