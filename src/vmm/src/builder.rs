@@ -279,6 +279,15 @@ pub fn build_microvm_for_boot(
         )?;
     }
 
+    if let Some(vfio) = &vm_resources.vfio {
+        for path in vfio.paths.iter() {
+            device_manager
+                .pci_devices
+                .attach_vfio_device(&vm, path.clone(), &path)?;
+        }
+    }
+    // panic!("STOP");
+
     #[cfg(target_arch = "aarch64")]
     device_manager.attach_legacy_devices_aarch64(
         &vm,
