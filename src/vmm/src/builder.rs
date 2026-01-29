@@ -4,12 +4,16 @@
 //! Enables pre-boot setup, instantiation and booting of a Firecracker VMM.
 
 use std::fmt::Debug;
+use std::fs::OpenOptions;
 use std::io;
+use std::os::fd::{AsRawFd, RawFd};
+use std::path::Path;
 #[cfg(feature = "gdb")]
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
 use event_manager::SubscriberOps;
+use kvm_bindings::{kvm_create_device, kvm_device_type_KVM_DEV_TYPE_VFIO};
 use linux_loader::cmdline::Cmdline as LoaderKernelCmdline;
 use userfaultfd::Uffd;
 use utils::time::TimestampUs;
@@ -278,6 +282,63 @@ pub fn build_microvm_for_boot(
             virtio_mem_addr.expect("address should be allocated"),
         )?;
     }
+
+    if let Some(vfio) = &vm_resources.vfio {
+        let mut vfio_dev = kvm_create_device {
+            type_: kvm_device_type_KVM_DEV_TYPE_VFIO,
+            fd: 0,
+            flags: 0,
+        };
+
+        let kvm_vfio_fd = vm.common.fd.create_device(&mut vfio_dev).unwrap();
+        //
+        // fn open_vfio_file(id: u32) -> File {
+        //     let group_path = Path::new("/dev/vfio").join(id.to_string());
+        //     OpenOptions::new()
+        //         .read(true)
+        //         .write(true)
+        //         .open(group_path)
+        //         .unwrap()
+        // }
+        // fn check_vfio_api_version(vfio_fd: &impl AsRawFd) {
+        //     // let version = vfio_syscall::check_api_version(vfio_fd);
+        //     // if version as u32 != VFIO_API_VERSION {
+        //     //     panic!("Vfio api version");
+        //     // }
+        // }
+        // fn check_vfio_extension(vfio_fd: &impl AsRawFd, val: u32) {
+        //     if val != VFIO_TYPE1_IOMMU && val != VFIO_TYPE1v2_IOMMU {
+        //         panic!();
+        //     }
+        //
+        //     let ret = vfio_syscall::check_extension(self, val)?;
+        //     if ret != 1 {
+        //         panic!();
+        //     }
+        // }
+        //
+        // let vfio = open_vfio_file(0);
+        // check_vfio_api_version(&vfio);
+        // check_vfio_extension(&vfio, VFIO_TYPE1v2_IOMMU);
+        //
+        // // let ret = vfio_syscall::check_extension(vfio, VFIO_TYPE1v2_IOMMU)?;
+        // // if ret != 1 {
+        // //     return Err(VfioError::VfioExtension);
+        // // }
+        // fn get_group_id_from_path(sysfspath: &Path) -> Result<u32> {
+        //     let uuid_path: PathBuf = [sysfspath, Path::new("iommu_group")].iter().collect();
+        //     let group_path = uuid_path.read_link().unwrap();
+        //     let group_osstr = group_path.file_name().unwrap();
+        //     let group_str = group_osstr.to_str().unwrap();
+        //     group_str.parse::<u32>().unwrap()
+        // }
+
+        for path in vfio.paths.iter() {
+            println!("vfio path: {}", path);
+        }
+    }
+
+    panic!("STOP");
 
     #[cfg(target_arch = "aarch64")]
     device_manager.attach_legacy_devices_aarch64(
