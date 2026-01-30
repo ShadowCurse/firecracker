@@ -52,14 +52,14 @@ pub enum VfioError {
     VfioDeviceGetInfoOther,
     #[error("failed to get vfio device's region info: {0}")]
     VfioDeviceGetRegionInfo(#[source] SysError),
+    #[error("failed to get vfio device's irq info: {0}")]
+    VfioDeviceGetIrqInfo(#[source] SysError),
     #[error("invalid file path")]
     InvalidPath,
     #[error("failed to add guest memory map into iommu table: {0}")]
     IommuDmaMap(#[source] SysError),
     #[error("failed to remove guest memory map from iommu table: {0}")]
     IommuDmaUnmap(#[source] SysError),
-    #[error("failed to get vfio device irq info")]
-    VfioDeviceGetIrqInfo,
     #[error("failed to set vfio device irq")]
     VfioDeviceSetIrq,
     #[error("failed to enable vfio device irq")]

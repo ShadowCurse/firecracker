@@ -4,16 +4,12 @@
 //! Enables pre-boot setup, instantiation and booting of a Firecracker VMM.
 
 use std::fmt::Debug;
-use std::fs::{File, OpenOptions};
 use std::io;
-use std::os::fd::{AsRawFd, RawFd};
-use std::path::Path;
 #[cfg(feature = "gdb")]
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
 use event_manager::SubscriberOps;
-use kvm_bindings::{kvm_create_device, kvm_device_type_KVM_DEV_TYPE_VFIO};
 use linux_loader::cmdline::Cmdline as LoaderKernelCmdline;
 use userfaultfd::Uffd;
 use utils::time::TimestampUs;
@@ -284,186 +280,11 @@ pub fn build_microvm_for_boot(
     }
 
     if let Some(vfio) = &vm_resources.vfio {
-        fn create_passthrough_device(vm: &kvm_ioctls::VmFd) -> kvm_ioctls::DeviceFd {
-            let mut vfio_dev = kvm_create_device {
-                type_: kvm_device_type_KVM_DEV_TYPE_VFIO,
-                fd: 0,
-                flags: 0,
-            };
-
-            vm.create_device(&mut vfio_dev).unwrap()
-        }
-
-        fn open_vfio_container(id: u32) -> File {
-            let group_path = Path::new("/dev/vfio").join(id.to_string());
-            OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(group_path)
-                .unwrap()
-        }
-        fn check_vfio_api_version(container: &impl AsRawFd) {
-            let version = crate::vfio::ioctls::ioctls::check_api_version(container);
-            if version as u32 != crate::vfio::bindings::vfio::VFIO_API_VERSION {
-                panic!("Vfio api version");
-            }
-        }
-        fn check_vfio_extension(container: &impl AsRawFd, val: u32) {
-            if val != crate::vfio::VFIO_TYPE1_IOMMU && val != crate::vfio::VFIO_TYPE1v2_IOMMU {
-                panic!();
-            }
-
-            let ret = crate::vfio::check_extension(container, val).unwrap();
-            if ret != 1 {
-                panic!();
-            }
-        }
-        fn group_id_from_device_path(device_path: &impl AsRef<std::path::Path>) -> u32 {
-            let uuid_path: std::path::PathBuf = device_path.as_ref().join("iommu_group");
-            // [device_path.as_ref(), Path::new("iommu_group")].iter().collect();
-            let group_path = uuid_path.read_link().unwrap();
-            let group_osstr = group_path.file_name().unwrap();
-            let group_str = group_osstr.to_str().unwrap();
-            group_str.parse::<u32>().unwrap()
-        }
-
-        fn set_iommu(container: &impl AsRawFd, val: u32) {
-            assert!(val == crate::vfio::VFIO_TYPE1_IOMMU || val == crate::vfio::VFIO_TYPE1v2_IOMMU);
-            crate::vfio::set_iommu(container, val).unwrap();
-        }
-
-        pub struct VfioGroup {
-            pub id: u32,
-            pub group: File,
-        }
-        impl VfioGroup {
-            fn new(id: u32) -> Self {
-                let group = Self::open_group_file(id);
-                let mut group_status = crate::vfio::vfio_group_status {
-                    argsz: std::mem::size_of::<crate::vfio::vfio_group_status>() as u32,
-                    flags: 0,
-                };
-                crate::vfio::get_group_status(&group, &mut group_status).unwrap();
-                if group_status.flags != crate::vfio::VFIO_GROUP_FLAGS_VIABLE {
-                    panic!();
-                }
-                VfioGroup { id, group }
-            }
-
-            fn open_group_file(id: u32) -> File {
-                let group_path = Path::new("/dev/vfio").join(id.to_string());
-                OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .open(group_path)
-                    .unwrap()
-            }
-
-            // fn get_device(&self, name: &Path) -> VfioDeviceInfo {
-            //     let uuid_osstr = name.file_name().ok_or(VfioError::InvalidPath)?;
-            //     let uuid_str = uuid_osstr.to_str().ok_or(VfioError::InvalidPath)?;
-            //     let path: CString =
-            //         CString::new(uuid_str.as_bytes()).expect("CString::new() failed");
-            //     let device = vfio_syscall::get_group_device_fd(self, &path)?;
-            //     let dev_info = VfioDeviceInfo::get_device_info(&device)?;
-            //
-            //     Ok(VfioDeviceInfo::new(device, &dev_info))
-            // }
-        }
-
-        impl AsRawFd for VfioGroup {
-            fn as_raw_fd(&self) -> RawFd {
-                self.group.as_raw_fd()
-            }
-        }
-        fn get_group(container: &impl AsRawFd, group_id: u32) -> VfioGroup {
-            // let mut hash = self.groups.lock().unwrap();
-            // if let Some(entry) = hash.get(&group_id) {
-            //     return Ok(entry.clone());
-            // }
-
-            // let group = Arc::new(VfioGroup::new(group_id)?);
-
-            let group = VfioGroup::new(group_id);
-            // Bind the new group object to the container.
-            crate::vfio::set_group_container(&group, container).unwrap();
-
-            // Initialize the IOMMU backend driver after binding the first group object.
-            // if hash.is_empty() {
-            //     if let Err(e) = self.set_iommu(VFIO_TYPE1v2_IOMMU) {
-            //         let _ = vfio_syscall::unset_group_container(&group, self);
-            //         return Err(e);
-            //     }
-            // }
-
-            // Add the new group object to the hypervisor driver.
-            // #[cfg(any(feature = "kvm", feature = "mshv"))]
-            // if let Err(e) = self.device_add_group(&group) {
-            //     let _ = vfio_syscall::unset_group_container(&group, self);
-            //     return Err(e);
-            // }
-            // hash.insert(group_id, group.clone());
-            group
-        }
-        // flags: KVM_DEV_VFIO_FILE_ADD or KVM_DEV_VFIO_FILE_DEL;
-        fn vfio_device_file_add(device: &kvm_ioctls::DeviceFd, file: &impl AsRawFd, flags: u64) {
-            // let flag = if add {
-            //     KVM_DEV_VFIO_FILE_ADD
-            // } else {
-            //     KVM_DEV_VFIO_FILE_DEL
-            // };
-            let file_fd: RawFd = file.as_raw_fd();
-            let dev_attr = kvm_bindings::kvm_device_attr {
-                flags: 0,
-                group: kvm_bindings::KVM_DEV_VFIO_FILE,
-                attr: flags,
-                addr: (&file_fd as *const i32) as u64,
-            };
-            device.set_device_attr(&dev_attr).unwrap();
-        }
-
-        let kvm_vfio_fd = create_passthrough_device(&vm.common.fd);
-        let container = open_vfio_container(0);
-        check_vfio_api_version(&container);
-        check_vfio_extension(&container, crate::vfio::VFIO_TYPE1v2_IOMMU);
-
-        let pci_segment = device_manager.pci_devices.pci_segment.as_ref().unwrap();
-        let pci_device_id = pci_segment
-            .pci_bus
-            .lock()
-            .expect("bad lock")
-            .next_device_id()
-            .unwrap();
-        let pci_device_bdf = pci_device_id << 3;
-
-        // get device info
-        let group_id = group_id_from_device_path(&vfio.paths[0]);
-        let group = get_group(&container, group_id);
-        // only set after getting the first group
-        set_iommu(&container, crate::vfio::VFIO_TYPE1v2_IOMMU);
-        // vfio_device_file_add(..., &group, kvm_bindings::KVM_DEV_VFIO_FILE_ADD);
-
-        // let vfio_device = VfioDevice::new(device_path, Arc::clone(&vfio_container))
-        //     .map_err(StartMicrovmError::VfioError)?;
-
-        // // let ret = vfio_syscall::check_extension(vfio, VFIO_TYPE1v2_IOMMU)?;
-        // // if ret != 1 {
-        // //     return Err(VfioError::VfioExtension);
-        // // }
-        // fn get_group_id_from_path(sysfspath: &Path) -> Result<u32> {
-        //     let uuid_path: PathBuf = [sysfspath, Path::new("iommu_group")].iter().collect();
-        //     let group_path = uuid_path.read_link().unwrap();
-        //     let group_osstr = group_path.file_name().unwrap();
-        //     let group_str = group_osstr.to_str().unwrap();
-        //     group_str.parse::<u32>().unwrap()
-        // }
-
-        for path in vfio.paths.iter() {
-            println!("vfio path: {}", path);
-        }
+        device_manager
+            .pci_devices
+            .attach_vfio_device(&vm, vfio.paths[0].clone(), &vfio.paths[0]);
     }
-
-    panic!("STOP");
+    // panic!("STOP");
 
     #[cfg(target_arch = "aarch64")]
     device_manager.attach_legacy_devices_aarch64(

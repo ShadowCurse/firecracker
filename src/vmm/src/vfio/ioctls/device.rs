@@ -983,7 +983,7 @@
 //                 offset: reg_info.offset,
 //                 caps: Vec::new(),
 //             };
-//             if let Err(e) = self.get_region_map(&mut region, &reg_info) {
+//             if let Err(e) = self.et_region_map(&mut region, &reg_info) {
 //                 error!("Could not get region #{i} map {e}");
 //                 continue;
 //             }
