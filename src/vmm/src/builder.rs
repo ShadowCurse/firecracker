@@ -280,7 +280,7 @@ pub fn build_microvm_for_boot(
     }
 
     if let Some(vfio) = &vm_resources.vfio {
-        crate::vfio::do_vfio_magic(&vfio.paths);
+        crate::vfio::do_vfio_magic(&vm.common.fd, &vfio.paths);
     }
 
     panic!("STOP");
