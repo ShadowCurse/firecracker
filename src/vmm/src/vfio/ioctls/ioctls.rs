@@ -78,9 +78,9 @@ pub fn check_api_version(vfio: &impl AsRawFd) -> i32 {
     unsafe { ioctl(vfio, VFIO_GET_API_VERSION()) }
 }
 
-pub fn check_extension(container: &impl AsRawFd, val: u32) -> Result<u32, VfioError> {
+pub fn check_extension(vfio: &impl AsRawFd, val: u32) -> Result<u32, VfioError> {
     // SAFETY: file is vfio container and make sure val is valid.
-    let ret = unsafe { ioctl_with_val(container, VFIO_CHECK_EXTENSION(), val.into()) };
+    let ret = unsafe { ioctl_with_val(vfio, VFIO_CHECK_EXTENSION(), val.into()) };
     if ret < 0 {
         Err(VfioError::VfioExtension)
     } else {
@@ -88,9 +88,9 @@ pub fn check_extension(container: &impl AsRawFd, val: u32) -> Result<u32, VfioEr
     }
 }
 
-pub fn set_iommu(container: &impl AsRawFd, val: u32) -> Result<(), VfioError> {
+pub fn set_iommu(vfio: &impl AsRawFd, val: u32) -> Result<(), VfioError> {
     // SAFETY: file is vfio container and make sure val is valid.
-    let ret = unsafe { ioctl_with_val(container, VFIO_SET_IOMMU(), val.into()) };
+    let ret = unsafe { ioctl_with_val(vfio, VFIO_SET_IOMMU(), val.into()) };
     if ret < 0 {
         Err(VfioError::ContainerSetIOMMU(SysError::last()))
     } else {
@@ -98,13 +98,13 @@ pub fn set_iommu(container: &impl AsRawFd, val: u32) -> Result<(), VfioError> {
     }
 }
 
-pub fn map_dma(
-    container: &impl AsRawFd,
+pub fn iommu_map_dma(
+    vfio: &impl AsRawFd,
     dma_map: &vfio_iommu_type1_dma_map,
 ) -> Result<(), VfioError> {
     // SAFETY: file is vfio container, dma_map is constructed by us, and
     // we check the return value
-    let ret = unsafe { ioctl_with_ref(container, VFIO_IOMMU_MAP_DMA(), dma_map) };
+    let ret = unsafe { ioctl_with_ref(vfio, VFIO_IOMMU_MAP_DMA(), dma_map) };
     if ret != 0 {
         Err(VfioError::IommuDmaMap(SysError::last()))
     } else {
@@ -112,13 +112,13 @@ pub fn map_dma(
     }
 }
 
-pub fn unmap_dma(
-    container: &impl AsRawFd,
+pub fn iommu_unmap_dma(
+    vfio: &impl AsRawFd,
     dma_map: &mut vfio_iommu_type1_dma_unmap,
 ) -> Result<(), VfioError> {
     // SAFETY: file is vfio container, dma_unmap is constructed by us, and
     // we check the return value
-    let ret = unsafe { ioctl_with_ref(container, VFIO_IOMMU_UNMAP_DMA(), dma_map) };
+    let ret = unsafe { ioctl_with_ref(vfio, VFIO_IOMMU_UNMAP_DMA(), dma_map) };
     if ret != 0 {
         Err(VfioError::IommuDmaUnmap(SysError::last()))
     } else {
@@ -217,7 +217,7 @@ pub fn device_get_irq_info(
     // SAFETY: we are the owner of dev and irq_info which are valid value
     let ret = unsafe { ioctl_with_mut_ref(device, VFIO_DEVICE_GET_IRQ_INFO(), irq_info) };
     if ret < 0 {
-        Err(VfioError::VfioDeviceGetRegionInfo(SysError::last()))
+        Err(VfioError::VfioDeviceGetIrqInfo(SysError::last()))
     } else {
         Ok(())
     }

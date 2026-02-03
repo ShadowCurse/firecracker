@@ -3,9 +3,33 @@ pub mod bindings;
 /// ioctls
 pub mod ioctls;
 
+// First BAR offset in the PCI config space.
+pub const PCI_CONFIG_BAR_OFFSET: u32 = 0x10;
+// Capability register offset in the PCI config space.
+pub const PCI_CONFIG_CAPABILITY_OFFSET: u32 = 0x34;
+// Extended capabilities register offset in the PCI config space.
+pub const PCI_CONFIG_EXTENDED_CAPABILITY_OFFSET: u32 = 0x100;
+// IO BAR when first BAR bit is 1.
+pub const PCI_CONFIG_IO_BAR: u32 = 0x1;
+// 64-bit memory bar flag.
+pub const PCI_CONFIG_MEMORY_BAR_64BIT: u32 = 0x4;
+// Prefetchable BAR bit
+pub const PCI_CONFIG_BAR_PREFETCHABLE: u32 = 0x8;
+// PCI config register size (4 bytes).
+pub const PCI_CONFIG_REGISTER_SIZE: usize = 4;
+// Number of BARs for a PCI device
+pub const BAR_NUMS: usize = 6;
+// PCI Header Type register index
+pub const PCI_HEADER_TYPE_REG_INDEX: usize = 3;
+// First BAR register index
+pub const PCI_CONFIG_BAR0_INDEX: usize = 4;
+// PCI ROM expansion BAR register index
+pub const PCI_ROM_EXP_BAR_INDEX: usize = 12;
+
 use std::ffi::CString;
 use std::fs::{File, OpenOptions};
 use std::os::fd::AsRawFd;
+use std::os::unix::fs::FileExt;
 use std::path::Path;
 
 pub use bindings::*;
@@ -14,23 +38,23 @@ use kvm_bindings::{
     KVM_DEV_VFIO_FILE, kvm_create_device, kvm_device_attr, kvm_device_type_KVM_DEV_TYPE_VFIO,
 };
 use kvm_ioctls::{DeviceFd, VmFd};
-use log::info;
+use pci::PciCapabilityId;
 
-fn vfio_container_open() -> File {
+fn vfio_open() -> File {
     OpenOptions::new()
         .read(true)
         .write(true)
         .open("/dev/vfio/vfio")
         .unwrap()
 }
-fn vfio_container_check_api_version(container: &impl AsRawFd) {
+fn vfio_check_api_version(container: &impl AsRawFd) {
     let version = crate::vfio::ioctls::ioctls::check_api_version(container);
-    info!("container version: {}", version);
+    println!("vfio api version: {}", version);
     if version as u32 != VFIO_API_VERSION {
         panic!("Vfio api version");
     }
 }
-fn vfio_container_check_extension(container: &impl AsRawFd, val: u32) {
+fn vfio_check_extension(container: &impl AsRawFd, val: u32) {
     if val != VFIO_TYPE1_IOMMU && val != VFIO_TYPE1v2_IOMMU {
         panic!();
     }
@@ -93,186 +117,106 @@ fn vfio_device_reset(device: &impl AsRawFd, device_info: &vfio_device_info) {
         crate::vfio::device_reset(device);
     }
 }
+fn vfio_device_get_region_infos(
+    device: &impl AsRawFd,
+    device_info: &vfio_device_info,
+) -> Vec<vfio_region_info> {
+    let num_regions = device_info.num_regions - VFIO_PCI_BAR0_REGION_INDEX;
+    let mut regions = Vec::with_capacity(num_regions as usize);
 
-// fn vfio_device_region_get_mappings(
-//     &self,
-//     region: &mut VfioRegion,
-//     region_info: &vfio_region_info,
-// ) -> Result<()> {
-//     let region_info_size: u32 = std::mem::size_of::<vfio_region_info>() as u32;
-//     if region_info.flags & VFIO_REGION_INFO_FLAG_CAPS == 0 || region_info.argsz <=
-// region_info_size     {
-//         // There is not capabilities information for that region, we can just return.
-//         return Ok(());
-//     }
-//
-//     // There is a capability information for that region, we have to call
-//     // VFIO_DEVICE_GET_REGION_INFO with a vfio_region_with_cap structure and the hinted size.
-//     let mut region_with_cap = vfio_region_info_with_cap::from_region_info(region_info);
-//     crate::vfio::get_device_region_info_cap(self, &mut region_with_cap).unwrap();
-//
-//     // region_with_cap[0] may contain different types of structure depending on the capability
-//     // type, but all of them begin with vfio_info_cap_header in order to identify the capability
-//     // type, version and if there's another capability after this one.
-//     // It is safe to convert region_with_cap[0] with an offset of cap_offset into
-//     // vfio_info_cap_header pointer and access its elements, as long as cap_offset is greater
-//     // than region_info_size.
-//     //
-//     // Safety: following code is safe because we trust data returned by the kernel.
-//     if region_with_cap[0].region_info.cap_offset >= region_info_size {
-//         let mut next_cap_offset = region_with_cap[0].region_info.cap_offset;
-//         let info_ptr = &region_with_cap[0] as *const vfio_region_info_with_cap as *const u8;
-//
-//         while next_cap_offset >= region_info_size {
-//             // SAFETY: data structure returned by kernel is trusted.
-//             let cap_header = unsafe {
-//                 *(info_ptr.offset(next_cap_offset as isize) as *const vfio_info_cap_header)
-//             };
-//
-//             match u32::from(cap_header.id) {
-//                 VFIO_REGION_INFO_CAP_SPARSE_MMAP => {
-//                     // SAFETY: data structure returned by kernel is trusted.
-//                     let sparse_mmap = unsafe {
-//                         info_ptr.offset(next_cap_offset as isize)
-//                             as *const vfio_region_info_cap_sparse_mmap
-//                     };
-//                     // SAFETY: data structure returned by kernel is trusted.
-//                     let nr_areas = unsafe { (*sparse_mmap).nr_areas };
-//                     // SAFETY: data structure returned by kernel is trusted.
-//                     let areas = unsafe { (*sparse_mmap).areas.as_slice(nr_areas as usize) };
-//
-//                     let cap = VfioRegionInfoCapSparseMmap {
-//                         areas: areas
-//                             .iter()
-//                             .map(|a| VfioRegionSparseMmapArea {
-//                                 offset: a.offset,
-//                                 size: a.size,
-//                             })
-//                             .collect(),
-//                     };
-//                     region.caps.push(VfioRegionInfoCap::SparseMmap(cap));
-//                 }
-//                 VFIO_REGION_INFO_CAP_TYPE => {
-//                     // SAFETY: data structure returned by kernel is trusted.
-//                     let type_ = unsafe {
-//                         *(info_ptr.offset(next_cap_offset as isize)
-//                             as *const vfio_region_info_cap_type)
-//                     };
-//                     let cap = VfioRegionInfoCapType {
-//                         type_: type_.type_,
-//                         subtype: type_.subtype,
-//                     };
-//                     region.caps.push(VfioRegionInfoCap::Type(cap));
-//                 }
-//                 VFIO_REGION_INFO_CAP_MSIX_MAPPABLE => {
-//                     region.caps.push(VfioRegionInfoCap::MsixMappable);
-//                 }
-//                 VFIO_REGION_INFO_CAP_NVLINK2_SSATGT => {
-//                     // SAFETY: data structure returned by kernel is trusted.
-//                     let nvlink2_ssatgt = unsafe {
-//                         *(info_ptr.offset(next_cap_offset as isize)
-//                             as *const vfio_region_info_cap_nvlink2_ssatgt)
-//                     };
-//                     let cap = VfioRegionInfoCapNvlink2Ssatgt {
-//                         tgt: nvlink2_ssatgt.tgt,
-//                     };
-//                     region.caps.push(VfioRegionInfoCap::Nvlink2Ssatgt(cap));
-//                 }
-//                 VFIO_REGION_INFO_CAP_NVLINK2_LNKSPD => {
-//                     // SAFETY: data structure returned by kernel is trusted.
-//                     let nvlink2_lnkspd = unsafe {
-//                         *(info_ptr.offset(next_cap_offset as isize)
-//                             as *const vfio_region_info_cap_nvlink2_lnkspd)
-//                     };
-//                     let cap = VfioRegionInfoCapNvlink2Lnkspd {
-//                         link_speed: nvlink2_lnkspd.link_speed,
-//                     };
-//                     region.caps.push(VfioRegionInfoCap::Nvlink2Lnkspd(cap));
-//                 }
-//                 _ => {}
-//             }
-//
-//             next_cap_offset = cap_header.next;
-//         }
-//     }
-//
-//     Ok(())
-// }
-//
-// fn vfio_device_get_regions(
-//     device: &impl AsRawFd,
-//     device_info: &vfio_device_info,
-// ) -> Vec<vfio_region_info> {
-//     let mut regions: Vec<vfio_region_info> = Vec::new();
-//
-//     for i in VFIO_PCI_BAR0_REGION_INDEX..device_info.num_regions {
-//         let argsz: u32 = std::mem::size_of::<vfio_region_info>() as u32;
-//         let mut reg_info = vfio_region_info {
-//             argsz,
-//             flags: 0,
-//             index: i,
-//             cap_offset: 0,
-//             size: 0,
-//             offset: 0,
-//         };
-//
-//         if let Err(e) = crate::vfio::get_device_region_info(self, &mut reg_info) {
-//             match e {
-//                 // Non-VGA devices do not have the VGA region,
-//                 // the kernel indicates this by returning -EINVAL,
-//                 // and it's not an error.
-//                 VfioError::VfioDeviceGetRegionInfo(e)
-//                     if e.errno() == libc::EINVAL && i == VFIO_PCI_VGA_REGION_INDEX =>
-//                 {
-//                     continue;
-//                 }
-//                 _ => {
-//                     error!("Could not get region #{i} info {e}");
-//                     continue;
-//                 }
-//             }
-//         }
-//
-//         let mut region = VfioRegion {
-//             flags: reg_info.flags,
-//             size: reg_info.size,
-//             offset: reg_info.offset,
-//             caps: Vec::new(),
-//         };
-//         if let Err(e) = self.get_region_map(&mut region, &reg_info) {
-//             error!("Could not get region #{i} map {e}");
-//             continue;
-//         }
-//
-//         debug!("Region #{i}");
-//         debug!("\tflag 0x{:x}", region.flags);
-//         debug!("\tsize 0x{:x}", region.size);
-//         debug!("\toffset 0x{:x}", region.offset);
-//         regions.push(region);
-//     }
-//
-//     Ok(regions)
-// }
-
-// pub fn vfio_device_region_read(&self, index: u32, buf: &mut [u8], addr: u64) {
-//     let region: &VfioRegion = match self.regions.get(index as usize) {
-//         Some(v) => v,
-//         None => {
-//             warn!("region read with invalid index: {index}");
-//             return;
-//         }
-//     };
-//
-//     let size = buf.len() as u64;
-//     if size > region.size || addr + size > region.size {
-//         warn!("region read with invalid parameter, add: {addr}, size: {size}");
-//         return;
-//     }
-//
-//     if let Err(e) = self.device.read_exact_at(buf, region.offset + addr) {
-//         warn!("Failed to read region in index: {index}, addr: {addr}, error: {e}");
-//     }
-// }
+    for i in VFIO_PCI_BAR0_REGION_INDEX..device_info.num_regions {
+        println!("Getting bar region info: {}", i);
+        let region_info_struct_size = std::mem::size_of::<vfio_region_info>() as u32;
+        let mut region_info = vfio_region_info {
+            argsz: region_info_struct_size,
+            flags: 0,
+            index: i,
+            cap_offset: 0,
+            size: 0,
+            offset: 0,
+        };
+        crate::vfio::device_get_region_info(device, &mut region_info).unwrap();
+        println!("Region info: {:#?}", region_info);
+        regions.push(region_info);
+        if region_info.flags & VFIO_REGION_INFO_FLAG_CAPS == 0
+            || region_info.argsz <= region_info_struct_size
+        {
+            println!("Region has no caps");
+            continue;
+        } else {
+            println!("Region caps:");
+            let mut region_info_with_cap_bytes =
+                Vec::<u8>::with_capacity(region_info.argsz as usize);
+            let region_info_with_caps =
+                unsafe { &mut *(region_info_with_cap_bytes.as_mut_ptr() as *mut vfio_region_info) };
+            region_info_with_caps.argsz = region_info.argsz;
+            region_info_with_caps.flags = 0;
+            region_info_with_caps.index = region_info.index;
+            region_info_with_caps.cap_offset = 0;
+            region_info_with_caps.size = 0;
+            region_info_with_caps.offset = 0;
+            crate::vfio::device_get_region_info(device, region_info_with_caps).unwrap();
+            if region_info_struct_size <= region_info_with_caps.cap_offset {
+                let mut next_cap_offset = region_info_with_caps.cap_offset;
+                while (region_info_struct_size < next_cap_offset) {
+                    let cap_header = unsafe {
+                        &*(region_info_with_cap_bytes[next_cap_offset as usize..].as_ptr()
+                            as *const vfio_info_cap_header)
+                    };
+                    println!("Cap id: {}", cap_header.id);
+                    next_cap_offset = cap_header.next;
+                }
+            }
+        }
+    }
+    regions
+}
+fn vfio_device_get_irq_infos(
+    device: &impl AsRawFd,
+    device_info: &vfio_device_info,
+) -> Vec<vfio_irq_info> {
+    let mut irqs = Vec::with_capacity(device_info.num_irqs as usize);
+    for i in 0..device_info.num_irqs {
+        println!("Getting irq info: {}", i);
+        let mut irq_info = vfio_irq_info {
+            argsz: std::mem::size_of::<vfio_irq_info>() as u32,
+            flags: 0,
+            index: i,
+            count: 0,
+        };
+        match crate::vfio::device_get_irq_info(device, &mut irq_info) {
+            Ok(()) => {
+                println!("Irq info: {:#?}", irq_info);
+                irqs.push(irq_info);
+            }
+            Err(e) => println!("Irq info: got error: {:#?}", e),
+        }
+    }
+    irqs
+}
+fn vfio_device_region_read(
+    device: &impl FileExt,
+    region_infos: &[vfio_region_info],
+    index: u32,
+    offset: u64,
+    buf: &mut [u8],
+) {
+    let region_info = region_infos[index as usize];
+    println!(
+        "Reading device region {index} at offset: {offset} with region info: {region_info:#?}"
+    );
+    let buf_size = buf.len() as u64;
+    if offset + buf_size <= region_info.size {
+        if let Err(e) = device.read_exact_at(buf, region_info.offset + offset) {
+            println!("Failed to read region in index: {index}, offset: {offset}, error: {e}");
+        }
+    } else {
+        println!(
+            "Failed to read region in index: {index}, offset: {offset}, error: read beyond region \
+             memory"
+        );
+    }
+}
 
 fn create_kvm_vfio_device(vm: &VmFd) -> DeviceFd {
     let mut vfio_dev = kvm_create_device {
@@ -297,13 +241,15 @@ fn kvm_vfio_device_file_add(device: &DeviceFd, file: &impl AsRawFd, flags: u32) 
 // pub fn do_vfio_magic(vm_fd: &VmFd, paths: &Vec<String>) {
 pub fn do_vfio_magic() {
     // vfio part
-    let container = vfio_container_open();
-    vfio_container_check_api_version(&container);
-    vfio_container_check_extension(&container, VFIO_TYPE1v2_IOMMU);
+    let container = vfio_open();
+    vfio_check_api_version(&container);
+    vfio_check_extension(&container, VFIO_TYPE1v2_IOMMU);
 
     // open device and vfio group
     let path = "/sys/bus/mdev/devices/c9abdcb5-5279-413a-9057-c81d2605ce9c/".to_string();
+    println!("Openning device at path: {}", path);
     let group_id = group_id_from_device_path(&path);
+    println!("Group id: {}", group_id);
     let group = vfio_group_open(group_id);
     vfio_group_check_status(&group);
     crate::vfio::group_set_container(&group, &container).unwrap();
@@ -313,61 +259,64 @@ pub fn do_vfio_magic() {
 
     let device_file = vfio_group_get_device(&group, &path);
     let device_info = vfio_device_get_info(&device_file);
-    for i in VFIO_PCI_BAR0_REGION_INDEX..device_info.num_regions {
-        info!("getting bar region info: {}", i);
-        let region_info_struct_size = std::mem::size_of::<vfio_region_info>() as u32;
-        let mut region_info = vfio_region_info {
-            argsz: region_info_struct_size,
-            flags: 0,
-            index: i,
-            cap_offset: 0,
-            size: 0,
-            offset: 0,
-        };
-        crate::vfio::device_get_region_info(&device_file, &mut region_info).unwrap();
-        info!("Region info: {:#?}", region_info);
-        if region_info.flags & VFIO_REGION_INFO_FLAG_CAPS == 0
-            || region_info.argsz <= region_info_struct_size
-        {
-            info!("Region has no caps");
-            continue;
-        } else {
-            info!("Region caps:");
-            let mut region_info_with_cap_bytes =
-                Vec::<u8>::with_capacity(region_info.argsz as usize);
-            let region_info =
-                unsafe { &mut *(region_info_with_cap_bytes.as_mut_ptr() as *mut vfio_region_info) };
-            region_info.argsz = region_info.argsz;
-            region_info.flags = 0;
-            region_info.index = region_info.index;
-            region_info.cap_offset = 0;
-            region_info.size = 0;
-            region_info.offset = 0;
-            crate::vfio::device_get_region_info(&device_file, region_info);
-            if region_info_struct_size <= region_info.cap_offset {
-                let mut next_cap_offset = region_info.cap_offset;
-                while (region_info_struct_size < next_cap_offset) {
-                    let cap_header = unsafe {
-                        &*(region_info_with_cap_bytes[next_cap_offset as usize..].as_ptr()
-                            as *const vfio_info_cap_header)
-                    };
-                    info!("Cap id: {}", cap_header.id);
-                    // match u32::from(cap_header.id) {
-                    //     VFIO_REGION_INFO_CAP_SPARSE_MMAP => {
-                    //     }
-                    // }
-
-                    next_cap_offset = cap_header.next;
-                }
-            }
-        }
-    }
     vfio_device_reset(&device_file, &device_info);
+
+    let device_region_infos = vfio_device_get_region_infos(&device_file, &device_info);
+    let mut buffer: [u8; 1] = [0];
+    vfio_device_region_read(
+        &device_file,
+        &device_region_infos,
+        VFIO_PCI_CONFIG_REGION_INDEX,
+        PCI_CONFIG_CAPABILITY_OFFSET as u64,
+        &mut buffer,
+    );
+    let mut pci_cap_offset = buffer[0];
+    println!("PCI cap offset: {}", pci_cap_offset);
+    while pci_cap_offset != 0 {
+        vfio_device_region_read(
+            &device_file,
+            &device_region_infos,
+            VFIO_PCI_CONFIG_REGION_INDEX,
+            pci_cap_offset as u64,
+            &mut buffer,
+        );
+        let mut pci_cap_id = buffer[0];
+        let pci_cap = PciCapabilityId::from(pci_cap_id);
+        println!("Pci cap found: {:#?}", pci_cap);
+        vfio_device_region_read(
+            &device_file,
+            &device_region_infos,
+            VFIO_PCI_CONFIG_REGION_INDEX,
+            (pci_cap_offset + 1) as u64,
+            &mut buffer,
+        );
+        pci_cap_offset = buffer[0];
+    }
+
+    let device_irq_infos = vfio_device_get_irq_infos(&device_file, &device_info);
+    if VFIO_PCI_MSI_IRQ_INDEX < device_irq_infos.len() as u32 {
+        println!(
+            "MSI IRQ info: {:#?}",
+            device_irq_infos[VFIO_PCI_MSI_IRQ_INDEX as usize]
+        );
+    }
+    if VFIO_PCI_MSIX_IRQ_INDEX < device_irq_infos.len() as u32 {
+        println!(
+            "MSIX IRQ info: {:#?}",
+            device_irq_infos[VFIO_PCI_MSIX_IRQ_INDEX as usize]
+        );
+    }
+    if VFIO_PCI_INTX_IRQ_INDEX < device_irq_infos.len() as u32 {
+        println!(
+            "INTX IRQ info: {:#?}",
+            device_irq_infos[VFIO_PCI_INTX_IRQ_INDEX as usize]
+        );
+    }
 
     // KVM part
     // let kvm_vfio_fd = create_kvm_vfio_device(vm_fd);
     // kvm_vfio_device_file_add(&kvm_vfio_fd, &group, KVM_DEV_VFIO_FILE_ADD);
-    panic!("THE END");
+    // panic!("THE END");
 
     // let configuration = PciConfiguration::new(
     //     0,

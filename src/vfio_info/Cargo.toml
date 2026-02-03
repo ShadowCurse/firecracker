@@ -8,3 +8,6 @@ vmm = { path = "../vmm" }
 
 [lints]
 workspace = true
+
+[profile.dev]
+panic = "unwind"
