@@ -35,6 +35,7 @@ use crate::devices::virtio::vsock::{Vsock, VsockUnixBackend};
 use crate::pci::bus::PciRootError;
 use crate::resources::VmResources;
 use crate::snapshot::Persist;
+use crate::vfio::VfioPciDevice;
 use crate::vmm_config::memory_hotplug::MemoryHotplugConfig;
 use crate::vmm_config::mmds::MmdsConfigError;
 use crate::vstate::bus::BusError;
@@ -48,6 +49,8 @@ pub struct PciDevices {
     pub pci_segment: Option<PciSegment>,
     /// All VirtIO PCI devices of the system
     pub virtio_devices: HashMap<(VirtioDeviceType, String), Arc<Mutex<VirtioPciDevice>>>,
+    // All Vfio PCI devices
+    pub vfio_devices: HashMap<(VirtioDeviceType, String), Arc<Mutex<VfioPciDevice>>>,
 }
 
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
@@ -158,6 +161,25 @@ impl PciDevices {
             .expect("Poisoned lock")
             .register_notification_ioevent(vm)?;
 
+        Ok(())
+    }
+
+    pub fn attach_vfio_device(
+        &mut self,
+        vm: &Arc<Vm>,
+        id: String,
+        device: Arc<Mutex<VfioPciDevice>>,
+    ) -> Result<(), PciManagerError> {
+        let pci_segment = self.pci_segment.as_ref().unwrap();
+        let pci_device_bdf = pci_segment.next_device_bdf()?;
+        debug!("VFIO: Allocating BDF: {pci_device_bdf:?} for device");
+        let mem = vm.guest_memory().clone();
+
+        pci_segment
+            .pci_bus
+            .lock()
+            .expect("Poisoned lock")
+            .add_device(pci_device_bdf.device() as u32, device.clone());
         Ok(())
     }
 
