@@ -48,21 +48,21 @@ use crate::pci::configuration::PciConfiguration;
 use crate::pci::msix::MsixConfig;
 use crate::pci::{BarReprogrammingParams, DeviceRelocationError, PciDevice};
 
-fn vfio_open() -> File {
+pub fn vfio_open() -> File {
     OpenOptions::new()
         .read(true)
         .write(true)
         .open("/dev/vfio/vfio")
         .unwrap()
 }
-fn vfio_check_api_version(container: &impl AsRawFd) {
+pub fn vfio_check_api_version(container: &impl AsRawFd) {
     let version = crate::vfio::ioctls::ioctls::check_api_version(container);
     println!("vfio api version: {}", version);
     if version as u32 != VFIO_API_VERSION {
         panic!("Vfio api version");
     }
 }
-fn vfio_check_extension(container: &impl AsRawFd, val: u32) {
+pub fn vfio_check_extension(container: &impl AsRawFd, val: u32) {
     if val != VFIO_TYPE1_IOMMU && val != VFIO_TYPE1v2_IOMMU {
         panic!();
     }
@@ -71,14 +71,14 @@ fn vfio_check_extension(container: &impl AsRawFd, val: u32) {
         panic!();
     }
 }
-fn group_id_from_device_path(device_path: &impl AsRef<Path>) -> u32 {
+pub fn group_id_from_device_path(device_path: &impl AsRef<Path>) -> u32 {
     let uuid_path: std::path::PathBuf = device_path.as_ref().join("iommu_group");
     let group_path = uuid_path.read_link().unwrap();
     let group_osstr = group_path.file_name().unwrap();
     let group_str = group_osstr.to_str().unwrap();
     group_str.parse::<u32>().unwrap()
 }
-fn vfio_group_open(id: u32) -> File {
+pub fn vfio_group_open(id: u32) -> File {
     let group_path = Path::new("/dev/vfio").join(id.to_string());
     OpenOptions::new()
         .read(true)
@@ -86,7 +86,7 @@ fn vfio_group_open(id: u32) -> File {
         .open(group_path)
         .unwrap()
 }
-fn vfio_group_check_status(group: &impl AsRawFd) {
+pub fn vfio_group_check_status(group: &impl AsRawFd) {
     let mut group_status = vfio_group_status {
         argsz: std::mem::size_of::<vfio_group_status>() as u32,
         flags: 0,
@@ -96,19 +96,19 @@ fn vfio_group_check_status(group: &impl AsRawFd) {
         panic!();
     }
 }
-fn vfio_container_set_iommu(container: &impl AsRawFd, val: u32) {
+pub fn vfio_container_set_iommu(container: &impl AsRawFd, val: u32) {
     assert!(val == VFIO_TYPE1_IOMMU || val == VFIO_TYPE1v2_IOMMU);
     crate::vfio::ioctls::set_iommu(container, val).unwrap();
 }
 
-fn vfio_group_get_device(group: &impl AsRawFd, path: &impl AsRef<Path>) -> File {
+pub fn vfio_group_get_device(group: &impl AsRawFd, path: &impl AsRef<Path>) -> File {
     let uuid_osstr = path.as_ref().file_name().unwrap();
     let uuid_str = uuid_osstr.to_str().unwrap();
     let path = CString::new(uuid_str.as_bytes()).unwrap();
     let device = crate::vfio::group_get_device_fd(group, &path).unwrap();
     device
 }
-fn vfio_device_get_info(device: &impl AsRawFd) -> vfio_device_info {
+pub fn vfio_device_get_info(device: &impl AsRawFd) -> vfio_device_info {
     let mut dev_info = vfio_device_info {
         argsz: std::mem::size_of::<vfio_device_info>() as u32,
         flags: 0,
@@ -120,12 +120,12 @@ fn vfio_device_get_info(device: &impl AsRawFd) -> vfio_device_info {
     crate::vfio::ioctls::device_get_info(device, &mut dev_info).unwrap();
     dev_info
 }
-fn vfio_device_reset(device: &impl AsRawFd, device_info: &vfio_device_info) {
+pub fn vfio_device_reset(device: &impl AsRawFd, device_info: &vfio_device_info) {
     if device_info.flags & VFIO_DEVICE_FLAGS_RESET != 0 {
         crate::vfio::device_reset(device);
     }
 }
-fn vfio_device_get_region_infos(
+pub fn vfio_device_get_region_infos(
     device: &impl AsRawFd,
     device_info: &vfio_device_info,
 ) -> Vec<vfio_region_info> {
@@ -196,7 +196,7 @@ fn vfio_device_get_region_infos(
     }
     regions
 }
-fn vfio_device_get_irq_infos(
+pub fn vfio_device_get_irq_infos(
     device: &impl AsRawFd,
     device_info: &vfio_device_info,
 ) -> Vec<vfio_irq_info> {
@@ -235,7 +235,7 @@ fn vfio_device_get_irq_infos(
     }
     irqs
 }
-fn vfio_device_region_read(
+pub fn vfio_device_region_read(
     device: &impl FileExt,
     region_infos: &[vfio_region_info],
     index: u32,
@@ -256,7 +256,7 @@ fn vfio_device_region_read(
     }
     println!("Reading from device region {index} at offset: {offset}: {buf:?}");
 }
-fn vfio_device_region_write(
+pub fn vfio_device_region_write(
     device: &impl FileExt,
     region_infos: &[vfio_region_info],
     index: u32,

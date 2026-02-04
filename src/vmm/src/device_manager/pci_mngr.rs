@@ -49,6 +49,8 @@ pub struct PciDevices {
     pub pci_segment: Option<PciSegment>,
     /// All VirtIO PCI devices of the system
     pub virtio_devices: HashMap<(VirtioDeviceType, String), Arc<Mutex<VirtioPciDevice>>>,
+
+    pub vfio_container: Option<std::fs::File>,
     // All Vfio PCI devices
     pub vfio_devices: HashMap<(VirtioDeviceType, String), Arc<Mutex<VfioPciDevice>>>,
 }
@@ -85,6 +87,12 @@ impl PciDevices {
         // only.
         let pci_segment = PciSegment::new(0, vm, &[0u8; 32])?;
         self.pci_segment = Some(pci_segment);
+
+        assert!(self.vfio_container .is_none());
+        let vfio_container = crate::vfio::vfio_open();
+        crate::vfio::vfio_check_api_version(&vfio_container);
+        crate::vfio::vfio_check_extension(&vfio_container, crate::vfio::VFIO_TYPE1v2_IOMMU);
+        self.vfio_container = Some(vfio_container);
 
         Ok(())
     }
@@ -174,6 +182,22 @@ impl PciDevices {
         let pci_device_bdf = pci_segment.next_device_bdf()?;
         debug!("VFIO: Allocating BDF: {pci_device_bdf:?} for device");
         let mem = vm.guest_memory().clone();
+
+        // let container = self.container;
+        // let device = open_vfio_device();
+        // attack_device_to_container(container, device);
+        // mmap_device_regions() {
+        //     for region {
+        //        let ptr = mmap(..)
+        //        kvm_set_region(ptr)
+        //      }
+        // }
+        // // no need to add it to the bus because we don't need to emulate BAR
+        // // accesses
+        //
+        // // add to the segment since we will need to configure MSIs
+        // pci_segment.add_device(device);
+        // let msix_vectors = Vm::create_msix_group(vm.clone(), msix_num)?;
 
         pci_segment
             .pci_bus
