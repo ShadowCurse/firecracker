@@ -212,6 +212,22 @@ fn vfio_device_get_irq_infos(
         match crate::vfio::device_get_irq_info(device, &mut irq_info) {
             Ok(()) => {
                 println!("Irq info: {:?}", irq_info);
+                println!(
+                    "VFIO_IRQ_INFO_EVENTFD: {}",
+                    irq_info.flags & VFIO_IRQ_INFO_EVENTFD != 0
+                );
+                println!(
+                    "VFIO_IRQ_INFO_MASKABLE  :{}",
+                    irq_info.flags & VFIO_IRQ_INFO_MASKABLE != 0
+                );
+                println!(
+                    "VFIO_IRQ_INFO_AUTOMASKED  :{}",
+                    irq_info.flags & VFIO_IRQ_INFO_AUTOMASKED != 0
+                );
+                println!(
+                    "VFIO_IRQ_INFO_NORESIZE  :{}",
+                    irq_info.flags & VFIO_IRQ_INFO_NORESIZE != 0
+                );
                 irqs.push(irq_info);
             }
             Err(e) => println!("Irq info: got error: {:?}", e),
@@ -338,6 +354,12 @@ pub fn do_vfio_magic() {
     }
 
     let device_irq_infos = vfio_device_get_irq_infos(&device_file, &device_info);
+    if VFIO_PCI_INTX_IRQ_INDEX < device_irq_infos.len() as u32 {
+        println!(
+            "INTX IRQ info: {:?}",
+            device_irq_infos[VFIO_PCI_INTX_IRQ_INDEX as usize]
+        );
+    }
     if VFIO_PCI_MSI_IRQ_INDEX < device_irq_infos.len() as u32 {
         println!(
             "MSI IRQ info: {:?}",
@@ -348,12 +370,6 @@ pub fn do_vfio_magic() {
         println!(
             "MSIX IRQ info: {:?}",
             device_irq_infos[VFIO_PCI_MSIX_IRQ_INDEX as usize]
-        );
-    }
-    if VFIO_PCI_INTX_IRQ_INDEX < device_irq_infos.len() as u32 {
-        println!(
-            "INTX IRQ info: {:?}",
-            device_irq_infos[VFIO_PCI_INTX_IRQ_INDEX as usize]
         );
     }
 
