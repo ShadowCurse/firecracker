@@ -523,12 +523,13 @@ pub fn device_get_bar_infos(
     resource_allocator: &mut ResourceAllocator,
 ) -> Vec<BarInfo> {
     let mut bar_infos = Vec::new();
-    for idx in VFIO_PCI_BAR0_REGION_INDEX..VFIO_PCI_CONFIG_REGION_INDEX {
-        println!("Gettig BAR{idx} info");
-        let bar_offset = if idx == VFIO_PCI_ROM_REGION_INDEX {
+    let mut bar_idx = VFIO_PCI_BAR0_REGION_INDEX;
+    while bar_idx < VFIO_PCI_CONFIG_REGION_INDEX {
+        println!("Gettig BAR{bar_idx} info");
+        let bar_offset = if bar_idx == VFIO_PCI_ROM_REGION_INDEX {
             (PCI_ROM_EXP_BAR_INDEX * 4) as u32
         } else {
-            PCI_CONFIG_BAR_OFFSET + idx * 4
+            PCI_CONFIG_BAR_OFFSET + bar_idx * 4
         };
 
         let mut bar_info: u32 = 0;
@@ -542,12 +543,12 @@ pub fn device_get_bar_infos(
 
         // // Is this an IO BAR?
         let mut is_io_bar = bar_info & PCI_CONFIG_IO_BAR != 0;
-        if idx == VFIO_PCI_ROM_REGION_INDEX {
+        if bar_idx == VFIO_PCI_ROM_REGION_INDEX {
             is_io_bar = false;
         }
 
         let mut is_64_bits = bar_info & PCI_CONFIG_MEMORY_BAR_64BIT != 0;
-        if idx == VFIO_PCI_ROM_REGION_INDEX {
+        if bar_idx == VFIO_PCI_ROM_REGION_INDEX {
             is_64_bits = false;
         }
         let is_prefetchable = bar_info & PCI_CONFIG_BAR_PREFETCHABLE != 0;
@@ -567,11 +568,12 @@ pub fn device_get_bar_infos(
             bar_offset as u64,
             lower_size.as_mut_bytes(),
         );
-        println!("BAR: {idx} lower_size: {lower_size:#x}");
+        println!("BAR: {bar_idx} lower_size: {lower_size:#x}");
 
         let mut size = 0;
         if is_io_bar {
-            // lower_size &= !0b11;
+            size = u64::from(lower_size);
+            lower_size &= !0b11;
         } else if is_64_bits {
             vfio_device_region_write(
                 device,
@@ -588,24 +590,31 @@ pub fn device_get_bar_infos(
                 (bar_offset as u64) + 4,
                 upper_size.as_mut_bytes(),
             );
-            println!("BAR: {idx} upper_size: {upper_size:#x}");
+            println!("BAR: {bar_idx} upper_size: {upper_size:#x}");
 
             size = u64::from(upper_size) << 32 | u64::from(lower_size);
+            size &= !0b1111;
         } else {
             size = u64::from(lower_size);
+            size &= !0b1111;
         }
-        size &= !0b1111;
         size = !size + 1;
         println!("BAR size: {size:#x}");
         if size != 0 {
+            let idx = bar_idx;
             let mut gpa = 0;
-            if is_64_bits {
+            if is_io_bar {
+                println!("Skipping IO bar with size: {size:#x}");
+                bar_idx += 1;
+                continue;
+            } else if is_64_bits {
                 // allocate 32bit guest address
                 gpa = resource_allocator
                     .mmio32_memory
                     .allocate(size, 64, AllocPolicy::FirstMatch)
                     .unwrap()
                     .start();
+                bar_idx += 2;
             } else {
                 // allocate 64bit guest address
                 gpa = resource_allocator
@@ -613,6 +622,7 @@ pub fn device_get_bar_infos(
                     .allocate(size, 64, AllocPolicy::FirstMatch)
                     .unwrap()
                     .start();
+                bar_idx += 1;
             }
             println!(
                 "Placing device BAR into guest with guest addr: {gpa:#x} size: {size:#x} 64bits: \
