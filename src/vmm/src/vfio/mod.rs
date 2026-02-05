@@ -466,14 +466,14 @@ pub fn vfio_device_region_read(
     let buf_size = buf.len() as u64;
     if offset + buf_size <= region_info.size {
         if let Err(e) = device.read_exact_at(buf, region_info.offset + offset) {
-            println!(
+            panic!(
                 "Failed to read from region at index: {index}, offset: {offset:#x}, region size: \
                  {:#x} error: {e}",
                 region_info.size
             );
         }
     } else {
-        println!(
+        panic!(
             "Failed to read from region at index: {index}, offset: {offset:#x}, region size: \
              {:#x} error: read beyond region memory",
             region_info.size
@@ -493,14 +493,14 @@ pub fn vfio_device_region_write(
     let buf_size = buf.len() as u64;
     if offset + buf_size <= region_info.size {
         if let Err(e) = device.write_all_at(buf, region_info.offset + offset) {
-            println!(
+            panic!(
                 "Failed to write to region at index: {index}, offset: {offset:#x}, region size: \
                  {:#x} error: {e}",
                 region_info.size
             );
         }
     } else {
-        println!(
+        panic!(
             "Failed to write to region at index: {index}, offset: {offset:#x}, region size: {:#x} \
              error: write beyond region memory",
             region_info.size
@@ -524,6 +524,7 @@ pub fn device_get_bar_infos(
 ) -> Vec<BarInfo> {
     let mut bar_infos = Vec::new();
     for idx in VFIO_PCI_BAR0_REGION_INDEX..VFIO_PCI_CONFIG_REGION_INDEX {
+        println!("Gettig BAR{idx} info");
         let bar_offset = if idx == VFIO_PCI_ROM_REGION_INDEX {
             (PCI_ROM_EXP_BAR_INDEX * 4) as u32
         } else {
@@ -638,7 +639,9 @@ pub fn get_group_and_device_with_info(group: &impl AsRawFd, path: &str) -> VfioP
     vfio_device_reset(&device_file, &device_info);
 
     let device_region_infos = vfio_device_get_region_infos(&device_file, &device_info);
-    let mut pci_cap_offset = 0;
+
+    println!("Getting PCI caps");
+    let mut pci_cap_offset: u8 = 0;
     vfio_device_region_read(
         &device_file,
         &device_region_infos,
@@ -996,13 +999,16 @@ pub fn do_vfio_magic(path: &str) {
     // only set after getting the first group
     vfio_container_set_iommu(&container, VFIO_TYPE1v2_IOMMU);
 
+    println!("Getting device with info");
     let device = crate::vfio::get_group_and_device_with_info(&group, path);
     let mut resource_allocator = ResourceAllocator::new();
+    println!("Getting BAR infos");
     let bar_infos = crate::vfio::device_get_bar_infos(
         &device.device_file,
         &device.device_region_infos,
         &mut resource_allocator,
     );
+    println!("Getting PCI caps");
     vfio_device_get_pci_capabilities(
         &device.device_file,
         &device.device_region_infos,
