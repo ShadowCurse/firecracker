@@ -37,6 +37,7 @@ pub use bindings::*;
 pub use ioctls::*;
 use kvm_bindings::{
     KVM_DEV_VFIO_FILE, kvm_create_device, kvm_device_attr, kvm_device_type_KVM_DEV_TYPE_VFIO,
+    kvm_userspace_memory_region,
 };
 use kvm_ioctls::{DeviceFd, VmFd};
 use pci::{PciBdf, PciCapabilityId, PciClassCode, PciSubclass};
@@ -129,7 +130,7 @@ pub fn vfio_device_reset(device: &impl AsRawFd, device_info: &vfio_device_info) 
 }
 
 /// Represent one area of the sparse mmap
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct VfioRegionSparseMmapArea {
     /// Offset of mmap'able area within region
     pub offset: u64,
@@ -233,7 +234,6 @@ pub fn vfio_device_get_region_infos(
             || region_info.argsz <= region_info_struct_size
         {
             println!("Region has no caps");
-            continue;
         } else {
             println!("Region caps:");
             let mut region_info_with_cap_bytes =
@@ -370,7 +370,11 @@ pub fn vfio_device_get_irq_infos(
     irqs
 }
 
-pub fn vfio_device_get_pci_capabilities(device: &impl FileExt, region_infos: &[VfioRegionInfo]) {
+pub fn vfio_device_get_pci_capabilities(
+    device: &impl FileExt,
+    region_infos: &[VfioRegionInfo],
+    irq_infos: &[vfio_irq_info],
+) {
     let mut cap_offset: u32 = 0;
     vfio_device_region_read(
         device,
@@ -383,7 +387,8 @@ pub fn vfio_device_get_pci_capabilities(device: &impl FileExt, region_infos: &[V
     // let mut pci_express_cap_found = false;
     // let mut power_management_cap_found = false;
 
-    let mut caps = Vec::new();
+    println!("PCI CAPS offset: {}", cap_offset);
+    // let mut caps = Vec::new();
     while cap_offset != 0 {
         let mut cap_id: u8 = 0;
         vfio_device_region_read(
@@ -396,6 +401,12 @@ pub fn vfio_device_get_pci_capabilities(device: &impl FileExt, region_infos: &[V
 
         match PciCapabilityId::from(cap_id) {
             PciCapabilityId::MessageSignalledInterrupts => {
+                if (VFIO_PCI_MSI_IRQ_INDEX as usize) < irq_infos.len() {
+                    let irq_info = irq_infos[VFIO_PCI_MSI_IRQ_INDEX as usize];
+                    if 0 < irq_info.count {
+                        println!("Found MSI cap");
+                    }
+                }
                 // if let Some(irq_info) = self.vfio_wrapper.get_irq_info(VFIO_PCI_MSI_IRQ_INDEX) {
                 //     if irq_info.count > 0 {
                 //         // Parse capability only if the VFIO device
@@ -406,6 +417,12 @@ pub fn vfio_device_get_pci_capabilities(device: &impl FileExt, region_infos: &[V
                 // }
             }
             PciCapabilityId::MsiX => {
+                if (VFIO_PCI_MSIX_IRQ_INDEX as usize) < irq_infos.len() {
+                    let irq_info = irq_infos[VFIO_PCI_MSIX_IRQ_INDEX as usize];
+                    if 0 < irq_info.count {
+                        println!("Found MSIX cap");
+                    }
+                }
                 // if let Some(irq_info) = self.vfio_wrapper.get_irq_info(VFIO_PCI_MSIX_IRQ_INDEX) {
                 //     if irq_info.count > 0 {
                 //         // Parse capability only if the VFIO device
@@ -427,12 +444,6 @@ pub fn vfio_device_get_pci_capabilities(device: &impl FileExt, region_infos: &[V
             (cap_offset as u64) + 1,
             cap_offset.as_mut_bytes(),
         );
-        // let cap_next = self.vfio_wrapper.read_config_byte((cap_iter + 1).into());
-        // // if cap_next == 0 {
-        // //     break;
-        // // }
-        //
-        // cap_iter = cap_next;
     }
 
     // if let Some(clique_id) = self.x_nv_gpudirect_clique {
@@ -688,15 +699,191 @@ pub struct VfioPciDevice {
     // pub bar_address: u64,
 }
 
-// pub fn mmap_bars(bar_infos: &[BarInfo], region_infos: &[vfio_region_info]) {
-//     for bar_info in bar_infos.iter() {
-//         let region_info = region_infos[bar_info.idx as usize];
-//         if region_info.flags & VFIO_REGION_INFO_FLAG_CAPS != 0 {
-//             let
-//
-//         }
-//     }
-// }
+pub fn mmap_bars(
+    container: &File,
+    device: &File,
+    bar_infos: &[BarInfo],
+    region_infos: &[VfioRegionInfo],
+    vm: &VmFd,
+) {
+    for bar_info in bar_infos.iter() {
+        let region_info = &region_infos[bar_info.idx as usize];
+        if region_info.flags & VFIO_REGION_INFO_FLAG_CAPS != 0 {
+            let mut has_msix_mappable = false;
+            let mut sparce_mmap_cap = None;
+            for cap in region_info.caps.iter() {
+                match cap {
+                    VfioRegionCap::SparseMmap(cap) => sparce_mmap_cap = Some(cap),
+                    VfioRegionCap::MsixMappable => has_msix_mappable = true,
+                    _ => {}
+                }
+            }
+            let contain_msix_table = region_info.index == 0;
+            let contain_msix_pba = region_info.index == 0;
+            if (contain_msix_table || contain_msix_pba)
+                && !has_msix_mappable
+                && sparce_mmap_cap.is_none()
+            {
+                // continue;
+            } else {
+                let can_mmap = region_info.flags & VFIO_REGION_INFO_FLAG_MMAP != 0;
+                if can_mmap || sparce_mmap_cap.is_some() {
+                    let mut prot = 0;
+                    if region_info.flags & VFIO_REGION_INFO_FLAG_READ != 0 {
+                        prot |= libc::PROT_READ;
+                    }
+                    if region_info.flags & VFIO_REGION_INFO_FLAG_WRITE != 0 {
+                        prot |= libc::PROT_WRITE;
+                    }
+                    let region_size = region_info.size;
+
+                    let mut tmp_areas = [VfioRegionSparseMmapArea::default(); 3];
+                    let mut tmp_areas_count = 0;
+
+                    let areas: &[VfioRegionSparseMmapArea] = if let Some(cap) = sparce_mmap_cap {
+                        &cap.areas
+                    } else if has_msix_mappable {
+                        let msix_table_offset = 0;
+                        let msix_table_size = 0;
+                        if contain_msix_table {
+                            // align this down to page boundary
+                            let msix_table_offset = 0;
+                            // align this up to page boundary
+                            let msix_table_size = 4096;
+                        }
+                        let msix_pba_offset = 0;
+                        let msix_pba_size = 0;
+                        if contain_msix_pba {
+                            let msix_pba_offset = 4096;
+                            let msix_pba_size = 4096;
+                        }
+                        let mut first_gap_offset = msix_table_offset;
+                        let mut first_gap_size = msix_table_size;
+                        let mut second_gap_offset = msix_pba_offset;
+                        let mut second_gap_size = msix_pba_size;
+                        if second_gap_offset < first_gap_offset {
+                            second_gap_offset = msix_table_offset;
+                            second_gap_size = msix_table_size;
+                            first_gap_offset = msix_pba_offset;
+                            first_gap_size = msix_pba_size;
+                        }
+                        let mut offset = 0;
+                        if first_gap_size != 0 {
+                            let area_size = first_gap_offset - offset;
+                            if area_size != 0 {
+                                tmp_areas[tmp_areas_count].offset = offset;
+                                tmp_areas[tmp_areas_count].size = area_size;
+                                tmp_areas_count += 1;
+                            }
+                            offset = first_gap_offset + first_gap_size;
+                        }
+                        if second_gap_size != 0 {
+                            let area_size = second_gap_offset - offset;
+                            if area_size != 0 {
+                                tmp_areas[tmp_areas_count].offset = offset;
+                                tmp_areas[tmp_areas_count].size = area_size;
+                                tmp_areas_count += 1;
+                            }
+                            offset = second_gap_offset + second_gap_size;
+                        }
+                        let area_size = region_size - offset;
+                        if area_size != 0 {
+                            tmp_areas[tmp_areas_count].offset = offset;
+                            tmp_areas[tmp_areas_count].size = area_size;
+                            tmp_areas_count += 1;
+                        }
+                        &tmp_areas[0..tmp_areas_count]
+                    } else {
+                        &[VfioRegionSparseMmapArea {
+                            offset: 0,
+                            size: region_size,
+                        }]
+                    };
+
+                    for area in areas.iter() {
+                        let region_offset = region_info.offset;
+                        // SAFETY: FFI call with correct arguments
+                        let host_addr = unsafe {
+                            libc::mmap(
+                                std::ptr::null_mut(),
+                                area.size as usize,
+                                prot,
+                                libc::MAP_SHARED,
+                                device.as_raw_fd(),
+                                (region_offset + area.offset) as i64,
+                            )
+                        };
+
+                        if host_addr == libc::MAP_FAILED {
+                            panic!("mmap failed");
+                            // error!(
+                            //     "Could not mmap sparse area (offset = 0x{:x}, size = 0x{:x}):
+                            // {}",     area.offset,
+                            //     area.size,
+                            //     std::io::Error::last_os_error()
+                            // );
+                            // return Err(VfioPciError::MmapArea);
+                        }
+
+                        // if !is_page_size_aligned(area.size) || !is_page_size_aligned(area.offset)
+                        // {     warn!(
+                        //         "Could not mmap sparse area that is not page size aligned (offset
+                        // \          = 0x{:x}, size = 0x{:x})",
+                        //         area.offset, area.size,
+                        //     );
+                        //     return Ok(());
+                        // }
+
+                        // let user_memory_region = UserMemoryRegion {
+                        //     slot: (self.memory_slot)(),
+                        //     start: region.start.0 + area.offset,
+                        //     size: area.size,
+                        //     host_addr: host_addr as u64,
+                        // };
+                        //
+                        // region.user_memory_regions.push(user_memory_region);
+                        //
+                        // let mem_region = VfioCommon::make_user_memory_region(
+                        //     user_memory_region.slot,
+                        //     user_memory_region.start,
+                        //     user_memory_region.size,
+                        //     user_memory_region.host_addr,
+                        //     false,
+                        //     false,
+                        // );
+
+                        let iova = bar_info.gpa + area.offset;
+                        let size = area.size;
+                        let host_addr = host_addr as u64;
+
+                        let kvm_memory_region = kvm_userspace_memory_region {
+                            slot: 1,
+                            flags: 1,
+                            guest_phys_addr: iova,
+                            memory_size: size,
+                            userspace_addr: host_addr,
+                        };
+                        unsafe {
+                            vm.set_user_memory_region(kvm_memory_region).unwrap();
+                        }
+
+                        // TODO: if virtual_iommu is attached this is not needed
+                        if true {
+                            let dma_map = vfio_iommu_type1_dma_map {
+                                argsz: std::mem::size_of::<vfio_iommu_type1_dma_map>() as u32,
+                                flags: VFIO_DMA_MAP_FLAG_READ | VFIO_DMA_MAP_FLAG_WRITE,
+                                vaddr: host_addr,
+                                iova: iova,
+                                size: size,
+                            };
+                            iommu_map_dma(container, &dma_map).unwrap();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 
 // #[derive(Debug)]
 // pub struct VfioPciDevice {
@@ -805,6 +992,11 @@ pub fn do_vfio_magic() {
         &device.device_file,
         &device.device_region_infos,
         &mut resource_allocator,
+    );
+    vfio_device_get_pci_capabilities(
+        &device.device_file,
+        &device.device_region_infos,
+        &device.device_irq_infos,
     );
 
     // KVM part
