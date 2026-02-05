@@ -571,7 +571,7 @@ pub fn device_get_bar_infos(
 
         let mut size = 0;
         if is_io_bar {
-            // just skip it for now
+            // lower_size &= !0b11;
         } else if is_64_bits {
             vfio_device_region_write(
                 device,
@@ -595,6 +595,8 @@ pub fn device_get_bar_infos(
             size = u64::from(lower_size);
         }
         size &= !0b1111;
+        size = !size + 1;
+        println!("BAR size: {size:#x}");
         if size != 0 {
             let mut gpa = 0;
             if is_64_bits {
