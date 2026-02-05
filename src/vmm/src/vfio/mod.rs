@@ -447,6 +447,7 @@ pub fn vfio_device_get_pci_capabilities(
     // }
     //
     if has_pci_express_cap && has_power_management_cap {
+        println!("Parsing extended caps");
         let mut next_cap_offset: u16 = PCI_CONFIG_EXTENDED_CAPABILITY_OFFSET as u16;
         while next_cap_offset != 0 {
             let mut cap_id_and_next_ptr: u32 = 0;
@@ -457,8 +458,8 @@ pub fn vfio_device_get_pci_capabilities(
                 PCI_CONFIG_EXTENDED_CAPABILITY_OFFSET as u64,
                 cap_id_and_next_ptr.as_mut_bytes(),
             );
-            let cap_id: u16 = (cap_id_and_next_ptr & 0xffff) as u16;
-            next_cap_offset = ((cap_id_and_next_ptr & 0xffff0000) >> 16) as u16;
+            let cap_id: u16 = (cap_id_and_next_ptr  & 0xffff) as u16;
+            next_cap_offset = ((cap_id_and_next_ptr  >> 20) & 0xfff) as u16;
 
             let pci_cap = PciExpressCapabilityId::from(cap_id);
             println!("Found extended cap: {pci_cap:#?}");
