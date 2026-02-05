@@ -524,7 +524,7 @@ pub fn device_get_bar_infos(
 ) -> Vec<BarInfo> {
     let mut bar_infos = Vec::new();
     let mut bar_idx = VFIO_PCI_BAR0_REGION_INDEX;
-    while bar_idx < VFIO_PCI_CONFIG_REGION_INDEX {
+    while bar_idx <= VFIO_PCI_BAR5_REGION_INDEX {
         println!("Gettig BAR{bar_idx} info");
         let bar_offset = if bar_idx == VFIO_PCI_ROM_REGION_INDEX {
             (PCI_ROM_EXP_BAR_INDEX * 4) as u32
