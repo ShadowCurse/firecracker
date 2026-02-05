@@ -40,7 +40,7 @@ use kvm_bindings::{
     kvm_userspace_memory_region,
 };
 use kvm_ioctls::{DeviceFd, VmFd};
-use pci::{PciBdf, PciCapabilityId, PciClassCode, PciSubclass};
+use pci::{PciBdf, PciCapabilityId, PciClassCode, PciExpressCapabilityId, PciSubclass};
 use vm_allocator::AllocPolicy;
 use zerocopy::IntoBytes;
 
@@ -375,29 +375,33 @@ pub fn vfio_device_get_pci_capabilities(
     region_infos: &[VfioRegionInfo],
     irq_infos: &[vfio_irq_info],
 ) {
-    let mut cap_offset: u32 = 0;
+    let mut next_cap_offset: u8 = 0;
     vfio_device_region_read(
         device,
         region_infos,
         VFIO_PCI_CONFIG_REGION_INDEX,
         PCI_CONFIG_CAPABILITY_OFFSET as u64,
-        cap_offset.as_mut_bytes(),
+        next_cap_offset.as_mut_bytes(),
     );
 
-    // let mut pci_express_cap_found = false;
-    // let mut power_management_cap_found = false;
+    let mut has_pci_express_cap = false;
+    let mut has_power_management_cap = false;
 
-    println!("PCI CAPS offset: {}", cap_offset);
+    println!("PCI CAPS offset: {}", next_cap_offset);
     // let mut caps = Vec::new();
-    while cap_offset != 0 {
-        let mut cap_id: u8 = 0;
+    while next_cap_offset != 0 {
+        let mut cap_id_and_next_ptr: u16 = 0;
         vfio_device_region_read(
             device,
             region_infos,
             VFIO_PCI_CONFIG_REGION_INDEX,
-            cap_offset as u64,
-            cap_id.as_mut_bytes(),
+            next_cap_offset as u64,
+            cap_id_and_next_ptr.as_mut_bytes(),
         );
+
+        let cap_id: u8 = (cap_id_and_next_ptr & 0xff) as u8;
+        next_cap_offset = ((cap_id_and_next_ptr & 0xff00) >> 8) as u8;
+        println!("PCI CAP id: {cap_id} next offset: {next_cap_offset:#x}");
 
         match PciCapabilityId::from(cap_id) {
             PciCapabilityId::MessageSignalledInterrupts => {
@@ -432,27 +436,40 @@ pub fn vfio_device_get_pci_capabilities(
                 //     }
                 // }
             }
-            // PciCapabilityId::PciExpress => pci_express_cap_found = true,
-            // PciCapabilityId::PowerManagement => power_management_cap_found = true,
+            PciCapabilityId::PciExpress => has_pci_express_cap = true,
+            PciCapabilityId::PowerManagement => has_power_management_cap = true,
             _ => {}
         };
-
-        vfio_device_region_read(
-            device,
-            region_infos,
-            VFIO_PCI_CONFIG_REGION_INDEX,
-            (cap_offset as u64) + 1,
-            cap_offset.as_mut_bytes(),
-        );
     }
 
     // if let Some(clique_id) = self.x_nv_gpudirect_clique {
     //     self.add_nv_gpudirect_clique_cap(cap_iter, clique_id);
     // }
     //
-    // if pci_express_cap_found && power_management_cap_found {
-    //     self.parse_extended_capabilities();
-    // }
+    if has_pci_express_cap && has_power_management_cap {
+        let mut next_cap_offset: u16 = PCI_CONFIG_EXTENDED_CAPABILITY_OFFSET as u16;
+        while next_cap_offset != 0 {
+            let mut cap_id_and_next_ptr: u32 = 0;
+            vfio_device_region_read(
+                device,
+                region_infos,
+                VFIO_PCI_CONFIG_REGION_INDEX,
+                PCI_CONFIG_EXTENDED_CAPABILITY_OFFSET as u64,
+                cap_id_and_next_ptr.as_mut_bytes(),
+            );
+            let cap_id: u16 = (cap_id_and_next_ptr & 0xffff) as u16;
+            next_cap_offset = ((cap_id_and_next_ptr & 0xffff0000) >> 16) as u16;
+
+            let pci_cap = PciExpressCapabilityId::from(cap_id);
+            println!("Found extended cap: {pci_cap:#?}");
+            if pci_cap == PciExpressCapabilityId::AlternativeRoutingIdentificationInterpretation
+                || pci_cap == PciExpressCapabilityId::ResizeableBar
+                || pci_cap == PciExpressCapabilityId::SingleRootIoVirtualization
+            {
+                println!("This cap will need to be masked");
+            }
+        }
+    }
 }
 
 pub fn vfio_device_region_read(
