@@ -968,16 +968,16 @@ impl PciDevice for VfioPciDevice {
 //     device.set_device_attr(&dev_attr).unwrap();
 // }
 // pub fn do_vfio_magic(vm_fd: &VmFd, paths: &Vec<String>) {
-pub fn do_vfio_magic() {
+pub fn do_vfio_magic(path: &str) {
     // vfio part
     let container = vfio_open();
     vfio_check_api_version(&container);
     vfio_check_extension(&container, VFIO_TYPE1v2_IOMMU);
 
     // open device and vfio group
-    let path = "/sys/bus/mdev/devices/c9abdcb5-5279-413a-9057-c81d2605ce9c/".to_string();
+    // let path = "/sys/bus/mdev/devices/c9abdcb5-5279-413a-9057-c81d2605ce9c/".to_string();
     println!("Openning device at path: {}", path);
-    let group_id = group_id_from_device_path(&path);
+    let group_id = group_id_from_device_path(&(path.to_string()));
     println!("Group id: {}", group_id);
     let group = vfio_group_open(group_id);
     vfio_group_check_status(&group);
@@ -986,7 +986,7 @@ pub fn do_vfio_magic() {
     // only set after getting the first group
     vfio_container_set_iommu(&container, VFIO_TYPE1v2_IOMMU);
 
-    let device = crate::vfio::get_group_and_device_with_info(&group, &path);
+    let device = crate::vfio::get_group_and_device_with_info(&group, path);
     let mut resource_allocator = ResourceAllocator::new();
     let bar_infos = crate::vfio::device_get_bar_infos(
         &device.device_file,
