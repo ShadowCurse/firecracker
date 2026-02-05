@@ -573,7 +573,7 @@ pub fn device_get_bar_infos(
         let mut size = 0;
         if is_io_bar {
             size = u64::from(lower_size);
-            lower_size &= !0b11;
+            size &= !0b11;
         } else if is_64_bits {
             vfio_device_region_write(
                 device,
@@ -598,13 +598,15 @@ pub fn device_get_bar_infos(
             size = u64::from(lower_size);
             size &= !0b1111;
         }
-        size = !size + 1;
-        println!("BAR size: {size:#x}");
         if size != 0 {
+            size = !size + 1;
+            println!("BAR size: {size:#x}");
+
             let idx = bar_idx;
             let mut gpa = 0;
             if is_io_bar {
                 println!("Skipping IO bar with size: {size:#x}");
+                // TODO
                 bar_idx += 1;
                 continue;
             } else if is_64_bits {
@@ -614,7 +616,7 @@ pub fn device_get_bar_infos(
                     .allocate(size, 64, AllocPolicy::FirstMatch)
                     .unwrap()
                     .start();
-                bar_idx += 2;
+                bar_idx += 1;
             } else {
                 // allocate 64bit guest address
                 gpa = resource_allocator
@@ -622,7 +624,6 @@ pub fn device_get_bar_infos(
                     .allocate(size, 64, AllocPolicy::FirstMatch)
                     .unwrap()
                     .start();
-                bar_idx += 1;
             }
             println!(
                 "Placing device BAR into guest with guest addr: {gpa:#x} size: {size:#x} 64bits: \
@@ -641,6 +642,7 @@ pub fn device_get_bar_infos(
                  {is_prefetchable}",
             );
         }
+        bar_idx += 1;
     }
     bar_infos
 }
