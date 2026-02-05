@@ -466,12 +466,17 @@ pub fn vfio_device_region_read(
     let buf_size = buf.len() as u64;
     if offset + buf_size <= region_info.size {
         if let Err(e) = device.read_exact_at(buf, region_info.offset + offset) {
-            println!("Failed to read from region at index: {index}, offset: {offset}, error: {e}");
+            println!(
+                "Failed to read from region at index: {index}, offset: {offset:#x}, region size: \
+                 {:#x} error: {e}",
+                region_info.size
+            );
         }
     } else {
         println!(
-            "Failed to read from region at index: {index}, offset: {offset}, error: read beyond \
-             region memory"
+            "Failed to read from region at index: {index}, offset: {offset:#x}, region size: \
+             {:#x} error: read beyond region memory",
+            region_info.size
         );
     }
     println!("Reading from device region {index} at offset: {offset}: {buf:?}");
@@ -488,12 +493,17 @@ pub fn vfio_device_region_write(
     let buf_size = buf.len() as u64;
     if offset + buf_size <= region_info.size {
         if let Err(e) = device.write_all_at(buf, region_info.offset + offset) {
-            println!("Failed to write to region at index: {index}, offset: {offset}, error: {e}");
+            println!(
+                "Failed to write to region at index: {index}, offset: {offset:#x}, region size: \
+                 {:#x} error: {e}",
+                region_info.size
+            );
         }
     } else {
         println!(
-            "Failed to write to region at index: {index}, offset: {offset}, error: read beyond \
-             region memory"
+            "Failed to write to region at index: {index}, offset: {offset:#x}, region size: {:#x} \
+             error: write beyond region memory",
+            region_info.size
         );
     }
     println!("Writing into device region {index} at offset: {offset}: {buf:?}");
