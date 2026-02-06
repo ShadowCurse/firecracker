@@ -210,7 +210,10 @@ pub fn vfio_device_get_region_infos(
             size: 0,
             offset: 0,
         };
-        crate::vfio::device_get_region_info(device, &mut region_info).unwrap();
+        if crate::vfio::device_get_region_info(device, &mut region_info).is_err() {
+            println!("Canno get regino {i} info. Skipping");
+            continue;
+        }
         println!("Region info: {:?}", region_info);
         println!("Flags: ");
         println!(
@@ -236,8 +239,7 @@ pub fn vfio_device_get_region_infos(
             println!("Region has no caps");
         } else {
             println!("Region caps:");
-            let mut region_info_with_cap_bytes =
-                Vec::<u8>::with_capacity(region_info.argsz as usize);
+            let mut region_info_with_cap_bytes = vec![0_u8; region_info.argsz as usize];
             let region_info_with_caps =
                 unsafe { &mut *(region_info_with_cap_bytes.as_mut_ptr() as *mut vfio_region_info) };
             region_info_with_caps.argsz = region_info.argsz;
@@ -247,76 +249,76 @@ pub fn vfio_device_get_region_infos(
             region_info_with_caps.size = 0;
             region_info_with_caps.offset = 0;
             crate::vfio::device_get_region_info(device, region_info_with_caps).unwrap();
-            if region_info_struct_size <= region_info_with_caps.cap_offset {
-                let mut next_cap_offset = region_info_with_caps.cap_offset;
-                while region_info_struct_size < next_cap_offset {
-                    let cap_header = unsafe {
-                        &*(region_info_with_cap_bytes[next_cap_offset as usize..].as_ptr()
-                            as *const vfio_info_cap_header)
-                    };
-                    println!("Cap id: {}", cap_header.id);
-                    match u32::from(cap_header.id) {
-                        VFIO_REGION_INFO_CAP_SPARSE_MMAP => {
-                            let cap_sparse_mmap = unsafe {
-                                &*(cap_header as *const vfio_info_cap_header
-                                    as *const vfio_region_info_cap_sparse_mmap)
-                            };
-                            let areas = cap_sparse_mmap
-                                .areas
-                                .as_slice(cap_sparse_mmap.nr_areas as usize);
-                            let areas = areas
-                                .iter()
-                                .map(|a| VfioRegionSparseMmapArea {
-                                    offset: a.offset,
-                                    size: a.size,
-                                })
-                                .collect();
-                            let cap = VfioRegionCapSparseMmap { areas };
-                            caps.push(VfioRegionCap::SparseMmap(cap));
-                        }
-                        VFIO_REGION_INFO_CAP_TYPE => {
-                            // SAFETY: data structure returned by kernel is trusted.
-                            let cap_type = unsafe {
-                                &*(cap_header as *const vfio_info_cap_header
-                                    as *const vfio_region_info_cap_type)
-                            };
-                            let cap = VfioRegionCapType {
-                                type_: cap_type.type_,
-                                subtype: cap_type.subtype,
-                            };
-                            caps.push(VfioRegionCap::Type(cap));
-                        }
-                        VFIO_REGION_INFO_CAP_MSIX_MAPPABLE => {
-                            caps.push(VfioRegionCap::MsixMappable);
-                        }
-                        VFIO_REGION_INFO_CAP_NVLINK2_SSATGT => {
-                            // SAFETY: data structure returned by kernel is trusted.
-                            let cap_nvlink2_ssatgt = unsafe {
-                                &*(cap_header as *const vfio_info_cap_header
-                                    as *const vfio_region_info_cap_nvlink2_ssatgt)
-                            };
-                            let cap = VfioRegionCapNvlink2Ssatgt {
-                                tgt: cap_nvlink2_ssatgt.tgt,
-                            };
-                            caps.push(VfioRegionCap::Nvlink2Ssatgt(cap));
-                        }
-                        VFIO_REGION_INFO_CAP_NVLINK2_LNKSPD => {
-                            // SAFETY: data structure returned by kernel is trusted.
-                            let cap_nvlink2_lnkspd = unsafe {
-                                &*(cap_header as *const vfio_info_cap_header
-                                    as *const vfio_region_info_cap_nvlink2_lnkspd)
-                            };
-                            let cap = VfioRegionCapNvlink2Lnkspd {
-                                link_speed: cap_nvlink2_lnkspd.link_speed,
-                            };
-                            caps.push(VfioRegionCap::Nvlink2Lnkspd(cap));
-                        }
-                        _ => {
-                            println!("Got unknown region capability id: {}", cap_header.id);
-                        }
+            println!("Region info with caps: {:?}", region_info_with_caps);
+
+            let mut next_cap_offset = region_info_with_caps.cap_offset;
+            while region_info_struct_size <= next_cap_offset {
+                let cap_header = unsafe {
+                    &*(region_info_with_cap_bytes[next_cap_offset as usize..].as_ptr()
+                        as *const vfio_info_cap_header)
+                };
+                println!("Cap id: {}", cap_header.id);
+                match u32::from(cap_header.id) {
+                    VFIO_REGION_INFO_CAP_SPARSE_MMAP => {
+                        let cap_sparse_mmap = unsafe {
+                            &*(cap_header as *const vfio_info_cap_header
+                                as *const vfio_region_info_cap_sparse_mmap)
+                        };
+                        let areas = cap_sparse_mmap
+                            .areas
+                            .as_slice(cap_sparse_mmap.nr_areas as usize);
+                        let areas = areas
+                            .iter()
+                            .map(|a| VfioRegionSparseMmapArea {
+                                offset: a.offset,
+                                size: a.size,
+                            })
+                            .collect();
+                        let cap = VfioRegionCapSparseMmap { areas };
+                        caps.push(VfioRegionCap::SparseMmap(cap));
                     }
-                    next_cap_offset = cap_header.next;
+                    VFIO_REGION_INFO_CAP_TYPE => {
+                        // SAFETY: data structure returned by kernel is trusted.
+                        let cap_type = unsafe {
+                            &*(cap_header as *const vfio_info_cap_header
+                                as *const vfio_region_info_cap_type)
+                        };
+                        let cap = VfioRegionCapType {
+                            type_: cap_type.type_,
+                            subtype: cap_type.subtype,
+                        };
+                        caps.push(VfioRegionCap::Type(cap));
+                    }
+                    VFIO_REGION_INFO_CAP_MSIX_MAPPABLE => {
+                        caps.push(VfioRegionCap::MsixMappable);
+                    }
+                    VFIO_REGION_INFO_CAP_NVLINK2_SSATGT => {
+                        // SAFETY: data structure returned by kernel is trusted.
+                        let cap_nvlink2_ssatgt = unsafe {
+                            &*(cap_header as *const vfio_info_cap_header
+                                as *const vfio_region_info_cap_nvlink2_ssatgt)
+                        };
+                        let cap = VfioRegionCapNvlink2Ssatgt {
+                            tgt: cap_nvlink2_ssatgt.tgt,
+                        };
+                        caps.push(VfioRegionCap::Nvlink2Ssatgt(cap));
+                    }
+                    VFIO_REGION_INFO_CAP_NVLINK2_LNKSPD => {
+                        // SAFETY: data structure returned by kernel is trusted.
+                        let cap_nvlink2_lnkspd = unsafe {
+                            &*(cap_header as *const vfio_info_cap_header
+                                as *const vfio_region_info_cap_nvlink2_lnkspd)
+                        };
+                        let cap = VfioRegionCapNvlink2Lnkspd {
+                            link_speed: cap_nvlink2_lnkspd.link_speed,
+                        };
+                        caps.push(VfioRegionCap::Nvlink2Lnkspd(cap));
+                    }
+                    _ => {
+                        println!("Got unknown region capability id: {}", cap_header.id);
+                    }
                 }
+                next_cap_offset = cap_header.next;
             }
         }
         let region_info = VfioRegionInfo {
@@ -326,6 +328,7 @@ pub fn vfio_device_get_region_infos(
             offset: region_info.offset,
             caps,
         };
+        println!("Final region {i} info: {region_info:#?}");
         regions.push(region_info);
     }
     regions
@@ -455,11 +458,11 @@ pub fn vfio_device_get_pci_capabilities(
                 device,
                 region_infos,
                 VFIO_PCI_CONFIG_REGION_INDEX,
-                PCI_CONFIG_EXTENDED_CAPABILITY_OFFSET as u64,
+                next_cap_offset as u64,
                 cap_id_and_next_ptr.as_mut_bytes(),
             );
-            let cap_id: u16 = (cap_id_and_next_ptr  & 0xffff) as u16;
-            next_cap_offset = ((cap_id_and_next_ptr  >> 20) & 0xfff) as u16;
+            let cap_id: u16 = (cap_id_and_next_ptr & 0xffff) as u16;
+            next_cap_offset = ((cap_id_and_next_ptr >> 20) & 0xfff) as u16;
 
             let pci_cap = PciExpressCapabilityId::from(cap_id);
             println!("Found extended cap: {pci_cap:#?}");
@@ -590,9 +593,18 @@ pub fn device_get_bar_infos(
 
         let mut size = 0;
         if is_io_bar {
-            size = u64::from(lower_size);
-            size &= !0b11;
-        } else if is_64_bits {
+            if lower_size != 0 {
+                lower_size &= !0b11;
+                lower_size = !lower_size + 1;
+                size = u64::from(lower_size);
+            }
+        } else if !is_64_bits {
+            if lower_size != 0 {
+                lower_size &= !0b1111;
+                lower_size = !lower_size + 1;
+                size = u64::from(lower_size);
+            }
+        } else {
             vfio_device_region_write(
                 device,
                 region_infos,
@@ -612,12 +624,9 @@ pub fn device_get_bar_infos(
 
             size = u64::from(upper_size) << 32 | u64::from(lower_size);
             size &= !0b1111;
-        } else {
-            size = u64::from(lower_size);
-            size &= !0b1111;
+            size = !size + 1;
         }
         if size != 0 {
-            size = !size + 1;
             println!("BAR size: {size:#x}");
 
             let idx = bar_idx;
@@ -668,6 +677,7 @@ pub fn device_get_bar_infos(
 pub fn get_group_and_device_with_info(group: &impl AsRawFd, path: &str) -> VfioPciDevice {
     let device_file = vfio_group_get_device(group, &path);
     let device_info = vfio_device_get_info(&device_file);
+    println!("Device info: {device_info:#?}");
     vfio_device_reset(&device_file, &device_info);
 
     let device_region_infos = vfio_device_get_region_infos(&device_file, &device_info);
