@@ -213,7 +213,7 @@ impl PciDevices {
             &device.file,
             &bar_infos,
             &device.region_infos,
-            msix_cap.as_ref().unwrap(),
+            msix_cap.as_ref(),
             vm.fd(),
         );
         crate::vfio::dma_map_guest_memory(container, vm.guest_memory());

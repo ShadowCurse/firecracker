@@ -920,7 +920,7 @@ pub fn mmap_bars(
     device: &File,
     bar_infos: &[BarInfo],
     region_infos: &[VfioRegionInfo],
-    msix_cap: &MsixCap,
+    msix_cap: Option<&MsixCap>,
     vm: &VmFd,
 ) {
     for bar_info in bar_infos.iter() {
@@ -935,8 +935,36 @@ pub fn mmap_bars(
                     _ => {}
                 }
             }
-            let contain_msix_table = region_info.index == msix_cap.table_bir();
-            let contain_msix_pba = region_info.index == msix_cap.pba_bir();
+            let mut contain_msix_table: bool = false;
+            let mut msix_table_offset = 0;
+            let mut msix_table_size = 0;
+
+            let mut contain_msix_pba: bool = false;
+            let mut msix_pba_offset = 0;
+            let mut msix_pba_size = 0;
+
+            fn align_page_size_down(v: u64) -> u64 {
+                v & !(4096 - 1)
+            }
+            fn align_page_size_up(v: u64) -> u64 {
+                align_page_size_down(v + 4096)
+            }
+            if let Some(msix_cap) = msix_cap {
+                contain_msix_table = region_info.index == msix_cap.pba_bir();
+                if contain_msix_table {
+                    let (offset, size) = msix_cap.table_range();
+                    msix_table_offset = align_page_size_down(offset);
+                    msix_table_size = align_page_size_up(size);
+                }
+
+                contain_msix_pba = region_info.index == msix_cap.table_bir();
+                if contain_msix_pba {
+                    let (offset, size) = msix_cap.pba_range();
+                    msix_pba_offset = align_page_size_down(offset);
+                    msix_pba_size = align_page_size_up(size);
+                }
+            }
+
             if (contain_msix_table || contain_msix_pba)
                 && !has_msix_mappable
                 && sparce_mmap_cap.is_none()
@@ -960,26 +988,6 @@ pub fn mmap_bars(
                     let areas: &[VfioRegionSparseMmapArea] = if let Some(cap) = sparce_mmap_cap {
                         &cap.areas
                     } else if has_msix_mappable {
-                        fn align_page_size_down(v: u64) -> u64 {
-                            v & !(4096 - 1)
-                        }
-                        fn align_page_size_up(v: u64) -> u64 {
-                            align_page_size_down(v + 4096)
-                        }
-                        let mut msix_table_offset = 0;
-                        let mut msix_table_size = 0;
-                        if contain_msix_table {
-                            let (offset, size) = msix_cap.table_range();
-                            msix_table_offset = align_page_size_down(offset);
-                            msix_table_size = align_page_size_up(size);
-                        }
-                        let mut msix_pba_offset = 0;
-                        let mut msix_pba_size = 0;
-                        if contain_msix_pba {
-                            let (offset, size) = msix_cap.pba_range();
-                            msix_pba_offset = align_page_size_down(offset);
-                            msix_pba_size = align_page_size_up(size);
-                        }
                         let mut first_gap_offset = msix_table_offset;
                         let mut first_gap_size = msix_table_size;
                         let mut second_gap_offset = msix_pba_offset;
