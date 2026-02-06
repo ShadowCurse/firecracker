@@ -237,11 +237,13 @@ impl PciDevice for VfioDeviceBundle {
         data: &[u8],
     ) -> Option<Arc<Barrier>> {
         LOG!("write_config_register: reg_idx: {reg_idx}, offset: {offset:#x}, data: {data:?}");
+        self.pci_configuration
+            .write_config_register(reg_idx, offset, data);
         None
     }
     fn read_config_register(&mut self, reg_idx: usize) -> u32 {
         LOG!("read_config_register: reg_idx: {reg_idx}");
-        0
+        self.pci_configuration.read_reg(reg_idx)
     }
     fn detect_bar_reprogramming(
         &mut self,
