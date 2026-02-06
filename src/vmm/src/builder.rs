@@ -285,7 +285,7 @@ pub fn build_microvm_for_boot(
             .pci_devices
             .attach_vfio_device(&vm, vfio.paths[0].clone(), &vfio.paths[0]);
     }
-    panic!("STOP");
+    // panic!("STOP");
 
     #[cfg(target_arch = "aarch64")]
     device_manager.attach_legacy_devices_aarch64(
