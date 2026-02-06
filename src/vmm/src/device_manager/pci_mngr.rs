@@ -218,12 +218,15 @@ impl PciDevices {
         );
         crate::vfio::dma_map_guest_memory(container, vm.guest_memory());
 
-        let msix_num = msix_cap.as_ref().unwrap().table_size() / 16;
-        let msix_vectors = Vm::create_msix_group(vm.clone(), msix_num).unwrap();
-        let msix_config = Arc::new(Mutex::new(crate::pci::msix::MsixConfig::new(
-            Arc::new(msix_vectors),
-            pci_device_bdf.into(),
-        )));
+        let mut msix_config = None;
+        if let Some(msix_cap) = &msix_cap {
+            let msix_num = msix_cap.table_size() / 16;
+            let msix_vectors = Vm::create_msix_group(vm.clone(), msix_num).unwrap();
+            msix_config = Some(Arc::new(Mutex::new(crate::pci::msix::MsixConfig::new(
+                Arc::new(msix_vectors),
+                pci_device_bdf.into(),
+            ))));
+        }
         let pci_configuration = crate::pci::configuration::PciConfiguration::new_type0(
             0,
             0,
@@ -232,7 +235,7 @@ impl PciDevices {
             &pci::PciVfioSubclass::VfioSubclass,
             0,
             0,
-            Some(msix_config.clone()),
+            msix_config,
         );
         // add to the segment since we will need to configure MSIs
         let vfio_device_bundle = Arc::new(Mutex::new(VfioDeviceBundle {
