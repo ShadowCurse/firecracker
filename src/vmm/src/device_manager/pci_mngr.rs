@@ -35,7 +35,7 @@ use crate::devices::virtio::vsock::{Vsock, VsockUnixBackend};
 use crate::pci::bus::PciRootError;
 use crate::resources::VmResources;
 use crate::snapshot::Persist;
-use crate::vfio::VfioPciDevice;
+use crate::vfio::{VfioDevice, VfioDeviceBundle};
 use crate::vmm_config::memory_hotplug::MemoryHotplugConfig;
 use crate::vmm_config::mmds::MmdsConfigError;
 use crate::vstate::bus::BusError;
@@ -52,7 +52,7 @@ pub struct PciDevices {
 
     pub vfio_container: Option<std::fs::File>,
     // All Vfio PCI devices
-    pub vfio_devices: HashMap<(VirtioDeviceType, String), Arc<Mutex<VfioPciDevice>>>,
+    pub vfio_devices: HashMap<(VirtioDeviceType, String), Arc<Mutex<VfioDevice>>>,
 }
 
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
@@ -175,13 +175,12 @@ impl PciDevices {
     pub fn attach_vfio_device(
         &mut self,
         vm: &Arc<Vm>,
-        // id: String,
+        id: String,
         path: &str,
     ) -> Result<(), PciManagerError> {
         let pci_segment = self.pci_segment.as_ref().unwrap();
         let pci_device_bdf = pci_segment.next_device_bdf()?;
         debug!("VFIO: Allocating BDF: {pci_device_bdf:?} for device");
-        let mem = vm.guest_memory().clone();
 
         let container = self.vfio_container.as_ref().unwrap();
 
@@ -195,43 +194,64 @@ impl PciDevices {
         // only set after getting the first group
         crate::vfio::vfio_container_set_iommu(container, crate::vfio::VFIO_TYPE1v2_IOMMU);
 
-        let device = crate::vfio::get_group_and_device_with_info(&group, path);
+        let device = crate::vfio::get_device(&group, path);
 
         let mut resource_allocator_lock = vm.resource_allocator();
         let mut resource_allocator = resource_allocator_lock.deref_mut();
         let bar_infos = crate::vfio::device_get_bar_infos(
-            &device.device_file,
-            &device.device_region_infos,
+            &device.file,
+            &device.region_infos,
             &mut resource_allocator,
         );
+        let (msi_cap, msix_cap, masks) = crate::vfio::vfio_device_get_pci_capabilities(
+            &device.file,
+            &device.region_infos,
+            &device.irq_infos,
+        );
+        crate::vfio::mmap_bars(
+            &container,
+            &device.file,
+            &bar_infos,
+            &device.region_infos,
+            msix_cap.as_ref().unwrap(),
+            vm.fd(),
+        );
+        crate::vfio::dma_map_guest_memory(container, vm.guest_memory());
 
-        // mmap_device_regions() {
-        //     for region {
-        //        let ptr = mmap(..)
-        //        kvm_set_region(ptr)
-        //      }
-        // }
-        // // no need to add it to the bus because we don't need to emulate BAR
-        // // accesses
-        //
-        // // add to the segment since we will need to configure MSIs
-        // let vfio_device = Arc::new(Mutex::new(VfioDevice {
-        //     group,
-        //     device,
-        //     bar_infos,
-        // }));
-        // pci_segment
-        //     .pci_bus
-        //     .lock()
-        //     .expect("Poisoned lock")
-        //     .add_device(pci_device_bdf.device() as u32, vfio_device.clone());
+        let msix_num = msix_cap.as_ref().unwrap().table_size() / 16;
+        let msix_vectors = Vm::create_msix_group(vm.clone(), msix_num).unwrap();
+        let msix_config = Arc::new(Mutex::new(crate::pci::msix::MsixConfig::new(
+            Arc::new(msix_vectors),
+            pci_device_bdf.into(),
+        )));
+        let pci_configuration = crate::pci::configuration::PciConfiguration::new_type0(
+            0,
+            0,
+            0,
+            pci::PciClassCode::Other,
+            &pci::PciVfioSubclass::VfioSubclass,
+            0,
+            0,
+            Some(msix_config.clone()),
+        );
+        // add to the segment since we will need to configure MSIs
+        let vfio_device_bundle = Arc::new(Mutex::new(VfioDeviceBundle {
+            id,
+            group_id,
+            group,
+            device,
+            bar_infos,
+            msi_cap,
+            msix_cap,
+            masks,
+            pci_configuration,
+        }));
+        pci_segment
+            .pci_bus
+            .lock()
+            .expect("Poisoned lock")
+            .add_device(pci_device_bdf.device() as u32, vfio_device_bundle.clone());
         // let msix_vectors = Vm::create_msix_group(vm.clone(), msix_num)?;
-
-        // pci_segment
-        //     .pci_bus
-        //     .lock()
-        //     .expect("Poisoned lock")
-        //     .add_device(pci_device_bdf.device() as u32, device.clone());
         Ok(())
     }
 

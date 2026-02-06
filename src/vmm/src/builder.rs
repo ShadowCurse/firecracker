@@ -281,10 +281,9 @@ pub fn build_microvm_for_boot(
 
     if let Some(vfio) = &vm_resources.vfio {
         // crate::vfio::do_vfio_magic(&vm.common.fd, &vfio.paths);
-        device_manager.pci_devices.attach_vfio_device(
-            &vm,
-            &"/sys/bus/mdev/devices/c9abdcb5-5279-413a-9057-c81d2605ce9c/",
-        );
+        device_manager
+            .pci_devices
+            .attach_vfio_device(&vm, vfio.paths[0].clone(), &vfio.paths[0]);
     }
     panic!("STOP");
 

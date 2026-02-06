@@ -326,6 +326,17 @@ impl PciSubclass for PciNetworkControllerSubclass {
     }
 }
 
+#[derive(Copy, Clone)]
+pub enum PciVfioSubclass {
+    VfioSubclass = 0xff,
+}
+
+impl PciSubclass for PciVfioSubclass {
+    fn get_register_value(&self) -> u8 {
+        *self as u8
+    }
+}
+
 /// Types of PCI capabilities.
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 #[allow(dead_code)]
