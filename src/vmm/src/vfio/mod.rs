@@ -462,7 +462,7 @@ pub fn vfio_device_get_pci_capabilities(
                 cap_id_and_next_ptr.as_mut_bytes(),
             );
             let cap_id: u16 = (cap_id_and_next_ptr & 0xffff) as u16;
-            next_cap_offset = ((cap_id_and_next_ptr >> 20) & 0xfff) as u16;
+            next_cap_offset = (cap_id_and_next_ptr >> 20) as u16;
 
             let pci_cap = PciExpressCapabilityId::from(cap_id);
             println!("Found extended cap: {pci_cap:#?}");
