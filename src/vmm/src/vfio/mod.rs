@@ -373,11 +373,86 @@ pub fn vfio_device_get_irq_infos(
     irqs
 }
 
+/// 7.7.1.2 Message Control Register for MSI
+#[derive(Debug)]
+pub struct MsiCap {
+    pub msg_ctl: u16,
+}
+/// 7.7.2 MSI-X Capability and Table Structure
+#[derive(Debug)]
+pub struct MsixCap {
+    pub msg_ctl: u16,
+    pub table_offset: u32,
+    pub pba_offset: u32,
+}
+impl MsixCap {
+    const FUNCTION_MASK_BIT: u8 = 14;
+    const MSIX_ENABLE_BIT: u8 = 15;
+
+    pub fn masked(&self) -> bool {
+        (self.msg_ctl >> Self::FUNCTION_MASK_BIT) & 0x1 == 0x1
+    }
+
+    pub fn enabled(&self) -> bool {
+        (self.msg_ctl >> Self::MSIX_ENABLE_BIT) & 0x1 == 0x1
+    }
+
+    pub fn table_offset(&self) -> u32 {
+        self.table_offset & 0xffff_fff8
+    }
+
+    pub fn pba_offset(&self) -> u32 {
+        self.pba_offset & 0xffff_fff8
+    }
+
+    pub fn table_set_offset(&mut self, addr: u32) {
+        self.table_offset &= 0x7;
+        self.table_offset += addr;
+    }
+
+    pub fn pba_set_offset(&mut self, addr: u32) {
+        self.pba_offset &= 0x7;
+        self.pba_offset += addr;
+    }
+
+    pub fn table_bir(&self) -> u32 {
+        self.table_offset & 0x7
+    }
+
+    pub fn pba_bir(&self) -> u32 {
+        self.pba_offset & 0x7
+    }
+
+    pub fn table_size(&self) -> u16 {
+        (self.msg_ctl & 0x7ff) + 1
+    }
+
+    pub fn table_range(&self) -> (u64, u64) {
+        // The table takes 16 bytes per entry.
+        let size = self.table_size() as u64 * 16;
+        (self.table_offset() as u64, size)
+    }
+
+    pub fn pba_range(&self) -> (u64, u64) {
+        // The table takes 1 bit per entry modulo 8 bytes.
+        let size = ((self.table_size() as u64 / 64) + 1) * 8;
+        (self.pba_offset() as u64, size)
+    }
+}
+
+#[derive(Debug)]
+pub struct RegisterMask {
+    register: u16,
+    // applied as (R & mask) | value
+    mask: u32,
+    value: u32,
+}
+
 pub fn vfio_device_get_pci_capabilities(
     device: &impl FileExt,
     region_infos: &[VfioRegionInfo],
     irq_infos: &[vfio_irq_info],
-) {
+) -> (Option<MsiCap>, Option<MsixCap>, Option<Vec<RegisterMask>>) {
     let mut next_cap_offset: u8 = 0;
     vfio_device_region_read(
         device,
@@ -390,6 +465,8 @@ pub fn vfio_device_get_pci_capabilities(
     let mut has_pci_express_cap = false;
     let mut has_power_management_cap = false;
 
+    let mut msi_cap = None;
+    let mut msix_cap = None;
     println!("PCI CAPS offset: {}", next_cap_offset);
     // let mut caps = Vec::new();
     while next_cap_offset != 0 {
@@ -403,6 +480,7 @@ pub fn vfio_device_get_pci_capabilities(
         );
 
         let cap_id: u8 = (cap_id_and_next_ptr & 0xff) as u8;
+        let current_cap_offset = next_cap_offset;
         next_cap_offset = ((cap_id_and_next_ptr & 0xff00) >> 8) as u8;
         println!("PCI CAP id: {cap_id} next offset: {next_cap_offset:#x}");
 
@@ -412,32 +490,56 @@ pub fn vfio_device_get_pci_capabilities(
                     let irq_info = irq_infos[VFIO_PCI_MSI_IRQ_INDEX as usize];
                     if 0 < irq_info.count {
                         println!("Found MSI cap");
+                        let mut msg_ctl: u16 = 0;
+                        vfio_device_region_read(
+                            device,
+                            region_infos,
+                            VFIO_PCI_CONFIG_REGION_INDEX,
+                            (current_cap_offset as u64) + 2,
+                            msg_ctl.as_mut_bytes(),
+                        );
+                        msi_cap = Some(MsiCap { msg_ctl });
                     }
                 }
-                // if let Some(irq_info) = self.vfio_wrapper.get_irq_info(VFIO_PCI_MSI_IRQ_INDEX) {
-                //     if irq_info.count > 0 {
-                //         // Parse capability only if the VFIO device
-                //         // supports MSI.
-                //         let msg_ctl = self.parse_msi_capabilities(cap_iter);
-                //         self.initialize_msi(msg_ctl, cap_iter as u32, None);
-                //     }
-                // }
             }
             PciCapabilityId::MsiX => {
                 if (VFIO_PCI_MSIX_IRQ_INDEX as usize) < irq_infos.len() {
                     let irq_info = irq_infos[VFIO_PCI_MSIX_IRQ_INDEX as usize];
                     if 0 < irq_info.count {
                         println!("Found MSIX cap");
+
+                        // 7.7.2 MSI-X Capability and Table Structure
+                        let mut msg_ctl: u16 = 0;
+                        let mut table_offset: u32 = 0;
+                        let mut pba_offset: u32 = 0;
+                        vfio_device_region_read(
+                            device,
+                            region_infos,
+                            VFIO_PCI_CONFIG_REGION_INDEX,
+                            (current_cap_offset as u64) + 2,
+                            msg_ctl.as_mut_bytes(),
+                        );
+                        vfio_device_region_read(
+                            device,
+                            region_infos,
+                            VFIO_PCI_CONFIG_REGION_INDEX,
+                            (current_cap_offset as u64) + 4,
+                            table_offset.as_mut_bytes(),
+                        );
+                        vfio_device_region_read(
+                            device,
+                            region_infos,
+                            VFIO_PCI_CONFIG_REGION_INDEX,
+                            (current_cap_offset as u64) + 8,
+                            pba_offset.as_mut_bytes(),
+                        );
+                        msix_cap = Some(MsixCap {
+                            msg_ctl,
+                            table_offset,
+                            pba_offset,
+                        });
                     }
                 }
-                // if let Some(irq_info) = self.vfio_wrapper.get_irq_info(VFIO_PCI_MSIX_IRQ_INDEX) {
-                //     if irq_info.count > 0 {
-                //         // Parse capability only if the VFIO device
-                //         // supports MSI-X.
-                //         let msix_cap = self.parse_msix_capabilities(cap_iter);
-                //         self.initialize_msix(msix_cap, cap_iter as u32, bdf, None);
-                //     }
-                // }
             }
             PciCapabilityId::PciExpress => has_pci_express_cap = true,
             PciCapabilityId::PowerManagement => has_power_management_cap = true,
@@ -449,7 +551,9 @@ pub fn vfio_device_get_pci_capabilities(
     //     self.add_nv_gpudirect_clique_cap(cap_iter, clique_id);
     // }
     //
+    let mut masks = None;
     if has_pci_express_cap && has_power_management_cap {
+        let mut tmp_masks = Vec::new();
         println!("Parsing extended caps");
         let mut next_cap_offset: u16 = PCI_CONFIG_EXTENDED_CAPABILITY_OFFSET as u16;
         while next_cap_offset != 0 {
@@ -462,6 +566,7 @@ pub fn vfio_device_get_pci_capabilities(
                 cap_id_and_next_ptr.as_mut_bytes(),
             );
             let cap_id: u16 = (cap_id_and_next_ptr & 0xffff) as u16;
+            let current_cap_offset = next_cap_offset;
             next_cap_offset = (cap_id_and_next_ptr >> 20) as u16;
 
             let pci_cap = PciExpressCapabilityId::from(cap_id);
@@ -471,9 +576,17 @@ pub fn vfio_device_get_pci_capabilities(
                 || pci_cap == PciExpressCapabilityId::SingleRootIoVirtualization
             {
                 println!("This cap will need to be masked");
+                let register = current_cap_offset / 4;
+                tmp_masks.push(RegisterMask {
+                    register,
+                    mask: 0x0000ffff,
+                    value: 0xffff_0000,
+                })
             }
         }
+        masks = Some(tmp_masks);
     }
+    (msi_cap, msix_cap, masks)
 }
 
 pub fn vfio_device_region_read(
@@ -1051,11 +1164,20 @@ pub fn do_vfio_magic(path: &str) {
         &mut resource_allocator,
     );
     println!("Getting PCI caps");
-    vfio_device_get_pci_capabilities(
+    let (msi_cap, msix_cap, masks) = vfio_device_get_pci_capabilities(
         &device.device_file,
         &device.device_region_infos,
         &device.device_irq_infos,
     );
+    if let Some(msi_cap) = msi_cap {
+        println!("MSI cap: {msi_cap:#?}");
+    }
+    if let Some(msix_cap) = msix_cap {
+        println!("MSIX cap: {msix_cap:#?}");
+    }
+    if let Some(masks) = masks {
+        println!("MASKS: {masks:#?}");
+    }
 
     // KVM part
     // let kvm_vfio_fd = create_kvm_vfio_device(vm_fd);
