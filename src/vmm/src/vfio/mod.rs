@@ -848,8 +848,8 @@ pub fn vfio_device_get_pci_capabilities(
                 LOG!("Found cap to be masked at register: {register}({current_cap_offset:#x})");
                 tmp_masks.push(RegisterMask {
                     register,
-                    mask: 0x0000ffff,
-                    value: 0xffff_0000,
+                    mask: 0xffff_0000,
+                    value: 0x0000_0000,
                 })
             }
         }
