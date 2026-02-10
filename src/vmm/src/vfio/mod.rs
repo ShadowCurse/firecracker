@@ -353,7 +353,7 @@ impl PciDevice for VfioDeviceBundle {
                 data,
             );
         }
-        LOG!("reg: {reg_idx:>3}({config_offset:#>6x}) data: {data:?}");
+        LOG!("reg: {reg_idx:>3}({config_offset:>#6x}) data: {data:?}");
         None
     }
     fn read_config_register(&mut self, reg_idx: usize) -> u32 {
@@ -408,7 +408,7 @@ impl PciDevice for VfioDeviceBundle {
                 );
             }
         }
-        LOG!("reg: {reg_idx:>3}({config_offset:#>6x}) data: {:?}", result.as_bytes());
+        LOG!("reg: {reg_idx:>3}({config_offset:>#6x}) data: {:?}", result.as_bytes());
         result
     }
     fn detect_bar_reprogramming(
