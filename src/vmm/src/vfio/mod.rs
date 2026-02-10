@@ -387,6 +387,7 @@ impl PciDevice for VfioDeviceBundle {
     fn read_config_register(&mut self, reg_idx: usize) -> u32 {
         let config_offset = reg_idx as u64 * 4;
         let mut result: u32 = 0;
+        let mut applied_mask: bool = false;
         if 4 <= reg_idx && reg_idx < 10 {
             let bar_idx = (reg_idx - 4) as u32;
             for bar_info in self.bar_infos.iter() {
@@ -409,7 +410,6 @@ impl PciDevice for VfioDeviceBundle {
                 }
             }
         } else {
-            let mut applied_mask: bool = false;
             if let Some(masks) = self.masks.as_ref() {
                 for mask in masks.iter() {
                     if mask.register == reg_idx as u16 {
@@ -437,7 +437,7 @@ impl PciDevice for VfioDeviceBundle {
             }
         }
         LOG!(
-            "reg: {reg_idx:>3}({config_offset:>#6x}) data: {:?}",
+            "reg: {reg_idx:>3}({config_offset:>#6x}) data: {:?} applied mask: {applied_mask}",
             result.as_bytes()
         );
         result
