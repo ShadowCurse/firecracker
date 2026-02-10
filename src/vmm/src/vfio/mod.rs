@@ -338,10 +338,21 @@ impl PciDevice for VfioDeviceBundle {
             let bar_idx = (reg_idx - 4) as u32;
             for bar_info in self.bar_infos.iter_mut() {
                 if bar_idx == bar_info.idx {
-                    // assume data is always 0xFFFF_FFFF
-                    bar_info.about_to_read_size = true;
+                    if data.len() == 4 {
+                        let d: u32 = u32::from_le_bytes(data.try_into().unwrap());
+                        if d == 0xFFFF_FFFF {
+                            // assume data is always 0xFFFF_FFFF
+                            bar_info.about_to_read_size = true;
+                        }
+                    }
                 } else if bar_info.is_64_bits && bar_idx == bar_info.idx + 1 {
-                    bar_info.about_to_read_size = true;
+                    if data.len() == 4 {
+                        let d: u32 = u32::from_le_bytes(data.try_into().unwrap());
+                        if d == 0xFFFF_FFFF {
+                            // assume data is always 0xFFFF_FFFF
+                            bar_info.about_to_read_size = true;
+                        }
+                    }
                 }
             }
         } else {
@@ -408,7 +419,10 @@ impl PciDevice for VfioDeviceBundle {
                 );
             }
         }
-        LOG!("reg: {reg_idx:>3}({config_offset:>#6x}) data: {:?}", result.as_bytes());
+        LOG!(
+            "reg: {reg_idx:>3}({config_offset:>#6x}) data: {:?}",
+            result.as_bytes()
+        );
         result
     }
     fn detect_bar_reprogramming(
