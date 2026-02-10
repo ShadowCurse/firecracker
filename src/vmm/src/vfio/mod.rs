@@ -992,17 +992,17 @@ pub fn device_get_bar_infos(
                 bar_idx += 1;
                 continue;
             } else if is_64_bits {
-                // allocate 32bit guest address
+                // allocate 64bit guest address
                 gpa = resource_allocator
-                    .mmio32_memory
+                    .mmio64_memory
                     .allocate(size, 64, AllocPolicy::FirstMatch)
                     .unwrap()
                     .start();
                 bar_idx += 1;
             } else {
-                // allocate 64bit guest address
+                // allocate 32bit guest address
                 gpa = resource_allocator
-                    .mmio64_memory
+                    .mmio32_memory
                     .allocate(size, 64, AllocPolicy::FirstMatch)
                     .unwrap()
                     .start();
