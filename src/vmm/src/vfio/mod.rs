@@ -844,8 +844,8 @@ pub fn vfio_device_get_pci_capabilities(
                 || pci_cap == PciExpressCapabilityId::ResizeableBar
                 || pci_cap == PciExpressCapabilityId::SingleRootIoVirtualization
             {
-                LOG!("Found cap to be masked at register: {register}({current_cap_offset:#x})");
                 let register = current_cap_offset / 4;
+                LOG!("Found cap to be masked at register: {register}({current_cap_offset:#x})");
                 tmp_masks.push(RegisterMask {
                     register,
                     mask: 0x0000ffff,
