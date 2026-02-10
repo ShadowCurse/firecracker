@@ -257,13 +257,20 @@ macro_rules! LOG {
 impl BusDevice for VfioDeviceBundle {
     fn read(&mut self, base: u64, offset: u64, data: &mut [u8]) {
         let mut did_read: bool = false;
+        let mut table_name = "----";
         if let Some(msix_config) = self.msix_config.as_ref() {
             for info in self.bar_hole_infos.iter() {
                 if info.gpa == base {
                     if info.offset_in_hole <= offset && offset < info.offset_in_hole + info.size {
                         match info.usage {
-                            BarHoleInfoUsage::Table => msix_config.read_table(offset, data),
-                            BarHoleInfoUsage::Pba => msix_config.read_pba(offset, data),
+                            BarHoleInfoUsage::Table => {
+                                table_name = "MsiTable";
+                                msix_config.read_table(offset, data);
+                            }
+                            BarHoleInfoUsage::Pba => {
+                                table_name = "PbaTable";
+                                msix_config.read_pba(offset, data);
+                            }
                         }
                     } else {
                         let msix_cap = self.msix_cap.as_ref().unwrap();
@@ -283,7 +290,10 @@ impl BusDevice for VfioDeviceBundle {
                     did_read = true;
                 }
             }
-            LOG!("base: {base:#x} offset: {offset:#x} data: {data:?}: did_read: {did_read}");
+            LOG!(
+                "base: {base:<#10x} offset: {offset:<#5x} data: {data:<20?}: did_read: {did_read} \
+                 table_name: {table_name}"
+            );
         } else {
             panic!("Should never happen");
         }
@@ -291,13 +301,20 @@ impl BusDevice for VfioDeviceBundle {
 
     fn write(&mut self, base: u64, offset: u64, data: &[u8]) -> Option<Arc<Barrier>> {
         let mut did_write: bool = false;
+        let mut table_name = "----";
         if let Some(msix_config) = self.msix_config.as_mut() {
             for info in self.bar_hole_infos.iter() {
                 if info.gpa == base {
                     if info.offset_in_hole <= offset && offset < info.offset_in_hole + info.size {
                         match info.usage {
-                            BarHoleInfoUsage::Table => msix_config.write_table(offset, data),
-                            BarHoleInfoUsage::Pba => msix_config.write_pba(offset, data),
+                            BarHoleInfoUsage::Table => {
+                                table_name = "MsiTable";
+                                msix_config.write_table(offset, data);
+                            }
+                            BarHoleInfoUsage::Pba => {
+                                table_name = "PbaTable";
+                                msix_config.write_pba(offset, data);
+                            }
                         }
                     } else {
                         let msix_cap = self.msix_cap.as_ref().unwrap();
@@ -317,7 +334,10 @@ impl BusDevice for VfioDeviceBundle {
                     did_write = true;
                 }
             }
-            LOG!("base: {base:#x} offset: {offset:#x} data: {data:?}: did_write: {did_write}");
+            LOG!(
+                "base: {base:<#10x} offset: {offset:<#5x} data: {data:<20?}: did_write: \
+                 {did_write} table_name: {table_name}"
+            );
         } else {
             panic!("Should never happen");
         }
@@ -336,22 +356,23 @@ impl PciDevice for VfioDeviceBundle {
         let config_offset = reg_idx as u64 * 4 + offset;
         if 4 <= reg_idx && reg_idx < 10 {
             let bar_idx = (reg_idx - 4) as u32;
+
+            let mut looks_like_request_to_read: bool = false;
+            if data.len() == 4 {
+                let d: u32 = u32::from_le_bytes(data.try_into().unwrap());
+                if d == 0xFFFF_FFFF {
+                    looks_like_request_to_read = true;
+                }
+            }
+
             for bar_info in self.bar_infos.iter_mut() {
                 if bar_idx == bar_info.idx {
-                    if data.len() == 4 {
-                        let d: u32 = u32::from_le_bytes(data.try_into().unwrap());
-                        if d == 0xFFFF_FFFF {
-                            // assume data is always 0xFFFF_FFFF
-                            bar_info.about_to_read_size = true;
-                        }
+                    if looks_like_request_to_read {
+                        bar_info.about_to_read_size = true;
                     }
-                } else if bar_info.is_64_bits && bar_idx == bar_info.idx + 1 {
-                    if data.len() == 4 {
-                        let d: u32 = u32::from_le_bytes(data.try_into().unwrap());
-                        if d == 0xFFFF_FFFF {
-                            // assume data is always 0xFFFF_FFFF
-                            bar_info.about_to_read_size = true;
-                        }
+                } else if bar_idx == bar_info.idx + 1 && bar_info.is_64_bits {
+                    if looks_like_request_to_read {
+                        bar_info.about_to_read_size = true;
                     }
                 }
             }
