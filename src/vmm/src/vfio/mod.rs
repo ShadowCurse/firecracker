@@ -256,7 +256,6 @@ macro_rules! LOG {
 // This should only serve BARs
 impl BusDevice for VfioDeviceBundle {
     fn read(&mut self, base: u64, offset: u64, data: &mut [u8]) {
-        let mut did_read: bool = false;
         let mut table_name = "----";
         if let Some(msix_config) = self.msix_config.as_ref() {
             for info in self.bar_hole_infos.iter() {
@@ -287,12 +286,11 @@ impl BusDevice for VfioDeviceBundle {
                             data,
                         );
                     }
-                    did_read = true;
                 }
             }
             LOG!(
-                "base: {base:<#10x} offset: {offset:<#5x} data: {data:<20?}: did_read: {did_read} \
-                 table_name: {table_name}"
+                "base: {base:<#10x} offset: {offset:<#5x} data: {data:<4?} table_name: \
+                 {table_name}"
             );
         } else {
             panic!("Should never happen");
@@ -300,7 +298,6 @@ impl BusDevice for VfioDeviceBundle {
     }
 
     fn write(&mut self, base: u64, offset: u64, data: &[u8]) -> Option<Arc<Barrier>> {
-        let mut did_write: bool = false;
         let mut table_name = "----";
         if let Some(msix_config) = self.msix_config.as_mut() {
             for info in self.bar_hole_infos.iter() {
@@ -331,12 +328,11 @@ impl BusDevice for VfioDeviceBundle {
                             data,
                         );
                     }
-                    did_write = true;
                 }
             }
             LOG!(
-                "base: {base:<#10x} offset: {offset:<#5x} data: {data:<20?}: did_write: \
-                 {did_write} table_name: {table_name}"
+                "base: {base:<#10x} offset: {offset:<#5x} data: {data:<4?} table_name: \
+                 {table_name}"
             );
         } else {
             panic!("Should never happen");
@@ -848,7 +844,7 @@ pub fn vfio_device_get_pci_capabilities(
                 || pci_cap == PciExpressCapabilityId::ResizeableBar
                 || pci_cap == PciExpressCapabilityId::SingleRootIoVirtualization
             {
-                LOG!("This cap will need to be masked");
+                LOG!("Found cap to be masked at register: {register}({current_cap_offset:#x})");
                 let register = current_cap_offset / 4;
                 tmp_masks.push(RegisterMask {
                     register,
