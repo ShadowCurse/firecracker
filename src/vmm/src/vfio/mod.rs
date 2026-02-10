@@ -250,7 +250,7 @@ macro_rules! function_name {
 }
 macro_rules! LOG {
     ($($arg:tt)*) => {
-        println!("[{}:{:<4}:{:<50}] {}", file!(), line!(), function_name!(), format_args!($($arg)*))
+        println!("[{}:{:<4}:{:<60}] {}", file!(), line!(), function_name!(), format_args!($($arg)*))
     };
 }
 
@@ -349,11 +349,11 @@ impl PciDevice for VfioDeviceBundle {
                 &self.device.file,
                 &self.device.region_infos,
                 VFIO_PCI_CONFIG_REGION_INDEX,
-                reg_idx as u64 * 4,
+                reg_idx as u64 * 4 + offset,
                 data,
             );
         }
-        LOG!("reg: {reg_idx:>2} offset: {offset:#x} data: {data:?}");
+        LOG!("reg: {reg_idx:>2} data: {data:?} offset: {offset:#x}");
         None
     }
     fn read_config_register(&mut self, reg_idx: usize) -> u32 {
@@ -850,7 +850,7 @@ pub fn vfio_device_region_read(
             region_info.size
         );
     }
-    LOG!("region: {index:>2} offset: {offset:#x}: data: {buf:?}");
+    // LOG!("region: {index:>2} offset: {offset:#x}: data: {buf:?}");
 }
 
 pub fn vfio_device_region_write(
@@ -877,7 +877,7 @@ pub fn vfio_device_region_write(
             region_info.size
         );
     }
-    LOG!("region: {index:>2} offset: {offset:#x}: data: {buf:?}");
+    // LOG!("region: {index:>2} offset: {offset:#x}: data: {buf:?}");
 }
 pub fn device_get_bar_infos(
     device: &impl FileExt,
