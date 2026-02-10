@@ -250,10 +250,9 @@ macro_rules! function_name {
 }
 macro_rules! LOG {
     ($($arg:tt)*) => {
-        println!("[{}:{:<4}:{:<60}] {}", file!(), line!(), function_name!(), format_args!($($arg)*))
+        println!("[{}:{:<4}:{:<80}] {}", file!(), line!(), function_name!(), format_args!($($arg)*))
     };
 }
-
 // This should only serve BARs
 impl BusDevice for VfioDeviceBundle {
     fn read(&mut self, base: u64, offset: u64, data: &mut [u8]) {
@@ -334,6 +333,7 @@ impl PciDevice for VfioDeviceBundle {
         offset: u64,
         data: &[u8],
     ) -> Option<Arc<Barrier>> {
+        let config_offset = reg_idx as u64 * 4 + offset;
         if 4 <= reg_idx && reg_idx < 10 {
             let bar_idx = (reg_idx - 4) as u32;
             for bar_info in self.bar_infos.iter_mut() {
@@ -349,14 +349,15 @@ impl PciDevice for VfioDeviceBundle {
                 &self.device.file,
                 &self.device.region_infos,
                 VFIO_PCI_CONFIG_REGION_INDEX,
-                reg_idx as u64 * 4 + offset,
+                config_offset,
                 data,
             );
         }
-        LOG!("reg: {reg_idx:>2} data: {data:?} offset: {offset:#x}");
+        LOG!("reg: {reg_idx:>3}({config_offset:#>6x}) data: {data:?}");
         None
     }
     fn read_config_register(&mut self, reg_idx: usize) -> u32 {
+        let config_offset = reg_idx as u64 * 4;
         let mut result: u32 = 0;
         if 4 <= reg_idx && reg_idx < 10 {
             let bar_idx = (reg_idx - 4) as u32;
@@ -388,7 +389,7 @@ impl PciDevice for VfioDeviceBundle {
                             &self.device.file,
                             &self.device.region_infos,
                             VFIO_PCI_CONFIG_REGION_INDEX,
-                            reg_idx as u64 * 4,
+                            config_offset,
                             result.as_mut_bytes(),
                         );
                         applied_mask = true;
@@ -402,12 +403,12 @@ impl PciDevice for VfioDeviceBundle {
                     &self.device.file,
                     &self.device.region_infos,
                     VFIO_PCI_CONFIG_REGION_INDEX,
-                    reg_idx as u64 * 4,
+                    config_offset,
                     result.as_mut_bytes(),
                 );
             }
         }
-        LOG!("reg: {reg_idx:>2} data: {:?}", result.as_bytes());
+        LOG!("reg: {reg_idx:>3}({config_offset:#>6x}) data: {:?}", result.as_bytes());
         result
     }
     fn detect_bar_reprogramming(
