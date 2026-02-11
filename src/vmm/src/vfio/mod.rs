@@ -1001,7 +1001,7 @@ pub fn device_get_bar_infos(
             let mut gpa = 0;
             if is_io_bar {
                 LOG!(
-                    "BAR{bar_idx} size: {size:#x} io_bar: {is_io_bar} 64bits: {is_64_bits} \
+                    "BAR{bar_idx} size: {size:>#10x} io_bar: {is_io_bar} 64bits: {is_64_bits} \
                      prefetchable: {is_prefetchable} Skipping"
                 );
                 // TODO
@@ -1024,7 +1024,7 @@ pub fn device_get_bar_infos(
                     .start();
             }
             LOG!(
-                "BAR{bar_idx} size: {size:#x} io_bar: {is_io_bar} 64bits: {is_64_bits} \
+                "BAR{bar_idx} size: {size:>#10x} io_bar: {is_io_bar} 64bits: {is_64_bits} \
                  prefetchable: {is_prefetchable} gpa: {gpa:#x}"
             );
             bar_infos.push(BarInfo {
@@ -1038,7 +1038,7 @@ pub fn device_get_bar_infos(
             });
         } else {
             LOG!(
-                "BAR{bar_idx} size: {size:#x} io_bar: {is_io_bar} 64bits: {is_64_bits} \
+                "BAR{bar_idx} size: {size:>#10x} io_bar: {is_io_bar} 64bits: {is_64_bits} \
                  prefetchable: {is_prefetchable}"
             );
         }
@@ -1198,6 +1198,15 @@ pub fn mmap_bars(
                     msix_table_size = align_page_size_up(size);
                     let offset_in_hole = offset - msix_table_offset;
 
+                    LOG!(
+                        "BAR{} msix_table hole: [{:<#16x} ..{:<#16x}] actual table: [{:<#16x} \
+                         ..{:<#16x}]",
+                        bar_info.idx,
+                        bar_info.gpa + msix_table_offset,
+                        bar_info.gpa + msix_table_offset + msix_table_size,
+                        bar_info.gpa + offset,
+                        bar_info.gpa + offset + size,
+                    );
                     let info = BarHoleInfo {
                         gpa: bar_info.gpa + msix_table_offset,
                         size: msix_table_size,
@@ -1214,6 +1223,15 @@ pub fn mmap_bars(
                     msix_pba_size = align_page_size_up(size);
                     let offset_in_hole = offset - msix_table_offset;
 
+                    LOG!(
+                        "BAR{} pba_table hole: [{:<#16x} ..{:<#16x}] actual table: [{:<#16x} \
+                         ..{:<#16x}]",
+                        bar_info.idx,
+                        bar_info.gpa + msix_table_offset,
+                        bar_info.gpa + msix_table_offset + msix_table_size,
+                        bar_info.gpa + offset,
+                        bar_info.gpa + offset + size,
+                    );
                     let info = BarHoleInfo {
                         gpa: bar_info.gpa + msix_pba_offset,
                         size: msix_pba_size,
@@ -1328,7 +1346,7 @@ pub fn mmap_bars(
                             userspace_addr: host_addr,
                         };
                         LOG!(
-                            "BAR{} kvm gpa: [{:>#16x}..{:>#16x}",
+                            "BAR{} kvm gpa: [{:<#16x} ..{:<#16x}]",
                             bar_info.idx,
                             iova,
                             iova + size
