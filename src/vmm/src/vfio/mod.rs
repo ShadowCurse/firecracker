@@ -967,14 +967,7 @@ pub fn device_get_bar_infos(
 
         // Is this an IO BAR?
         let mut is_io_bar = bar_info & PCI_CONFIG_IO_BAR != 0;
-        if bar_idx == VFIO_PCI_ROM_REGION_INDEX {
-            is_io_bar = false;
-        }
-
         let mut is_64_bits = bar_info & PCI_CONFIG_MEMORY_BAR_64BIT != 0;
-        if bar_idx == VFIO_PCI_ROM_REGION_INDEX {
-            is_64_bits = false;
-        }
         let is_prefetchable = bar_info & PCI_CONFIG_BAR_PREFETCHABLE != 0;
 
         vfio_device_region_write(
@@ -1081,12 +1074,12 @@ pub fn device_get_bar_infos(
 }
 
 pub struct ExpansionRomInfo {
-    gpa: u64,
-    size: u32,
+    pub gpa: u64,
+    pub size: u32,
     // Validation status and Validation Details
-    extra: u16,
+    pub extra: u16,
 
-    rom_bytes: Vec<u8>,
+    pub rom_bytes: Vec<u8>,
 
     // just for testing
     pub about_to_read_size: bool,
@@ -1138,13 +1131,43 @@ pub fn device_get_expansion_rom_info(
             .unwrap()
             .start();
         LOG!(
-            "Expansion ROM gpa: [{:#x}..{:#x}] size: {size:>#10x}",
+            "Expansion ROM gpa: [{:#x}..{:#x}] size: {size:>#10x} Configured from PCI config space",
             gpa,
             gpa + size as u64
         );
         result = Some(ExpansionRomInfo {
             gpa,
             size,
+            extra: (rom_raw & ((1 << 12) - 1)) as u16,
+            rom_bytes,
+            about_to_read_size: false,
+        });
+    } else {
+        let region_info = &region_infos[VFIO_PCI_ROM_REGION_INDEX as usize];
+        let size = region_info.size;
+
+        let mut rom_bytes = vec![0; size as usize];
+        vfio_device_region_read(
+            device,
+            region_infos,
+            VFIO_PCI_ROM_REGION_INDEX,
+            0x0,
+            &mut rom_bytes,
+        );
+
+        let gpa = resource_allocator
+            .mmio32_memory
+            .allocate(size as u64, 64, AllocPolicy::FirstMatch)
+            .unwrap()
+            .start();
+        LOG!(
+            "Expansion ROM gpa: [{:#x}..{:#x}] size: {size:>#10x} Configured from VFIO region",
+            gpa,
+            gpa + size as u64
+        );
+        result = Some(ExpansionRomInfo {
+            gpa,
+            size: size as u32,
             extra: (rom_raw & ((1 << 12) - 1)) as u16,
             rom_bytes,
             about_to_read_size: false,

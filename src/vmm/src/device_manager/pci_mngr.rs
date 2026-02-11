@@ -242,6 +242,12 @@ impl PciDevices {
 
         // Garbage language requires this
         let bar_hole_infos_copy = bar_hole_infos.clone();
+        let mut expansion_rom_gpa = 0;
+        let mut expansion_rom_size = 0;
+        if let Some(rom_info) = expansion_rom_info.as_ref() {
+            expansion_rom_gpa = rom_info.gpa;
+            expansion_rom_size = rom_info.size;
+        }
 
         // add to the segment since we will need to configure MSIs
         let vfio_device_bundle = Arc::new(Mutex::new(VfioDeviceBundle {
@@ -263,6 +269,13 @@ impl PciDevices {
             vm.common
                 .mmio_bus
                 .insert(vfio_device_bundle.clone(), hole.gpa, hole.size)?;
+        }
+        if expansion_rom_gpa != 0 {
+            vm.common.mmio_bus.insert(
+                vfio_device_bundle.clone(),
+                expansion_rom_gpa,
+                expansion_rom_size as u64,
+            )?;
         }
 
         // This is for config space
