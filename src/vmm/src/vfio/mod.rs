@@ -362,6 +362,7 @@ impl PciDevice for VfioDeviceBundle {
         offset: u64,
         data: &[u8],
     ) -> Option<Arc<Barrier>> {
+        let mut name = "----";
         let config_offset = reg_idx as u64 * 4 + offset;
         if 4 <= reg_idx && reg_idx < 10 {
             let bar_idx = (reg_idx - 4) as u32;
@@ -379,10 +380,12 @@ impl PciDevice for VfioDeviceBundle {
                     if looks_like_request_to_read {
                         bar_info.about_to_read_size = true;
                     }
+                    let mut name = "BAR";
                 } else if bar_idx == bar_info.idx + 1 && bar_info.is_64_bits {
                     if looks_like_request_to_read {
                         bar_info.about_to_read_size = true;
                     }
+                    let mut name = "BAR";
                 }
             }
         } else if reg_idx == 12 {
@@ -398,6 +401,7 @@ impl PciDevice for VfioDeviceBundle {
                 if looks_like_request_to_read {
                     rom_info.about_to_read_size = true;
                 }
+                let mut name = "ROM";
             }
         } else {
             vfio_device_region_write(
@@ -408,10 +412,11 @@ impl PciDevice for VfioDeviceBundle {
                 data,
             );
         }
-        LOG!("reg: {reg_idx:>3}({config_offset:>#6x}) data: {data:<4?}");
+        LOG!("reg: {reg_idx:>3}({config_offset:>#6x}) data: {data:<4?} name: {name}");
         None
     }
     fn read_config_register(&mut self, reg_idx: usize) -> u32 {
+        let mut name = "----";
         let config_offset = reg_idx as u64 * 4;
         let mut result: u32 = 0;
         let mut applied_mask: bool = false;
@@ -427,6 +432,7 @@ impl PciDevice for VfioDeviceBundle {
                         let is_prefetchable = if bar_info.is_prefetchable { 0b1000 } else { 0 };
                         result = (bar_info.gpa & 0xFFFF_FFFF) as u32 | is_64_bits | is_prefetchable;
                     }
+                    name = "BAR";
                 } else if bar_info.is_64_bits && bar_idx == bar_info.idx + 1 {
                     if bar_info.about_to_read_size {
                         let size = !(bar_info.size - 1);
@@ -434,6 +440,7 @@ impl PciDevice for VfioDeviceBundle {
                     } else {
                         result = (bar_info.gpa >> 32) as u32;
                     }
+                    name = "BAR";
                 }
             }
         } else if reg_idx == 12 {
@@ -441,8 +448,9 @@ impl PciDevice for VfioDeviceBundle {
                 if rom_info.about_to_read_size {
                     result = rom_info.size;
                 } else {
-                    result = (rom_info.gpa << 11) as u32 | rom_info.extra as u32;
+                    result = (rom_info.gpa << 11) as u32 | rom_info.extra as u32 | 0x1;
                 }
+                name = "ROM";
             }
         } else {
             if let Some(masks) = self.masks.as_ref() {
@@ -472,7 +480,8 @@ impl PciDevice for VfioDeviceBundle {
             }
         }
         LOG!(
-            "reg: {reg_idx:>3}({config_offset:>#6x}) data: {:<4?} applied mask: {applied_mask}",
+            "reg: {reg_idx:>3}({config_offset:>#6x}) data: {:<4?} applied mask: {applied_mask} \
+             name: {name}",
             result.as_bytes()
         );
         result
