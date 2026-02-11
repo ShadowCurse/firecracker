@@ -1246,7 +1246,15 @@ pub fn mmap_bars(
                 && !has_msix_mappable
                 && sparse_mmap_cap.is_none()
             {
-                // continue;
+                LOG!(
+                    "BAR{} contains msix_table: {} msix_pba: {}, but mappable is {} and \
+                     sparse_mmap_cap is {}",
+                    bar_info.idx,
+                    contain_msix_table,
+                    contain_msix_pba,
+                    has_msix_mappable,
+                    sparse_mmap_cap.is_none()
+                );
             } else {
                 let can_mmap = region_info.flags & VFIO_REGION_INFO_FLAG_MMAP != 0;
                 if can_mmap || sparse_mmap_cap.is_some() {
@@ -1366,6 +1374,8 @@ pub fn mmap_bars(
                     }
                 }
             }
+        } else {
+            LOG!("BAR{} has no caps. Skipping", bar_info.idx,);
         }
     }
     infos
