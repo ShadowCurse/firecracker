@@ -1168,214 +1168,210 @@ pub fn mmap_bars(
     let mut infos = Vec::new();
     for bar_info in bar_infos.iter() {
         let region_info = &region_infos[bar_info.idx as usize];
-        if region_info.flags & VFIO_REGION_INFO_FLAG_CAPS != 0 {
-            let mut has_msix_mappable = false;
-            let mut sparse_mmap_cap = None;
-            for cap in region_info.caps.iter() {
-                match cap {
-                    VfioRegionCap::SparseMmap(cap) => sparse_mmap_cap = Some(cap),
-                    VfioRegionCap::MsixMappable => has_msix_mappable = true,
-                    _ => {}
-                }
+        let mut has_msix_mappable = false;
+        let mut sparse_mmap_cap = None;
+        for cap in region_info.caps.iter() {
+            match cap {
+                VfioRegionCap::SparseMmap(cap) => sparse_mmap_cap = Some(cap),
+                VfioRegionCap::MsixMappable => has_msix_mappable = true,
+                _ => {}
             }
-            let mut contain_msix_table: bool = false;
-            let mut msix_table_offset = 0;
-            let mut msix_table_size = 0;
+        }
+        let mut contain_msix_table: bool = false;
+        let mut msix_table_offset = 0;
+        let mut msix_table_size = 0;
 
-            let mut contain_msix_pba: bool = false;
-            let mut msix_pba_offset = 0;
-            let mut msix_pba_size = 0;
+        let mut contain_msix_pba: bool = false;
+        let mut msix_pba_offset = 0;
+        let mut msix_pba_size = 0;
 
-            fn align_page_size_down(v: u64) -> u64 {
-                v & !(4096 - 1)
-            }
-            fn align_page_size_up(v: u64) -> u64 {
-                align_page_size_down(v + 4096)
-            }
-            if let Some(msix_cap) = msix_cap {
-                contain_msix_table = region_info.index == msix_cap.pba_bir();
-                if contain_msix_table {
-                    let (offset, size) = msix_cap.table_range();
-                    msix_table_offset = align_page_size_down(offset);
-                    msix_table_size = align_page_size_up(size);
-                    let offset_in_hole = offset - msix_table_offset;
+        fn align_page_size_down(v: u64) -> u64 {
+            v & !(4096 - 1)
+        }
+        fn align_page_size_up(v: u64) -> u64 {
+            align_page_size_down(v + 4096)
+        }
+        if let Some(msix_cap) = msix_cap {
+            contain_msix_table = region_info.index == msix_cap.pba_bir();
+            if contain_msix_table {
+                let (offset, size) = msix_cap.table_range();
+                msix_table_offset = align_page_size_down(offset);
+                msix_table_size = align_page_size_up(size);
+                let offset_in_hole = offset - msix_table_offset;
 
-                    LOG!(
-                        "BAR{} msix_table hole: [{:#x}..{:#x}] actual table: [{:#x} ..{:#x}]",
-                        bar_info.idx,
-                        bar_info.gpa + msix_table_offset,
-                        bar_info.gpa + msix_table_offset + msix_table_size,
-                        bar_info.gpa + offset,
-                        bar_info.gpa + offset + size,
-                    );
-                    let info = BarHoleInfo {
-                        gpa: bar_info.gpa + msix_table_offset,
-                        size: msix_table_size,
-                        offset_in_hole,
-                        usage: BarHoleInfoUsage::Table,
-                    };
-                    infos.push(info);
-                }
-
-                contain_msix_pba = region_info.index == msix_cap.table_bir();
-                if contain_msix_pba {
-                    let (offset, size) = msix_cap.pba_range();
-                    msix_pba_offset = align_page_size_down(offset);
-                    msix_pba_size = align_page_size_up(size);
-                    let offset_in_hole = offset - msix_table_offset;
-
-                    LOG!(
-                        "BAR{} pba_table hole: [{:#x} ..{:#x}] actual table: [{:#x} ..{:#x}]",
-                        bar_info.idx,
-                        bar_info.gpa + msix_pba_offset,
-                        bar_info.gpa + msix_pba_offset + msix_pba_size,
-                        bar_info.gpa + offset,
-                        bar_info.gpa + offset + size,
-                    );
-                    let info = BarHoleInfo {
-                        gpa: bar_info.gpa + msix_pba_offset,
-                        size: msix_pba_size,
-                        offset_in_hole,
-                        usage: BarHoleInfoUsage::Pba,
-                    };
-                    infos.push(info);
-                }
-            }
-
-            if (contain_msix_table || contain_msix_pba)
-                && !has_msix_mappable
-                && sparse_mmap_cap.is_none()
-            {
                 LOG!(
-                    "BAR{} contains msix_table: {} msix_pba: {}, but mappable is {} and \
-                     sparse_mmap_cap is {}",
+                    "BAR{} msix_table hole: [{:#x}..{:#x}] actual table: [{:#x} ..{:#x}]",
                     bar_info.idx,
-                    contain_msix_table,
-                    contain_msix_pba,
-                    has_msix_mappable,
-                    sparse_mmap_cap.is_none()
+                    bar_info.gpa + msix_table_offset,
+                    bar_info.gpa + msix_table_offset + msix_table_size,
+                    bar_info.gpa + offset,
+                    bar_info.gpa + offset + size,
                 );
-            } else {
-                let can_mmap = region_info.flags & VFIO_REGION_INFO_FLAG_MMAP != 0;
-                if can_mmap || sparse_mmap_cap.is_some() {
-                    let mut prot = 0;
-                    if region_info.flags & VFIO_REGION_INFO_FLAG_READ != 0 {
-                        prot |= libc::PROT_READ;
-                    }
-                    if region_info.flags & VFIO_REGION_INFO_FLAG_WRITE != 0 {
-                        prot |= libc::PROT_WRITE;
-                    }
-                    let region_size = region_info.size;
+                let info = BarHoleInfo {
+                    gpa: bar_info.gpa + msix_table_offset,
+                    size: msix_table_size,
+                    offset_in_hole,
+                    usage: BarHoleInfoUsage::Table,
+                };
+                infos.push(info);
+            }
 
-                    let mut tmp_areas = [VfioRegionSparseMmapArea::default(); 3];
-                    let mut tmp_areas_count = 0;
+            contain_msix_pba = region_info.index == msix_cap.table_bir();
+            if contain_msix_pba {
+                let (offset, size) = msix_cap.pba_range();
+                msix_pba_offset = align_page_size_down(offset);
+                msix_pba_size = align_page_size_up(size);
+                let offset_in_hole = offset - msix_table_offset;
 
-                    let areas: &[VfioRegionSparseMmapArea] = if let Some(cap) = sparse_mmap_cap {
-                        &cap.areas
-                    } else if has_msix_mappable {
-                        let mut first_gap_offset = msix_table_offset;
-                        let mut first_gap_size = msix_table_size;
-                        let mut second_gap_offset = msix_pba_offset;
-                        let mut second_gap_size = msix_pba_size;
-                        if second_gap_offset < first_gap_offset {
-                            second_gap_offset = msix_table_offset;
-                            second_gap_size = msix_table_size;
-                            first_gap_offset = msix_pba_offset;
-                            first_gap_size = msix_pba_size;
-                        }
-                        let mut offset = 0;
-                        if first_gap_size != 0 {
-                            let area_size = first_gap_offset - offset;
-                            if area_size != 0 {
-                                tmp_areas[tmp_areas_count].offset = offset;
-                                tmp_areas[tmp_areas_count].size = area_size;
-                                tmp_areas_count += 1;
-                            }
-                            offset = first_gap_offset + first_gap_size;
-                        }
-                        if second_gap_size != 0 {
-                            let area_size = second_gap_offset - offset;
-                            if area_size != 0 {
-                                tmp_areas[tmp_areas_count].offset = offset;
-                                tmp_areas[tmp_areas_count].size = area_size;
-                                tmp_areas_count += 1;
-                            }
-                            offset = second_gap_offset + second_gap_size;
-                        }
-                        let area_size = region_size - offset;
+                LOG!(
+                    "BAR{} pba_table hole: [{:#x} ..{:#x}] actual table: [{:#x} ..{:#x}]",
+                    bar_info.idx,
+                    bar_info.gpa + msix_pba_offset,
+                    bar_info.gpa + msix_pba_offset + msix_pba_size,
+                    bar_info.gpa + offset,
+                    bar_info.gpa + offset + size,
+                );
+                let info = BarHoleInfo {
+                    gpa: bar_info.gpa + msix_pba_offset,
+                    size: msix_pba_size,
+                    offset_in_hole,
+                    usage: BarHoleInfoUsage::Pba,
+                };
+                infos.push(info);
+            }
+        }
+
+        if (contain_msix_table || contain_msix_pba)
+            && !has_msix_mappable
+            && sparse_mmap_cap.is_none()
+        {
+            LOG!(
+                "BAR{} contains msix_table: {} msix_pba: {}, but mappable is {} and \
+                 sparse_mmap_cap is {}",
+                bar_info.idx,
+                contain_msix_table,
+                contain_msix_pba,
+                has_msix_mappable,
+                sparse_mmap_cap.is_some()
+            );
+        } else {
+            let can_mmap = region_info.flags & VFIO_REGION_INFO_FLAG_MMAP != 0;
+            if can_mmap || sparse_mmap_cap.is_some() {
+                let mut prot = 0;
+                if region_info.flags & VFIO_REGION_INFO_FLAG_READ != 0 {
+                    prot |= libc::PROT_READ;
+                }
+                if region_info.flags & VFIO_REGION_INFO_FLAG_WRITE != 0 {
+                    prot |= libc::PROT_WRITE;
+                }
+                let region_size = region_info.size;
+
+                let mut tmp_areas = [VfioRegionSparseMmapArea::default(); 3];
+                let mut tmp_areas_count = 0;
+
+                let areas: &[VfioRegionSparseMmapArea] = if let Some(cap) = sparse_mmap_cap {
+                    &cap.areas
+                } else if has_msix_mappable {
+                    let mut first_gap_offset = msix_table_offset;
+                    let mut first_gap_size = msix_table_size;
+                    let mut second_gap_offset = msix_pba_offset;
+                    let mut second_gap_size = msix_pba_size;
+                    if second_gap_offset < first_gap_offset {
+                        second_gap_offset = msix_table_offset;
+                        second_gap_size = msix_table_size;
+                        first_gap_offset = msix_pba_offset;
+                        first_gap_size = msix_pba_size;
+                    }
+                    let mut offset = 0;
+                    if first_gap_size != 0 {
+                        let area_size = first_gap_offset - offset;
                         if area_size != 0 {
                             tmp_areas[tmp_areas_count].offset = offset;
                             tmp_areas[tmp_areas_count].size = area_size;
                             tmp_areas_count += 1;
                         }
-                        &tmp_areas[0..tmp_areas_count]
-                    } else {
-                        &[VfioRegionSparseMmapArea {
-                            offset: 0,
-                            size: region_size,
-                        }]
+                        offset = first_gap_offset + first_gap_size;
+                    }
+                    if second_gap_size != 0 {
+                        let area_size = second_gap_offset - offset;
+                        if area_size != 0 {
+                            tmp_areas[tmp_areas_count].offset = offset;
+                            tmp_areas[tmp_areas_count].size = area_size;
+                            tmp_areas_count += 1;
+                        }
+                        offset = second_gap_offset + second_gap_size;
+                    }
+                    let area_size = region_size - offset;
+                    if area_size != 0 {
+                        tmp_areas[tmp_areas_count].offset = offset;
+                        tmp_areas[tmp_areas_count].size = area_size;
+                        tmp_areas_count += 1;
+                    }
+                    &tmp_areas[0..tmp_areas_count]
+                } else {
+                    &[VfioRegionSparseMmapArea {
+                        offset: 0,
+                        size: region_size,
+                    }]
+                };
+
+                for area in areas.iter() {
+                    assert!(
+                        (area.size & (4096 - 1)) == 0,
+                        "Aresa size is not page aligned"
+                    );
+                    assert!(
+                        (area.offset & (4096 - 1)) == 0,
+                        "Aresa offset is not page aligned"
+                    );
+                    let region_offset = region_info.offset;
+                    // SAFETY: FFI call with correct arguments
+                    let host_addr = unsafe {
+                        libc::mmap(
+                            std::ptr::null_mut(),
+                            area.size as usize,
+                            prot,
+                            libc::MAP_SHARED,
+                            device.as_raw_fd(),
+                            (region_offset + area.offset) as i64,
+                        )
                     };
 
-                    for area in areas.iter() {
-                        assert!(
-                            (area.size & (4096 - 1)) == 0,
-                            "Aresa size is not page aligned"
-                        );
-                        assert!(
-                            (area.offset & (4096 - 1)) == 0,
-                            "Aresa offset is not page aligned"
-                        );
-                        let region_offset = region_info.offset;
-                        // SAFETY: FFI call with correct arguments
-                        let host_addr = unsafe {
-                            libc::mmap(
-                                std::ptr::null_mut(),
-                                area.size as usize,
-                                prot,
-                                libc::MAP_SHARED,
-                                device.as_raw_fd(),
-                                (region_offset + area.offset) as i64,
-                            )
-                        };
-
-                        if host_addr == libc::MAP_FAILED {
-                            panic!("mmap failed");
-                        }
-
-                        let iova = bar_info.gpa + area.offset;
-                        let size = area.size;
-                        let host_addr = host_addr as u64;
-
-                        let kvm_memory_region = kvm_userspace_memory_region {
-                            slot: vm.next_kvm_slot(1).unwrap(),
-                            flags: 0,
-                            guest_phys_addr: iova,
-                            memory_size: size,
-                            userspace_addr: host_addr,
-                        };
-                        LOG!(
-                            "BAR{} kvm gpa: [{:#x} ..{:#x}]",
-                            bar_info.idx,
-                            iova,
-                            iova + size
-                        );
-                        vm.set_user_memory_region(kvm_memory_region).unwrap();
-
-                        // TODO: if viortio-iommu is attached no dma setup is
-                        // needed at this stage
-                        let dma_map = vfio_iommu_type1_dma_map {
-                            argsz: std::mem::size_of::<vfio_iommu_type1_dma_map>() as u32,
-                            flags: VFIO_DMA_MAP_FLAG_READ | VFIO_DMA_MAP_FLAG_WRITE,
-                            vaddr: host_addr,
-                            iova: iova,
-                            size: size,
-                        };
-                        iommu_map_dma(container, &dma_map).unwrap();
+                    if host_addr == libc::MAP_FAILED {
+                        panic!("mmap failed");
                     }
+
+                    let iova = bar_info.gpa + area.offset;
+                    let size = area.size;
+                    let host_addr = host_addr as u64;
+
+                    let kvm_memory_region = kvm_userspace_memory_region {
+                        slot: vm.next_kvm_slot(1).unwrap(),
+                        flags: 0,
+                        guest_phys_addr: iova,
+                        memory_size: size,
+                        userspace_addr: host_addr,
+                    };
+                    LOG!(
+                        "BAR{} kvm gpa: [{:#x} ..{:#x}]",
+                        bar_info.idx,
+                        iova,
+                        iova + size
+                    );
+                    vm.set_user_memory_region(kvm_memory_region).unwrap();
+
+                    // TODO: if viortio-iommu is attached no dma setup is
+                    // needed at this stage
+                    let dma_map = vfio_iommu_type1_dma_map {
+                        argsz: std::mem::size_of::<vfio_iommu_type1_dma_map>() as u32,
+                        flags: VFIO_DMA_MAP_FLAG_READ | VFIO_DMA_MAP_FLAG_WRITE,
+                        vaddr: host_addr,
+                        iova: iova,
+                        size: size,
+                    };
+                    iommu_map_dma(container, &dma_map).unwrap();
                 }
             }
-        } else {
-            LOG!("BAR{} has no caps. Skipping", bar_info.idx,);
         }
     }
     infos
