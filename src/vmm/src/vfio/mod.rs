@@ -257,8 +257,9 @@ macro_rules! LOG {
 // This should only serve BARs
 impl BusDevice for VfioDeviceBundle {
     fn read(&mut self, base: u64, offset: u64, data: &mut [u8]) {
-        let mut table_name = "----";
         if let Some(msix_config) = self.msix_config.as_ref() {
+            let mut table_name = "----";
+            let mut handled: bool = false;
             for info in self.bar_hole_infos.iter() {
                 if info.gpa == base {
                     if info.offset_in_hole <= offset && offset < info.offset_in_hole + info.size {
@@ -287,11 +288,22 @@ impl BusDevice for VfioDeviceBundle {
                             data,
                         );
                     }
+                    handled = true;
+                }
+            }
+            if !handled {
+                if let Some(rom_info) = self.expansion_rom_info.as_ref() {
+                    if rom_info.gpa == base {
+                        data.clone_from_slice(
+                            &rom_info.rom_bytes[offset as usize..offset as usize + data.len()],
+                        );
+                        handled = true;
+                    }
                 }
             }
             LOG!(
                 "base: {base:<#10x} offset: {offset:<#5x} data: {data:<4?} table_name: \
-                 {table_name}"
+                 {table_name} handled: {handled}"
             );
         } else {
             panic!("Should never happen");
@@ -940,13 +952,9 @@ pub fn device_get_bar_infos(
     resource_allocator: &mut ResourceAllocator,
 ) -> Vec<BarInfo> {
     let mut bar_infos = Vec::new();
-    let mut bar_idx = VFIO_PCI_BAR0_REGION_INDEX;
-    while bar_idx <= VFIO_PCI_BAR5_REGION_INDEX {
-        let bar_offset = if bar_idx == VFIO_PCI_ROM_REGION_INDEX {
-            (PCI_ROM_EXP_BAR_INDEX * 4) as u32
-        } else {
-            PCI_CONFIG_BAR_OFFSET + bar_idx * 4
-        };
+    let mut bar_idx = 0;
+    while bar_idx < 6 {
+        let bar_offset = 0x10 + bar_idx * 4;
 
         let mut bar_info: u32 = 0;
         vfio_device_region_read(
@@ -1078,6 +1086,8 @@ pub struct ExpansionRomInfo {
     // Validation status and Validation Details
     extra: u16,
 
+    rom_bytes: Vec<u8>,
+
     // just for testing
     pub about_to_read_size: bool,
 }
@@ -1112,6 +1122,16 @@ pub fn device_get_expansion_rom_info(
             rom_size.as_mut_bytes(),
         );
         let size = (rom_size & !((1 << 12) - 1)) as u32;
+
+        let mut rom_bytes = vec![0; size as usize];
+        vfio_device_region_read(
+            device,
+            region_infos,
+            VFIO_PCI_ROM_REGION_INDEX,
+            0x0,
+            &mut rom_bytes,
+        );
+
         let gpa = resource_allocator
             .mmio32_memory
             .allocate(size as u64, 64, AllocPolicy::FirstMatch)
@@ -1126,6 +1146,7 @@ pub fn device_get_expansion_rom_info(
             gpa,
             size,
             extra: (rom_raw & ((1 << 12) - 1)) as u16,
+            rom_bytes,
             about_to_read_size: false,
         });
     }
@@ -1458,64 +1479,6 @@ pub fn mmap_bars(
         }
     }
     infos
-}
-
-pub fn mmap_expansion_rom(
-    container: &File,
-    device: &File,
-    expansion_rom_info: &ExpansionRomInfo,
-    region_infos: &[VfioRegionInfo],
-    vm: &Vm,
-) {
-    let region_info = &region_infos[VFIO_PCI_ROM_REGION_INDEX as usize];
-    let region_offset = region_info.offset;
-    let mut prot = 0;
-    if region_info.flags & VFIO_REGION_INFO_FLAG_READ != 0 {
-        prot |= libc::PROT_READ;
-    }
-    if region_info.flags & VFIO_REGION_INFO_FLAG_WRITE != 0 {
-        prot |= libc::PROT_WRITE;
-    }
-    // SAFETY: FFI call with correct arguments
-    let host_addr = unsafe {
-        libc::mmap(
-            std::ptr::null_mut(),
-            expansion_rom_info.size as usize,
-            prot,
-            libc::MAP_SHARED,
-            device.as_raw_fd(),
-            region_offset as i64,
-        )
-    };
-
-    if host_addr == libc::MAP_FAILED {
-        panic!("mmap failed");
-    }
-
-    let iova = expansion_rom_info.gpa;
-    let size = expansion_rom_info.size as u64;
-    let host_addr = host_addr as u64;
-
-    let kvm_memory_region = kvm_userspace_memory_region {
-        slot: vm.next_kvm_slot(1).unwrap(),
-        flags: 0,
-        guest_phys_addr: iova,
-        memory_size: size,
-        userspace_addr: host_addr,
-    };
-    LOG!("Expansion ROM kvm gpa: [{:#x} ..{:#x}]", iova, iova + size);
-    vm.set_user_memory_region(kvm_memory_region).unwrap();
-
-    // TODO: if viortio-iommu is attached no dma setup is
-    // needed at this stage
-    let dma_map = vfio_iommu_type1_dma_map {
-        argsz: std::mem::size_of::<vfio_iommu_type1_dma_map>() as u32,
-        flags: VFIO_DMA_MAP_FLAG_READ | VFIO_DMA_MAP_FLAG_WRITE,
-        vaddr: host_addr,
-        iova: iova,
-        size: size,
-    };
-    iommu_map_dma(container, &dma_map).unwrap();
 }
 
 pub fn dma_map_guest_memory(container: &impl AsRawFd, guest_memory: &GuestMemoryMmap) {

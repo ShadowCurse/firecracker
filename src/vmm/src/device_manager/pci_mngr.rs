@@ -224,15 +224,6 @@ impl PciDevices {
             msix_cap.as_ref(),
             vm.as_ref(),
         );
-        if let Some(rom_info) = expansion_rom_info.as_ref() {
-            crate::vfio::mmap_expansion_rom(
-                &container,
-                &device.file,
-                rom_info,
-                &device.region_infos,
-                vm.as_ref(),
-            );
-        }
         crate::vfio::dma_map_guest_memory(container, vm.guest_memory());
         let _config_space_info =
             crate::vfio::device_get_config_space_info(&device.file, &device.region_infos);
