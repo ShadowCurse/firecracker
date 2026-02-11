@@ -228,6 +228,7 @@ pub struct VfioDeviceBundle {
     pub group: File,
     pub device: VfioDevice,
     pub bar_infos: Vec<BarInfo>,
+    pub expansion_rom_info: Option<ExpansionRomInfo>,
 
     pub msi_cap: Option<MsiCap>,
 
@@ -372,6 +373,20 @@ impl PciDevice for VfioDeviceBundle {
                     }
                 }
             }
+        } else if reg_idx == 12 {
+            if let Some(rom_info) = self.expansion_rom_info.as_mut() {
+                // Expansino Rom
+                let mut looks_like_request_to_read: bool = false;
+                if data.len() == 4 {
+                    let d: u32 = u32::from_le_bytes(data.try_into().unwrap());
+                    if d == 0xFFFF_FFFF {
+                        looks_like_request_to_read = true;
+                    }
+                }
+                if looks_like_request_to_read {
+                    rom_info.about_to_read_size = true;
+                }
+            }
         } else {
             vfio_device_region_write(
                 &self.device.file,
@@ -407,6 +422,14 @@ impl PciDevice for VfioDeviceBundle {
                     } else {
                         result = (bar_info.gpa >> 32) as u32;
                     }
+                }
+            }
+        } else if reg_idx == 12 {
+            if let Some(rom_info) = self.expansion_rom_info.as_mut() {
+                if rom_info.about_to_read_size {
+                    result = rom_info.size;
+                } else {
+                    result = (rom_info.gpa << 11) as u32 | rom_info.extra as u32;
                 }
             }
         } else {
@@ -1049,6 +1072,66 @@ pub fn device_get_bar_infos(
     bar_infos
 }
 
+pub struct ExpansionRomInfo {
+    gpa: u64,
+    size: u32,
+    // Validation status and Validation Details
+    extra: u16,
+
+    // just for testing
+    pub about_to_read_size: bool,
+}
+pub fn device_get_expansion_rom_info(
+    device: &impl FileExt,
+    region_infos: &[VfioRegionInfo],
+    resource_allocator: &mut ResourceAllocator,
+) -> Option<ExpansionRomInfo> {
+    let mut rom_raw: u32 = 0;
+    vfio_device_region_read(
+        device,
+        region_infos,
+        VFIO_PCI_CONFIG_REGION_INDEX,
+        0x30,
+        rom_raw.as_mut_bytes(),
+    );
+    let mut result = None;
+    if rom_raw & 0x1 != 0 {
+        vfio_device_region_write(
+            device,
+            region_infos,
+            VFIO_PCI_CONFIG_REGION_INDEX,
+            0x30,
+            0xffff_ffff_u32.as_bytes(),
+        );
+        let mut rom_size: u32 = 0;
+        vfio_device_region_read(
+            device,
+            region_infos,
+            VFIO_PCI_CONFIG_REGION_INDEX,
+            0x30,
+            rom_size.as_mut_bytes(),
+        );
+        let size = (rom_size & !((1 << 12) - 1)) as u32;
+        let gpa = resource_allocator
+            .mmio32_memory
+            .allocate(size as u64, 64, AllocPolicy::FirstMatch)
+            .unwrap()
+            .start();
+        LOG!(
+            "Expansion ROM gpa: [{:#x}..{:#x}] size: {size:>#10x}",
+            gpa,
+            gpa + size as u64
+        );
+        result = Some(ExpansionRomInfo {
+            gpa,
+            size,
+            extra: (rom_raw & ((1 << 12) - 1)) as u16,
+            about_to_read_size: false,
+        });
+    }
+    return result;
+}
+
 pub struct ConfigSpaceInfo {
     pub vendor_id: u16,
     pub device_id: u16,
@@ -1375,6 +1458,64 @@ pub fn mmap_bars(
         }
     }
     infos
+}
+
+pub fn mmap_expansion_rom(
+    container: &File,
+    device: &File,
+    expansion_rom_info: &ExpansionRomInfo,
+    region_infos: &[VfioRegionInfo],
+    vm: &Vm,
+) {
+    let region_info = &region_infos[VFIO_PCI_ROM_REGION_INDEX as usize];
+    let region_offset = region_info.offset;
+    let mut prot = 0;
+    if region_info.flags & VFIO_REGION_INFO_FLAG_READ != 0 {
+        prot |= libc::PROT_READ;
+    }
+    if region_info.flags & VFIO_REGION_INFO_FLAG_WRITE != 0 {
+        prot |= libc::PROT_WRITE;
+    }
+    // SAFETY: FFI call with correct arguments
+    let host_addr = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            expansion_rom_info.size as usize,
+            prot,
+            libc::MAP_SHARED,
+            device.as_raw_fd(),
+            region_offset as i64,
+        )
+    };
+
+    if host_addr == libc::MAP_FAILED {
+        panic!("mmap failed");
+    }
+
+    let iova = expansion_rom_info.gpa;
+    let size = expansion_rom_info.size as u64;
+    let host_addr = host_addr as u64;
+
+    let kvm_memory_region = kvm_userspace_memory_region {
+        slot: vm.next_kvm_slot(1).unwrap(),
+        flags: 0,
+        guest_phys_addr: iova,
+        memory_size: size,
+        userspace_addr: host_addr,
+    };
+    LOG!("Expansion ROM kvm gpa: [{:#x} ..{:#x}]", iova, iova + size);
+    vm.set_user_memory_region(kvm_memory_region).unwrap();
+
+    // TODO: if viortio-iommu is attached no dma setup is
+    // needed at this stage
+    let dma_map = vfio_iommu_type1_dma_map {
+        argsz: std::mem::size_of::<vfio_iommu_type1_dma_map>() as u32,
+        flags: VFIO_DMA_MAP_FLAG_READ | VFIO_DMA_MAP_FLAG_WRITE,
+        vaddr: host_addr,
+        iova: iova,
+        size: size,
+    };
+    iommu_map_dma(container, &dma_map).unwrap();
 }
 
 pub fn dma_map_guest_memory(container: &impl AsRawFd, guest_memory: &GuestMemoryMmap) {

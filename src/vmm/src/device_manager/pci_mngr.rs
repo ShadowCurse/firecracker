@@ -196,14 +196,20 @@ impl PciDevices {
 
         let device = crate::vfio::get_device(&group, path);
 
-        let bar_infos = {
+        let (bar_infos, expansion_rom_info) = {
             let mut resource_allocator_lock = vm.resource_allocator();
             let resource_allocator = resource_allocator_lock.deref_mut();
-            crate::vfio::device_get_bar_infos(
+            let bar_infos = crate::vfio::device_get_bar_infos(
                 &device.file,
                 &device.region_infos,
                 resource_allocator,
-            )
+            );
+            let rom_info = crate::vfio::device_get_expansion_rom_info(
+                &device.file,
+                &device.region_infos,
+                resource_allocator,
+            );
+            (bar_infos, rom_info)
         };
         let (msi_cap, msix_cap, masks) = crate::vfio::vfio_device_get_pci_capabilities(
             &device.file,
@@ -218,6 +224,15 @@ impl PciDevices {
             msix_cap.as_ref(),
             vm.as_ref(),
         );
+        if let Some(rom_info) = expansion_rom_info.as_ref() {
+            crate::vfio::mmap_expansion_rom(
+                &container,
+                &device.file,
+                rom_info,
+                &device.region_infos,
+                vm.as_ref(),
+            );
+        }
         crate::vfio::dma_map_guest_memory(container, vm.guest_memory());
         let _config_space_info =
             crate::vfio::device_get_config_space_info(&device.file, &device.region_infos);
@@ -244,6 +259,7 @@ impl PciDevices {
             group,
             device,
             bar_infos,
+            expansion_rom_info,
             bar_hole_infos,
             msi_cap,
             msix_cap,
