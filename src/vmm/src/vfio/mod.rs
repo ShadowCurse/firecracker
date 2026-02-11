@@ -1227,8 +1227,8 @@ pub fn mmap_bars(
                     LOG!(
                         "BAR{} pba_table hole: [{:#x} ..{:#x}] actual table: [{:#x} ..{:#x}]",
                         bar_info.idx,
-                        bar_info.gpa + msix_table_offset,
-                        bar_info.gpa + msix_table_offset + msix_table_size,
+                        bar_info.gpa + msix_pba_offset,
+                        bar_info.gpa + msix_pba_offset + msix_pba_size,
                         bar_info.gpa + offset,
                         bar_info.gpa + offset + size,
                     );
