@@ -381,7 +381,7 @@ impl PciDevice for VfioDeviceBundle {
                 data,
             );
         }
-        LOG!("reg: {reg_idx:>3}({config_offset:>#6x}) data: {data:?}");
+        LOG!("reg: {reg_idx:>3}({config_offset:>#6x}) data: {data:<4?}");
         None
     }
     fn read_config_register(&mut self, reg_idx: usize) -> u32 {
@@ -437,7 +437,7 @@ impl PciDevice for VfioDeviceBundle {
             }
         }
         LOG!(
-            "reg: {reg_idx:>3}({config_offset:>#6x}) data: {:?} applied mask: {applied_mask}",
+            "reg: {reg_idx:>3}({config_offset:>#6x}) data: {:<4?} applied mask: {applied_mask}",
             result.as_bytes()
         );
         result
@@ -919,7 +919,6 @@ pub fn device_get_bar_infos(
     let mut bar_infos = Vec::new();
     let mut bar_idx = VFIO_PCI_BAR0_REGION_INDEX;
     while bar_idx <= VFIO_PCI_BAR5_REGION_INDEX {
-        LOG!("Gettig BAR{bar_idx} info");
         let bar_offset = if bar_idx == VFIO_PCI_ROM_REGION_INDEX {
             (PCI_ROM_EXP_BAR_INDEX * 4) as u32
         } else {
@@ -1328,7 +1327,12 @@ pub fn mmap_bars(
                             memory_size: size,
                             userspace_addr: host_addr,
                         };
-                        LOG!("Setting kvm memory region: {kvm_memory_region:#?}");
+                        LOG!(
+                            "BAR{} kvm gpa: [{:>#16x}..{:>#16x}",
+                            bar_info.idx,
+                            iova,
+                            iova + size
+                        );
                         vm.set_user_memory_region(kvm_memory_region).unwrap();
 
                         // TODO: if viortio-iommu is attached no dma setup is
@@ -1340,7 +1344,6 @@ pub fn mmap_bars(
                             iova: iova,
                             size: size,
                         };
-                        LOG!("Setting iommio dma region: {dma_map:#?}");
                         iommu_map_dma(container, &dma_map).unwrap();
                     }
                 }
