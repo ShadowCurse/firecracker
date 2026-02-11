@@ -1024,8 +1024,10 @@ pub fn device_get_bar_infos(
                     .start();
             }
             LOG!(
-                "BAR{bar_idx} size: {size:>#10x} io_bar: {is_io_bar} 64bits: {is_64_bits} \
-                 prefetchable: {is_prefetchable} gpa: {gpa:#x}"
+                "BAR{bar_idx} gpa: [{:#x}..{:#x}] size: {size:>#10x} io_bar: {is_io_bar} 64bits: \
+                 {is_64_bits} prefetchable: {is_prefetchable}",
+                gpa,
+                gpa + size
             );
             bar_infos.push(BarInfo {
                 idx,
@@ -1168,10 +1170,10 @@ pub fn mmap_bars(
         let region_info = &region_infos[bar_info.idx as usize];
         if region_info.flags & VFIO_REGION_INFO_FLAG_CAPS != 0 {
             let mut has_msix_mappable = false;
-            let mut sparce_mmap_cap = None;
+            let mut sparse_mmap_cap = None;
             for cap in region_info.caps.iter() {
                 match cap {
-                    VfioRegionCap::SparseMmap(cap) => sparce_mmap_cap = Some(cap),
+                    VfioRegionCap::SparseMmap(cap) => sparse_mmap_cap = Some(cap),
                     VfioRegionCap::MsixMappable => has_msix_mappable = true,
                     _ => {}
                 }
@@ -1199,8 +1201,7 @@ pub fn mmap_bars(
                     let offset_in_hole = offset - msix_table_offset;
 
                     LOG!(
-                        "BAR{} msix_table hole: [{:<#16x} ..{:<#16x}] actual table: [{:<#16x} \
-                         ..{:<#16x}]",
+                        "BAR{} msix_table hole: [{:#x}..{:#x}] actual table: [{:#x} ..{:#x}]",
                         bar_info.idx,
                         bar_info.gpa + msix_table_offset,
                         bar_info.gpa + msix_table_offset + msix_table_size,
@@ -1224,8 +1225,7 @@ pub fn mmap_bars(
                     let offset_in_hole = offset - msix_table_offset;
 
                     LOG!(
-                        "BAR{} pba_table hole: [{:<#16x} ..{:<#16x}] actual table: [{:<#16x} \
-                         ..{:<#16x}]",
+                        "BAR{} pba_table hole: [{:#x} ..{:#x}] actual table: [{:#x} ..{:#x}]",
                         bar_info.idx,
                         bar_info.gpa + msix_table_offset,
                         bar_info.gpa + msix_table_offset + msix_table_size,
@@ -1244,12 +1244,12 @@ pub fn mmap_bars(
 
             if (contain_msix_table || contain_msix_pba)
                 && !has_msix_mappable
-                && sparce_mmap_cap.is_none()
+                && sparse_mmap_cap.is_none()
             {
                 // continue;
             } else {
                 let can_mmap = region_info.flags & VFIO_REGION_INFO_FLAG_MMAP != 0;
-                if can_mmap || sparce_mmap_cap.is_some() {
+                if can_mmap || sparse_mmap_cap.is_some() {
                     let mut prot = 0;
                     if region_info.flags & VFIO_REGION_INFO_FLAG_READ != 0 {
                         prot |= libc::PROT_READ;
@@ -1262,7 +1262,7 @@ pub fn mmap_bars(
                     let mut tmp_areas = [VfioRegionSparseMmapArea::default(); 3];
                     let mut tmp_areas_count = 0;
 
-                    let areas: &[VfioRegionSparseMmapArea] = if let Some(cap) = sparce_mmap_cap {
+                    let areas: &[VfioRegionSparseMmapArea] = if let Some(cap) = sparse_mmap_cap {
                         &cap.areas
                     } else if has_msix_mappable {
                         let mut first_gap_offset = msix_table_offset;
@@ -1346,7 +1346,7 @@ pub fn mmap_bars(
                             userspace_addr: host_addr,
                         };
                         LOG!(
-                            "BAR{} kvm gpa: [{:<#16x} ..{:<#16x}]",
+                            "BAR{} kvm gpa: [{:#x} ..{:#x}]",
                             bar_info.idx,
                             iova,
                             iova + size
