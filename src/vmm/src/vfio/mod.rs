@@ -1179,9 +1179,9 @@ pub fn device_get_expansion_rom_info(
                 std::ptr::null_mut(),
                 size as usize,
                 libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_SHARED,
-                device.as_raw_fd(),
-                region_info.offset as i64,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
             )
         };
         if host_addr == libc::MAP_FAILED {
