@@ -412,16 +412,13 @@ impl PciDevice for VfioDeviceBundle {
             }
         } else if reg_idx == 12 {
             if let Some(rom_info) = self.expansion_rom_info.as_mut() {
-                // Expansino Rom
-                let mut looks_like_request_to_read: bool = false;
                 if data.len() == 4 {
                     let d: u32 = u32::from_le_bytes(data.try_into().unwrap());
                     if d & 0xFFFFF800 == 0xFFFFF800 {
-                        looks_like_request_to_read = true;
+                        rom_info.about_to_read_size = true;
+                    } else {
+                        rom_info.extra = (d & ((1 << 12) - 1)) as u16;
                     }
-                }
-                if looks_like_request_to_read {
-                    rom_info.about_to_read_size = true;
                 }
                 name = "ROM";
                 handled = true;
@@ -486,7 +483,7 @@ impl PciDevice for VfioDeviceBundle {
                     result = !(rom_info.rom_size - 1);
                     rom_info.about_to_read_size = false;
                 } else {
-                    result = (rom_info.gpa & 0xFFFF_F800) as u32 | rom_info.extra as u32 | 0x1;
+                    result = (rom_info.gpa & 0xFFFF_F800) as u32 | rom_info.extra as u32;
                 }
                 name = "ROM";
             }
@@ -1141,7 +1138,6 @@ pub struct ExpansionRomInfo {
     pub about_to_read_size: bool,
 }
 pub fn device_get_expansion_rom_info(
-    container: &File,
     device: &File,
     region_infos: &[VfioRegionInfo],
     resource_allocator: &mut ResourceAllocator,

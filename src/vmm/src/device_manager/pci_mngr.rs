@@ -205,7 +205,6 @@ impl PciDevices {
                 resource_allocator,
             );
             let rom_info = crate::vfio::device_get_expansion_rom_info(
-                &container,
                 &device.file,
                 &device.region_infos,
                 resource_allocator,
