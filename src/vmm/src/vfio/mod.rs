@@ -427,7 +427,7 @@ impl PciDevice for VfioDeviceBundle {
                 handled = true;
             }
         } else if let Some(msix_cap) = self.msix_cap.as_ref() {
-            if reg_idx as u8 == msix_cap.register {
+            if reg_idx == msix_cap.register as usize {
                 if offset == 2 && data.len() == 2 {
                     let data = u16::from_le_bytes(data.try_into().unwrap());
                     self.msix_config.as_mut().unwrap().set_msg_ctl(data);
@@ -492,30 +492,51 @@ impl PciDevice for VfioDeviceBundle {
                 name = "ROM";
             }
         } else {
-            if let Some(masks) = self.masks.as_ref() {
-                for mask in masks.iter() {
-                    if mask.register == reg_idx as u16 {
-                        vfio_device_region_read(
-                            &self.device.file,
-                            &self.device.region_infos,
-                            VFIO_PCI_CONFIG_REGION_INDEX,
-                            config_offset,
-                            result.as_mut_bytes(),
-                        );
-                        applied_mask = true;
-                        result = (result & mask.mask) | mask.value;
-                        break;
+            if let Some(msix_cap) = self.msix_cap.as_ref() {
+                if reg_idx == msix_cap.register as usize {
+                    let msix_config = self.msix_config.as_ref().unwrap();
+
+                    vfio_device_region_read(
+                        &self.device.file,
+                        &self.device.region_infos,
+                        VFIO_PCI_CONFIG_REGION_INDEX,
+                        config_offset,
+                        result.as_mut_bytes(),
+                    );
+
+                    result = ((msix_config.enabled as u32) << 31)
+                        | ((msix_config.masked as u32) << 30)
+                        | result;
+                    name = "MSIX_CAP";
+                }
+            } else {
+                if let Some(masks) = self.masks.as_ref() {
+                    for mask in masks.iter() {
+                        if mask.register == reg_idx as u16 {
+                            vfio_device_region_read(
+                                &self.device.file,
+                                &self.device.region_infos,
+                                VFIO_PCI_CONFIG_REGION_INDEX,
+                                config_offset,
+                                result.as_mut_bytes(),
+                            );
+                            applied_mask = true;
+                            result = (result & mask.mask) | mask.value;
+                            name = "MASK";
+                            break;
+                        }
                     }
                 }
-            }
-            if !applied_mask {
-                vfio_device_region_read(
-                    &self.device.file,
-                    &self.device.region_infos,
-                    VFIO_PCI_CONFIG_REGION_INDEX,
-                    config_offset,
-                    result.as_mut_bytes(),
-                );
+                if !applied_mask {
+                    vfio_device_region_read(
+                        &self.device.file,
+                        &self.device.region_infos,
+                        VFIO_PCI_CONFIG_REGION_INDEX,
+                        config_offset,
+                        result.as_mut_bytes(),
+                    );
+                    name = "DIRECT";
+                }
             }
         }
         LOG!(
