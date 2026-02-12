@@ -192,16 +192,12 @@ pub fn device_get_info(
 }
 
 pub fn device_set_irqs(device: &impl AsRawFd, irq_set: &vfio_irq_set) -> Result<(), VfioError> {
-    if std::mem::size_of_val(irq_set) < irq_set.argsz as usize {
+    // SAFETY: we are the owner of self and irq_set which are valid value
+    let ret = unsafe { ioctl_with_ref(device, VFIO_DEVICE_SET_IRQS(), irq_set) };
+    if ret < 0 {
         Err(VfioError::VfioDeviceSetIrq)
     } else {
-        // SAFETY: we are the owner of self and irq_set which are valid value
-        let ret = unsafe { ioctl_with_ref(device, VFIO_DEVICE_SET_IRQS(), irq_set) };
-        if ret < 0 {
-            Err(VfioError::VfioDeviceSetIrq)
-        } else {
-            Ok(())
-        }
+        Ok(())
     }
 }
 
