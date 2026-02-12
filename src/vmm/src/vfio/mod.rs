@@ -455,7 +455,6 @@ impl PciDevice for VfioDeviceBundle {
         let mut name = "----";
         let config_offset = reg_idx as u64 * 4;
         let mut result: u32 = 0;
-        let mut applied_mask: bool = false;
         if 4 <= reg_idx && reg_idx < 10 {
             let bar_idx = (reg_idx - 4) as u32;
             for bar_info in self.bar_infos.iter_mut() {
@@ -492,56 +491,34 @@ impl PciDevice for VfioDeviceBundle {
                 name = "ROM";
             }
         } else {
+            vfio_device_region_read(
+                &self.device.file,
+                &self.device.region_infos,
+                VFIO_PCI_CONFIG_REGION_INDEX,
+                config_offset,
+                result.as_mut_bytes(),
+            );
             if let Some(msix_cap) = self.msix_cap.as_ref() {
                 if reg_idx == msix_cap.register as usize {
                     let msix_config = self.msix_config.as_ref().unwrap();
-
-                    vfio_device_region_read(
-                        &self.device.file,
-                        &self.device.region_infos,
-                        VFIO_PCI_CONFIG_REGION_INDEX,
-                        config_offset,
-                        result.as_mut_bytes(),
-                    );
-
                     result = ((msix_config.enabled as u32) << 31)
                         | ((msix_config.masked as u32) << 30)
                         | result;
                     name = "MSIX_CAP";
                 }
-            } else {
-                if let Some(masks) = self.masks.as_ref() {
-                    for mask in masks.iter() {
-                        if mask.register == reg_idx as u16 {
-                            vfio_device_region_read(
-                                &self.device.file,
-                                &self.device.region_infos,
-                                VFIO_PCI_CONFIG_REGION_INDEX,
-                                config_offset,
-                                result.as_mut_bytes(),
-                            );
-                            applied_mask = true;
-                            result = (result & mask.mask) | mask.value;
-                            name = "MASK";
-                            break;
-                        }
+            }
+            if let Some(masks) = self.masks.as_ref() {
+                for mask in masks.iter() {
+                    if mask.register == reg_idx as u16 {
+                        result = (result & mask.mask) | mask.value;
+                        name = "MASK";
+                        break;
                     }
-                }
-                if !applied_mask {
-                    vfio_device_region_read(
-                        &self.device.file,
-                        &self.device.region_infos,
-                        VFIO_PCI_CONFIG_REGION_INDEX,
-                        config_offset,
-                        result.as_mut_bytes(),
-                    );
-                    name = "DIRECT";
                 }
             }
         }
         LOG!(
-            "reg: {reg_idx:>3}({config_offset:>#6x}) data: {:<4?} applied mask: {applied_mask} \
-             name: {name}",
+            "reg: {reg_idx:>3}({config_offset:>#6x}) data: {:<4?} name: {name}",
             result.as_bytes()
         );
         result
