@@ -382,6 +382,7 @@ impl PciDevice for VfioDeviceBundle {
         data: &[u8],
     ) -> Option<Arc<Barrier>> {
         let mut name = "----";
+        let mut handled: bool = false;
         let config_offset = reg_idx as u64 * 4 + offset;
         if 4 <= reg_idx && reg_idx < 10 {
             let bar_idx = (reg_idx - 4) as u32;
@@ -400,11 +401,13 @@ impl PciDevice for VfioDeviceBundle {
                         bar_info.about_to_read_size = true;
                     }
                     name = "BAR";
+                    handled = true;
                 } else if bar_idx == bar_info.idx + 1 && bar_info.is_64_bits {
                     if looks_like_request_to_read {
                         bar_info.about_to_read_size = true;
                     }
                     name = "BAR";
+                    handled = true;
                 }
             }
         } else if reg_idx == 12 {
@@ -421,9 +424,9 @@ impl PciDevice for VfioDeviceBundle {
                     rom_info.about_to_read_size = true;
                 }
                 name = "ROM";
+                handled = true;
             }
-        }
-        if let Some(msix_cap) = self.msix_cap.as_ref() {
+        } else if let Some(msix_cap) = self.msix_cap.as_ref() {
             if reg_idx as u8 == msix_cap.register {
                 if offset == 2 && data.len() == 2 {
                     let data = u16::from_le_bytes(data.try_into().unwrap());
@@ -432,8 +435,11 @@ impl PciDevice for VfioDeviceBundle {
                     let data = u16::from_le_bytes(data[2..].try_into().unwrap());
                     self.msix_config.as_mut().unwrap().set_msg_ctl(data);
                 }
+                name = "MSIX_CAP";
+                handled = true;
             }
-        } else {
+        }
+        if !handled {
             vfio_device_region_write(
                 &self.device.file,
                 &self.device.region_infos,
