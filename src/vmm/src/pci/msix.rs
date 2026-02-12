@@ -167,6 +167,10 @@ impl MsixConfig {
 
         self.masked = ((reg >> FUNCTION_MASK_BIT) & 1u16) == 1u16;
         self.enabled = ((reg >> MSIX_ENABLE_BIT) & 1u16) == 1u16;
+        println!(
+            "set_msg_ctl: now masked: {} enabled: {}",
+            self.masked, self.enabled
+        );
 
         // Update interrupt routing
         if old_masked != self.masked || old_enabled != self.enabled {

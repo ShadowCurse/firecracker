@@ -431,12 +431,14 @@ impl PciDevice for VfioDeviceBundle {
                 if offset == 2 && data.len() == 2 {
                     let data = u16::from_le_bytes(data.try_into().unwrap());
                     self.msix_config.as_mut().unwrap().set_msg_ctl(data);
+                    name = "MSIX_CAP";
+                    handled = true;
                 } else if offset == 0 && data.len() == 4 {
                     let data = u16::from_le_bytes(data[2..].try_into().unwrap());
                     self.msix_config.as_mut().unwrap().set_msg_ctl(data);
+                    name = "MSIX_CAP";
+                    handled = true;
                 }
-                name = "MSIX_CAP";
-                handled = true;
             }
         }
         if !handled {
