@@ -1167,33 +1167,34 @@ pub fn device_get_expansion_rom_info(
     } else {
         let region_info = &region_infos[VFIO_PCI_ROM_REGION_INDEX as usize];
         let size = region_info.size;
+        if size != 0 {
+            let mut rom_bytes = vec![0; size as usize];
+            vfio_device_region_read(
+                device,
+                region_infos,
+                VFIO_PCI_ROM_REGION_INDEX,
+                0x0,
+                &mut rom_bytes,
+            );
 
-        let mut rom_bytes = vec![0; size as usize];
-        vfio_device_region_read(
-            device,
-            region_infos,
-            VFIO_PCI_ROM_REGION_INDEX,
-            0x0,
-            &mut rom_bytes,
-        );
-
-        let gpa = resource_allocator
-            .mmio32_memory
-            .allocate(size as u64, 64, AllocPolicy::FirstMatch)
-            .unwrap()
-            .start();
-        LOG!(
-            "Expansion ROM gpa: [{:#x}..{:#x}] size: {size:>#10x} Configured from VFIO region",
-            gpa,
-            gpa + size as u64
-        );
-        result = Some(ExpansionRomInfo {
-            gpa,
-            size: size as u32,
-            extra: (rom_raw & ((1 << 12) - 1)) as u16,
-            rom_bytes,
-            about_to_read_size: false,
-        });
+            let gpa = resource_allocator
+                .mmio32_memory
+                .allocate(size as u64, 64, AllocPolicy::FirstMatch)
+                .unwrap()
+                .start();
+            LOG!(
+                "Expansion ROM gpa: [{:#x}..{:#x}] size: {size:>#10x} Configured from VFIO region",
+                gpa,
+                gpa + size as u64
+            );
+            result = Some(ExpansionRomInfo {
+                gpa,
+                size: size as u32,
+                extra: (rom_raw & ((1 << 12) - 1)) as u16,
+                rom_bytes,
+                about_to_read_size: false,
+            });
+        }
     }
     return result;
 }
