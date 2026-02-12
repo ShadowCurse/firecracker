@@ -1576,6 +1576,31 @@ pub fn dma_map_guest_memory(container: &impl AsRawFd, guest_memory: &GuestMemory
     }
 }
 
+pub fn set_msix_irqs(device: &impl AsRawFd, irq_infos: &[vfio_irq_info], msix_config: &MsixConfig) {
+    let msix_irq_info = &irq_infos[VFIO_PCI_MSIX_IRQ_INDEX as usize];
+    if msix_irq_info.count == 0 || msix_config.vectors.vectors.len() != msix_irq_info.count as usize
+    {
+        panic!("Should not happen");
+    }
+
+    let vfio_irq_set_size = std::mem::size_of::<vfio_irq_set>();
+    let mut irq_set_bytes = vec![0_u8; vfio_irq_set_size + msix_irq_info.count as usize * 4];
+    let irq_set = unsafe { &mut *(irq_set_bytes.as_mut_ptr() as *mut vfio_irq_set) };
+    irq_set.argsz = irq_set_bytes.len() as u32;
+    irq_set.flags = VFIO_IRQ_SET_DATA_EVENTFD | VFIO_IRQ_SET_ACTION_TRIGGER;
+    irq_set.index = VFIO_PCI_MSIX_IRQ_INDEX;
+    irq_set.start = 0;
+    irq_set.count = msix_irq_info.count;
+    let irq_fds_ptr =
+        unsafe { &mut *(irq_set_bytes.as_mut_ptr().add(vfio_irq_set_size) as *mut i32) };
+    let irq_fds =
+        unsafe { std::slice::from_raw_parts_mut(irq_fds_ptr, msix_irq_info.count as usize) };
+    for (fd, v) in irq_fds.iter_mut().zip(&msix_config.vectors.vectors) {
+        *fd = v.event_fd.as_raw_fd();
+    }
+    device_set_irqs(device, irq_set).unwrap();
+}
+
 // fn create_kvm_vfio_device(vm: &VmFd) -> DeviceFd {
 //     let mut vfio_dev = kvm_create_device {
 //         type_: kvm_device_type_KVM_DEV_TYPE_VFIO,

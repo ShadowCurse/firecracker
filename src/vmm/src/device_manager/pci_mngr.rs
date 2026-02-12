@@ -225,6 +225,7 @@ impl PciDevices {
             vm.as_ref(),
         );
         crate::vfio::dma_map_guest_memory(container, vm.guest_memory());
+
         let _config_space_info =
             crate::vfio::device_get_config_space_info(&device.file, &device.region_infos);
 
@@ -234,10 +235,10 @@ impl PciDevices {
             let msix_num = msix_irq_info.count as u16;
             println!("VFIO msix_num: {msix_num}");
             let msix_vectors = Vm::create_msix_group(vm.clone(), msix_num).unwrap();
-            msix_config = Some(crate::pci::msix::MsixConfig::new(
-                Arc::new(msix_vectors),
-                pci_device_bdf.into(),
-            ));
+            let config =
+                crate::pci::msix::MsixConfig::new(Arc::new(msix_vectors), pci_device_bdf.into());
+            crate::vfio::set_msix_irqs(&device.file, &device.irq_infos, &config);
+            msix_config = Some(config);
         }
 
         // Garbage language requires this

@@ -191,12 +191,12 @@ pub fn device_get_info(
     }
 }
 
-pub fn device_set_irqs(device: &impl AsRawFd, irq_set: &[vfio_irq_set]) -> Result<(), VfioError> {
-    if irq_set.is_empty() || irq_set[0].argsz as usize > std::mem::size_of_val(irq_set) {
+pub fn device_set_irqs(device: &impl AsRawFd, irq_set: &vfio_irq_set) -> Result<(), VfioError> {
+    if std::mem::size_of_val(irq_set) < irq_set.argsz as usize {
         Err(VfioError::VfioDeviceSetIrq)
     } else {
         // SAFETY: we are the owner of self and irq_set which are valid value
-        let ret = unsafe { ioctl_with_ref(device, VFIO_DEVICE_SET_IRQS(), &irq_set[0]) };
+        let ret = unsafe { ioctl_with_ref(device, VFIO_DEVICE_SET_IRQS(), irq_set) };
         if ret < 0 {
             Err(VfioError::VfioDeviceSetIrq)
         } else {
@@ -284,8 +284,8 @@ pub fn device_get_region_info(
 //         // SAFETY: we are the owner of dev and region_info which are valid value,
 //         // and we verify the return value.
 //         let ret =
-//             unsafe { ioctl_with_mut_ref(device, VFIO_DEVICE_GET_REGION_INFO(), &mut reg_infos[0]) };
-//         if ret < 0 {
+//             unsafe { ioctl_with_mut_ref(device, VFIO_DEVICE_GET_REGION_INFO(), &mut reg_infos[0])
+// };         if ret < 0 {
 //             Err(VfioError::VfioDeviceGetRegionInfo(SysError::last()))
 //         } else {
 //             Ok(())
