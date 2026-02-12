@@ -365,10 +365,7 @@ impl BusDevice for VfioDeviceBundle {
                 }
             }
             assert!(handled);
-            LOG!(
-                "base: {base:<#10x} offset: {offset:<#5x} data: {data:<4?} table_name: \
-                 {name}"
-            );
+            LOG!("base: {base:<#10x} offset: {offset:<#5x} data: {data:<4?} table_name: {name}");
         } else {
             panic!("Should never happen");
         }
@@ -419,7 +416,7 @@ impl PciDevice for VfioDeviceBundle {
                 let mut looks_like_request_to_read: bool = false;
                 if data.len() == 4 {
                     let d: u32 = u32::from_le_bytes(data.try_into().unwrap());
-                    if d == 0xFFFF_FFFF {
+                    if d & 0xFFFFF801 == 0xFFFFF801 {
                         looks_like_request_to_read = true;
                     }
                 }
@@ -486,7 +483,7 @@ impl PciDevice for VfioDeviceBundle {
         } else if reg_idx == 12 {
             if let Some(rom_info) = self.expansion_rom_info.as_mut() {
                 if rom_info.about_to_read_size {
-                    result = rom_info.size;
+                    result = !(rom_info.size - 1);
                     rom_info.about_to_read_size = false;
                 } else {
                     result = (rom_info.gpa & 0xFFFF_F800) as u32 | rom_info.extra as u32 | 0x1;
@@ -1154,9 +1151,7 @@ pub fn device_get_expansion_rom_info(
     let (rom_raw, rom_size) = device_get_single_bar_info(device, region_infos, 8);
     let mut result = None;
     if rom_raw & 0x1 != 0 {
-        // TODO: does this follos same !() + 1 rule as BARS?
-        let size = (rom_size & !((1 << 12) - 1)) as u32;
-
+        let size = !(rom_size & !((1 << 12) - 1)) as u32 + 1;
         let mut rom_bytes = vec![0; size as usize];
         vfio_device_region_read(
             device,
@@ -1583,7 +1578,7 @@ pub fn set_msix_irqs(device: &impl AsRawFd, irq_infos: &[vfio_irq_info], msix_co
     let msix_irq_info = &irq_infos[VFIO_PCI_MSIX_IRQ_INDEX as usize];
     if msix_irq_info.count == 0 || msix_config.vectors.vectors.len() != msix_irq_info.count as usize
     {
-        LOG("Skipping MSI setup of vfio");
+        LOG!("Skipping MSI setup of vfio");
         return;
     }
 
