@@ -145,15 +145,15 @@ impl MsixCap {
         self.pba_offset & 0xffff_fff8
     }
 
-    pub fn table_set_offset(&mut self, addr: u32) {
-        self.table_offset &= 0x7;
-        self.table_offset += addr;
-    }
-
-    pub fn pba_set_offset(&mut self, addr: u32) {
-        self.pba_offset &= 0x7;
-        self.pba_offset += addr;
-    }
+    // pub fn table_set_offset(&mut self, addr: u32) {
+    //     self.table_offset &= 0x7;
+    //     self.table_offset += addr;
+    // }
+    //
+    // pub fn pba_set_offset(&mut self, addr: u32) {
+    //     self.pba_offset &= 0x7;
+    //     self.pba_offset += addr;
+    // }
 
     pub fn table_bir(&self) -> u32 {
         self.table_offset & 0x7
@@ -175,7 +175,7 @@ impl MsixCap {
 
     pub fn pba_range(&self) -> (u64, u64) {
         // The table takes 1 bit per entry modulo 8 bytes.
-        let size = ((self.table_size() as u64 / 64) + 1) * 8;
+        let size = ((self.table_size() as u64 + 63) / 64) * 8;
         (self.pba_offset() as u64, size)
     }
 }
@@ -301,6 +301,11 @@ impl BusDevice for VfioDeviceBundle {
                     }
                 }
             }
+            if !handled {
+                for d in data.iter_mut() {
+                    *d = 0;
+                }
+            }
             LOG!(
                 "base: {base:<#10x} offset: {offset:<#5x} data: {data:<4?} table_name: \
                  {table_name} handled: {handled}"
@@ -313,6 +318,7 @@ impl BusDevice for VfioDeviceBundle {
     fn write(&mut self, base: u64, offset: u64, data: &[u8]) -> Option<Arc<Barrier>> {
         let mut table_name = "----";
         if let Some(msix_config) = self.msix_config.as_mut() {
+            let mut handled: bool = false;
             for info in self.bar_hole_infos.iter() {
                 if info.gpa == base {
                     if info.offset_in_hole <= offset && offset < info.offset_in_hole + info.size {
@@ -326,6 +332,7 @@ impl BusDevice for VfioDeviceBundle {
                                 msix_config.write_pba(offset, data);
                             }
                         }
+                        handled = true;
                     } else {
                         let msix_cap = self.msix_cap.as_ref().unwrap();
                         let region_index = match info.usage {
@@ -340,9 +347,11 @@ impl BusDevice for VfioDeviceBundle {
                             region_info.offset + offset,
                             data,
                         );
+                        handled = true;
                     }
                 }
             }
+            assert!(handled);
             LOG!(
                 "base: {base:<#10x} offset: {offset:<#5x} data: {data:<4?} table_name: \
                  {table_name}"
@@ -380,12 +389,12 @@ impl PciDevice for VfioDeviceBundle {
                     if looks_like_request_to_read {
                         bar_info.about_to_read_size = true;
                     }
-                    let mut name = "BAR";
+                    name = "BAR";
                 } else if bar_idx == bar_info.idx + 1 && bar_info.is_64_bits {
                     if looks_like_request_to_read {
                         bar_info.about_to_read_size = true;
                     }
-                    let mut name = "BAR";
+                    name = "BAR";
                 }
             }
         } else if reg_idx == 12 {
@@ -401,7 +410,7 @@ impl PciDevice for VfioDeviceBundle {
                 if looks_like_request_to_read {
                     rom_info.about_to_read_size = true;
                 }
-                let mut name = "ROM";
+                name = "ROM";
             }
         } else {
             vfio_device_region_write(
@@ -422,11 +431,12 @@ impl PciDevice for VfioDeviceBundle {
         let mut applied_mask: bool = false;
         if 4 <= reg_idx && reg_idx < 10 {
             let bar_idx = (reg_idx - 4) as u32;
-            for bar_info in self.bar_infos.iter() {
+            for bar_info in self.bar_infos.iter_mut() {
                 if bar_idx == bar_info.idx {
                     if bar_info.about_to_read_size {
                         let size = !(bar_info.size - 1);
                         result = (size & 0xFFFF_FFFF) as u32;
+                        bar_info.about_to_read_size = false;
                     } else {
                         let is_64_bits = if bar_info.is_64_bits { 0b10 << 1 } else { 0 };
                         let is_prefetchable = if bar_info.is_prefetchable { 0b1000 } else { 0 };
@@ -437,6 +447,7 @@ impl PciDevice for VfioDeviceBundle {
                     if bar_info.about_to_read_size {
                         let size = !(bar_info.size - 1);
                         result = (size >> 32) as u32;
+                        bar_info.about_to_read_size = false;
                     } else {
                         result = (bar_info.gpa >> 32) as u32;
                     }
@@ -447,8 +458,9 @@ impl PciDevice for VfioDeviceBundle {
             if let Some(rom_info) = self.expansion_rom_info.as_mut() {
                 if rom_info.about_to_read_size {
                     result = rom_info.size;
+                    rom_info.about_to_read_size = false;
                 } else {
-                    result = (rom_info.gpa << 11) as u32 | rom_info.extra as u32 | 0x1;
+                    result = (rom_info.gpa & 0xFFFF_F800) as u32 | rom_info.extra as u32 | 0x1;
                 }
                 name = "ROM";
             }
@@ -1123,6 +1135,7 @@ pub fn device_get_expansion_rom_info(
             0x30,
             rom_size.as_mut_bytes(),
         );
+        // TODO: does this follos same !() + 1 rule as BARS?
         let size = (rom_size & !((1 << 12) - 1)) as u32;
 
         let mut rom_bytes = vec![0; size as usize];
@@ -1203,7 +1216,7 @@ pub fn device_get_config_space_info(
         0x0,
         device_id_vendor_id.as_mut_bytes(),
     );
-    let vendor_id = (device_id_vendor_id & 0xFF) as u16;
+    let vendor_id = (device_id_vendor_id & 0xFFFF) as u16;
     let device_id = (device_id_vendor_id >> 16) as u16;
     LOG!("Vendor id: {vendor_id:#x} Device id: {device_id:#x}");
 
@@ -1215,7 +1228,7 @@ pub fn device_get_config_space_info(
         0x8,
         class_code_and_revision_id.as_mut_bytes(),
     );
-    let revision_id = (class_code_and_revision_id & 0xF) as u8;
+    let revision_id = (class_code_and_revision_id & 0xFF) as u8;
     let class_code = (class_code_and_revision_id >> 8) as u32;
     LOG!("Revision id: {revision_id:#x} Class code: {class_code:#x}");
     let result = ConfigSpaceInfo {
@@ -1328,7 +1341,7 @@ pub fn mmap_bars(
             align_page_size_down(v + 4096)
         }
         if let Some(msix_cap) = msix_cap {
-            contain_msix_table = region_info.index == msix_cap.pba_bir();
+            contain_msix_table = region_info.index == msix_cap.table_bir();
             if contain_msix_table {
                 let (offset, size) = msix_cap.table_range();
                 msix_table_offset = align_page_size_down(offset);
@@ -1352,12 +1365,12 @@ pub fn mmap_bars(
                 infos.push(info);
             }
 
-            contain_msix_pba = region_info.index == msix_cap.table_bir();
+            contain_msix_pba = region_info.index == msix_cap.pba_bir();
             if contain_msix_pba {
                 let (offset, size) = msix_cap.pba_range();
                 msix_pba_offset = align_page_size_down(offset);
                 msix_pba_size = align_page_size_up(size);
-                let offset_in_hole = offset - msix_table_offset;
+                let offset_in_hole = offset - msix_pba_offset;
 
                 LOG!(
                     "BAR{} pba_table hole: [{:#x} ..{:#x}] actual table: [{:#x} ..{:#x}]",
