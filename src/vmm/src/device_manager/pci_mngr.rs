@@ -272,6 +272,7 @@ impl PciDevices {
                 .insert(vfio_device_bundle.clone(), hole.gpa, hole.size)?;
         }
         if expansion_rom_gpa != 0 {
+            println!("Adding ROM region to the bus");
             vm.common.mmio_bus.insert(
                 vfio_device_bundle.clone(),
                 expansion_rom_gpa,

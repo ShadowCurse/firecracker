@@ -262,7 +262,7 @@ macro_rules! LOG {
 impl BusDevice for VfioDeviceBundle {
     fn read(&mut self, base: u64, offset: u64, data: &mut [u8]) {
         if let Some(msix_config) = self.msix_config.as_ref() {
-            let mut table_name = "----";
+            let mut name = "----";
             let mut handled: bool = false;
             for info in self.bar_hole_infos.iter() {
                 if info.gpa == base {
@@ -273,11 +273,11 @@ impl BusDevice for VfioDeviceBundle {
                     if hole_start <= data_start && data_end <= hole_end {
                         match info.usage {
                             BarHoleInfoUsage::Table => {
-                                table_name = "MsiTable";
+                                name = "MsiTable";
                                 msix_config.read_table(offset, data);
                             }
                             BarHoleInfoUsage::Pba => {
-                                table_name = "PbaTable";
+                                name = "PbaTable";
                                 msix_config.read_pba(offset, data);
                             }
                         }
@@ -294,6 +294,7 @@ impl BusDevice for VfioDeviceBundle {
                             offset,
                             data,
                         );
+                        name = "OutsideTable";
                     }
                     handled = true;
                 }
@@ -304,6 +305,7 @@ impl BusDevice for VfioDeviceBundle {
                         data.clone_from_slice(
                             &rom_info.rom_bytes[offset as usize..offset as usize + data.len()],
                         );
+                        name = "ROM";
                         handled = true;
                     }
                 }
@@ -314,8 +316,8 @@ impl BusDevice for VfioDeviceBundle {
                 }
             }
             LOG!(
-                "base: {base:<#10x} offset: {offset:<#5x} data: {data:<4?} table_name: \
-                 {table_name} handled: {handled}"
+                "base: {base:<#10x} offset: {offset:<#5x} data: {data:<4?} name: {name} handled: \
+                 {handled}"
             );
         } else {
             panic!("Should never happen");
@@ -323,7 +325,7 @@ impl BusDevice for VfioDeviceBundle {
     }
 
     fn write(&mut self, base: u64, offset: u64, data: &[u8]) -> Option<Arc<Barrier>> {
-        let mut table_name = "----";
+        let mut name = "----";
         if let Some(msix_config) = self.msix_config.as_mut() {
             let mut handled: bool = false;
             for info in self.bar_hole_infos.iter() {
@@ -335,11 +337,11 @@ impl BusDevice for VfioDeviceBundle {
                     if hole_start <= data_start && data_end <= hole_end {
                         match info.usage {
                             BarHoleInfoUsage::Table => {
-                                table_name = "MsiTable";
+                                name = "MsiTable";
                                 msix_config.write_table(offset, data);
                             }
                             BarHoleInfoUsage::Pba => {
-                                table_name = "PbaTable";
+                                name = "PbaTable";
                                 msix_config.write_pba(offset, data);
                             }
                         }
@@ -357,6 +359,7 @@ impl BusDevice for VfioDeviceBundle {
                             offset,
                             data,
                         );
+                        name = "OutsideTable";
                         handled = true;
                     }
                 }
@@ -364,7 +367,7 @@ impl BusDevice for VfioDeviceBundle {
             assert!(handled);
             LOG!(
                 "base: {base:<#10x} offset: {offset:<#5x} data: {data:<4?} table_name: \
-                 {table_name}"
+                 {name}"
             );
         } else {
             panic!("Should never happen");
@@ -1580,7 +1583,8 @@ pub fn set_msix_irqs(device: &impl AsRawFd, irq_infos: &[vfio_irq_info], msix_co
     let msix_irq_info = &irq_infos[VFIO_PCI_MSIX_IRQ_INDEX as usize];
     if msix_irq_info.count == 0 || msix_config.vectors.vectors.len() != msix_irq_info.count as usize
     {
-        panic!("Should not happen");
+        LOG("Skipping MSI setup of vfio");
+        return;
     }
 
     let vfio_irq_set_size = std::mem::size_of::<vfio_irq_set>();
