@@ -416,7 +416,7 @@ impl PciDevice for VfioDeviceBundle {
                 let mut looks_like_request_to_read: bool = false;
                 if data.len() == 4 {
                     let d: u32 = u32::from_le_bytes(data.try_into().unwrap());
-                    if d & 0xFFFFF801 == 0xFFFFF801 {
+                    if d & 0xFFFFF800 == 0xFFFFF800 {
                         looks_like_request_to_read = true;
                     }
                 }
