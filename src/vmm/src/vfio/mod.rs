@@ -117,6 +117,7 @@ pub struct VfioRegionInfo {
 /// 7.7.1.2 Message Control Register for MSI
 #[derive(Debug)]
 pub struct MsiCap {
+    pub register: u8,
     pub msg_ctl: u16,
 }
 
@@ -852,7 +853,9 @@ pub fn vfio_device_get_pci_capabilities(
                             (current_cap_offset as u64) + 2,
                             msg_ctl.as_mut_bytes(),
                         );
-                        msi_cap = Some(MsiCap { msg_ctl });
+                        let register = current_cap_offset / 4;
+                        LOG!("Found MSI cap at offset: {current_cap_offset:#x}({register})");
+                        msi_cap = Some(MsiCap { register, msg_ctl });
                     }
                 }
             }
@@ -860,8 +863,6 @@ pub fn vfio_device_get_pci_capabilities(
                 if (VFIO_PCI_MSIX_IRQ_INDEX as usize) < irq_infos.len() {
                     let irq_info = irq_infos[VFIO_PCI_MSIX_IRQ_INDEX as usize];
                     if 0 < irq_info.count {
-                        LOG!("Found MSIX cap");
-
                         // 7.7.2 MSI-X Capability and Table Structure
                         let mut msg_ctl: u16 = 0;
                         let mut table_offset: u32 = 0;
@@ -888,6 +889,7 @@ pub fn vfio_device_get_pci_capabilities(
                             pba_offset.as_mut_bytes(),
                         );
                         let register = current_cap_offset / 4;
+                        LOG!("Found MSIX cap at offset: {current_cap_offset:#x}({register})");
                         msix_cap = Some(MsixCap {
                             register,
                             msg_ctl,
