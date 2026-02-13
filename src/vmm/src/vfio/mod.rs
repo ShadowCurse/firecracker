@@ -46,6 +46,7 @@ use crate::Vm;
 use crate::pci::msix::MsixConfig;
 use crate::pci::{BarReprogrammingParams, DeviceRelocationError, PciDevice};
 use crate::vstate::bus::BusDevice;
+use crate::vstate::interrupts::{MsixVector, MsixVectorConfig};
 use crate::vstate::memory::{GuestMemoryMmap, GuestRegionType};
 use crate::vstate::resources::ResourceAllocator;
 
@@ -119,6 +120,9 @@ pub struct VfioRegionInfo {
 pub struct MsiCap {
     pub register: u8,
     pub msg_ctl: u16,
+    pub low: u32,
+    pub high: u32,
+    pub data: u32,
 }
 
 /// 7.7.2 MSI-X Capability and Table Structure
@@ -419,46 +423,52 @@ impl PciDevice for VfioDeviceBundle {
                     } else {
                         rom_info.extra = (data & ((1 << 11) - 1)) as u16;
                         // TODO handle ROM relocation, just as any other BAR relocation
-                        // let new_gpa = (data & !((1 << 11) - 1)) as u64;
-                        // if new_gpa != rom_info.kvm_region.guest_phys_addr {
-                        //     // let rom_start = rom_info.kvm_region.guest_phys_addr;
-                        //     // let rom_size = ((rom_info.rom_size + 4095) & !(4095)) as u64;
-                        //     unsafe {
-                        //         let guest_memory = std::slice::from_raw_parts_mut(
-                        //             self.v as *mut u8,
-                        //             rom_info.rom_size as usize,
-                        //         );
-                        //         let rom = std::slice::from_raw_parts(
-                        //             rom_info.kvm_region.userspace_addr as *const u8,
-                        //             rom_info.rom_size as usize,
-                        //         );
-                        //         LOG!("ROM first bytes: {:?}", &rom[0..64]);
-                        //         guest_memory.copy_from_slice(rom);
-                        //     }
-                        //     // let mut resource_allocator = self.vm.resource_allocator();
-                        //     // resource_allocator
-                        //     //     .mmio32_memory
-                        //     //     .free(
-                        //     //         &RangeInclusive::new(rom_start, rom_start + rom_size - 1)
-                        //     //             .unwrap(),
-                        //     //     )
-                        //     //     .unwrap();
-                        //     // TODO: tell allocator that new range is in use now
-                        //
-                        //     rom_info.kvm_region.guest_phys_addr = new_gpa;
-                        //     LOG!(
-                        //         "ROM relocated to kvm gpa: [{:#x} ..{:#x}]",
-                        //         rom_info.kvm_region.guest_phys_addr,
-                        //         rom_info.kvm_region.guest_phys_addr
-                        //             + rom_info.kvm_region.memory_size
-                        //     );
-                        //     // self.vm.set_user_memory_region(rom_info.kvm_region).unwrap();
-                        // }
                     }
                 }
                 name = "ROM";
                 handled = true;
             }
+        } else if let Some(msi_cap) = self.msi_cap.as_mut() {
+            let data: u32 = u32::from_le_bytes(data.try_into().unwrap());
+            if reg_idx == msi_cap.register as usize {
+                if data & 0x1 != 0 {
+                    // controll
+                    let vector = MsixVector::new(0, true).unwrap();
+                    let config = MsixVectorConfig {
+                        high_addr: msi_cap.high,
+                        low_addr: msi_cap.low,
+                        data: msi_cap.data,
+                        devid: 0,
+                    };
+                    self.vm.register_msi(&vector, false, config).unwrap();
+
+                    let vfio_irq_set_size = std::mem::size_of::<vfio_irq_set>();
+                    let mut irq_set_bytes = vec![0_u8; vfio_irq_set_size + 1 as usize * 4];
+                    let irq_set =
+                        unsafe { &mut *(irq_set_bytes.as_mut_ptr() as *mut vfio_irq_set) };
+                    irq_set.argsz = irq_set_bytes.len() as u32;
+                    irq_set.flags = VFIO_IRQ_SET_DATA_EVENTFD | VFIO_IRQ_SET_ACTION_TRIGGER;
+                    irq_set.index = VFIO_PCI_MSI_IRQ_INDEX;
+                    irq_set.start = 0;
+                    irq_set.count = 1;
+                    let irq_fds_ptr = unsafe {
+                        &mut *(irq_set_bytes.as_mut_ptr().add(vfio_irq_set_size) as *mut i32)
+                    };
+                    let irq_fds =
+                        unsafe { std::slice::from_raw_parts_mut(irq_fds_ptr, 1 as usize) };
+                    irq_fds[0] = vector.event_fd.as_raw_fd();
+                    device_set_irqs(&self.device.file, irq_set).unwrap();
+                    LOG!("MSI irq is set-up");
+                }
+            } else if reg_idx == msi_cap.register as usize + 1 {
+                msi_cap.low = data;
+            } else if reg_idx == msi_cap.register as usize + 2 {
+                msi_cap.high = data;
+            } else if reg_idx == msi_cap.register as usize + 3 {
+                msi_cap.data = data;
+            }
+            name = "MSI_CAP";
+            handled = true;
         } else if let Some(msix_cap) = self.msix_cap.as_ref() {
             if reg_idx == msix_cap.register as usize {
                 if offset == 2 && data.len() == 2 {
@@ -893,7 +903,13 @@ pub fn vfio_device_get_pci_capabilities(
                         );
                         let register = current_cap_offset / 4;
                         LOG!("Found MSI cap at offset: {current_cap_offset:#x}({register})");
-                        msi_cap = Some(MsiCap { register, msg_ctl });
+                        msi_cap = Some(MsiCap {
+                            register,
+                            msg_ctl,
+                            low: 0,
+                            high: 0,
+                            data: 0,
+                        });
                     }
                 }
             }
