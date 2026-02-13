@@ -1179,6 +1179,24 @@ pub fn device_get_expansion_rom_info(
     let rom_size = region_info.size as u32;
     let mut result = None;
     if rom_size != 0 {
+        // This is needed to enable ROM bar on the device
+        let mut rom_raw: u32 = 0;
+        vfio_device_region_read(
+            device,
+            region_infos,
+            VFIO_PCI_CONFIG_REGION_INDEX,
+            0x30,
+            rom_raw.as_mut_bytes(),
+        );
+        rom_raw |= 0x1;
+        vfio_device_region_write(
+            device,
+            region_infos,
+            VFIO_PCI_CONFIG_REGION_INDEX,
+            0x30,
+            rom_raw.as_mut_bytes(),
+        );
+
         let mut rom_bytes = vec![0; rom_size as usize];
         vfio_device_region_read(
             device,
@@ -1187,6 +1205,16 @@ pub fn device_get_expansion_rom_info(
             0x0,
             &mut rom_bytes,
         );
+
+        rom_raw &= !0x1;
+        vfio_device_region_write(
+            device,
+            region_infos,
+            VFIO_PCI_CONFIG_REGION_INDEX,
+            0x30,
+            rom_raw.as_mut_bytes(),
+        );
+
         let size = (rom_size + 4095) & !(4095);
 
         let gpa = resource_allocator
