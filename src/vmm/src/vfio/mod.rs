@@ -421,8 +421,8 @@ impl PciDevice for VfioDeviceBundle {
                     if data & 0xFFFFF800 == 0xFFFFF800 {
                         rom_info.about_to_read_size = true;
                     } else {
-                        rom_info.extra = (data & ((1 << 12) - 1)) as u16;
-                        let new_gpa = (data & ((1 << 11) - 1)) as u64;
+                        rom_info.extra = (data & ((1 << 11) - 1)) as u16;
+                        let new_gpa = (data & !((1 << 11) - 1)) as u64;
                         if new_gpa != rom_info.kvm_region.guest_phys_addr {
                             // let rom_start = rom_info.kvm_region.guest_phys_addr;
                             // let rom_size = ((rom_info.rom_size + 4095) & !(4095)) as u64;
