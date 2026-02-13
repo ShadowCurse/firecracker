@@ -225,7 +225,12 @@ impl PciDevices {
             msix_cap.as_ref(),
             vm.as_ref(),
         );
-        let v = crate::vfio::dma_map_guest_memory(container, vm.guest_memory());
+        crate::vfio::dma_map_guest_memory(container, vm.guest_memory());
+
+        // #[cfg(x86_64)]
+        if let Some(rom_info) = expansion_rom_info.as_ref() {
+            crate::vfio::copy_rom_into_legacy_location(vm.guest_memory(), rom_info);
+        }
 
         let _config_space_info =
             crate::vfio::device_get_config_space_info(&device.file, &device.region_infos);
@@ -259,7 +264,6 @@ impl PciDevices {
             masks,
             msix_config,
             vm: vm.clone(),
-            v,
         }));
 
         // This is for bars (or the poked holes in them where MSIx and PBA tables live)

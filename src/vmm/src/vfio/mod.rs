@@ -39,7 +39,7 @@ pub use ioctls::*;
 use kvm_bindings::kvm_userspace_memory_region;
 use pci::{PciCapabilityId, PciExpressCapabilityId};
 use vm_allocator::{AllocPolicy, RangeInclusive};
-use vm_memory::{GuestMemory, GuestMemoryRegion};
+use vm_memory::{Bytes, GuestAddress, GuestMemory, GuestMemoryRegion};
 use zerocopy::IntoBytes;
 
 use crate::Vm;
@@ -220,7 +220,7 @@ pub struct ConfigSpaceInfo {
 pub struct ExpansionRomInfo {
     pub kvm_region: kvm_userspace_memory_region,
     // The actual size of the mapping is aligned up to page boudary
-    pub rom_size: u32,
+    pub rom_bytes: Vec<u8>,
     // Validation status and Validation Details
     pub extra: u16,
     // just for testing
@@ -254,10 +254,6 @@ pub struct VfioDeviceBundle {
     pub msix_config: Option<MsixConfig>,
 
     pub vm: Arc<Vm>,
-
-    // just to make ROM relocation work store the virtual address
-    // of the guest memory so we can copy ROM there
-    pub v: u64,
 }
 
 macro_rules! function_name {
@@ -422,41 +418,42 @@ impl PciDevice for VfioDeviceBundle {
                         rom_info.about_to_read_size = true;
                     } else {
                         rom_info.extra = (data & ((1 << 11) - 1)) as u16;
-                        let new_gpa = (data & !((1 << 11) - 1)) as u64;
-                        if new_gpa != rom_info.kvm_region.guest_phys_addr {
-                            // let rom_start = rom_info.kvm_region.guest_phys_addr;
-                            // let rom_size = ((rom_info.rom_size + 4095) & !(4095)) as u64;
-                            unsafe {
-                                let guest_memory = std::slice::from_raw_parts_mut(
-                                    self.v as *mut u8,
-                                    rom_info.rom_size as usize,
-                                );
-                                let rom = std::slice::from_raw_parts(
-                                    rom_info.kvm_region.userspace_addr as *const u8,
-                                    rom_info.rom_size as usize,
-                                );
-                                LOG!("ROM first bytes: {:?}", &rom[0..64]);
-                                guest_memory.copy_from_slice(rom);
-                            }
-                            // let mut resource_allocator = self.vm.resource_allocator();
-                            // resource_allocator
-                            //     .mmio32_memory
-                            //     .free(
-                            //         &RangeInclusive::new(rom_start, rom_start + rom_size - 1)
-                            //             .unwrap(),
-                            //     )
-                            //     .unwrap();
-                            // TODO: tell allocator that new range is in use now
-
-                            rom_info.kvm_region.guest_phys_addr = new_gpa;
-                            LOG!(
-                                "ROM relocated to kvm gpa: [{:#x} ..{:#x}]",
-                                rom_info.kvm_region.guest_phys_addr,
-                                rom_info.kvm_region.guest_phys_addr
-                                    + rom_info.kvm_region.memory_size
-                            );
-                            // self.vm.set_user_memory_region(rom_info.kvm_region).unwrap();
-                        }
+                        // TODO handle ROM relocation, just as any other BAR relocation
+                        // let new_gpa = (data & !((1 << 11) - 1)) as u64;
+                        // if new_gpa != rom_info.kvm_region.guest_phys_addr {
+                        //     // let rom_start = rom_info.kvm_region.guest_phys_addr;
+                        //     // let rom_size = ((rom_info.rom_size + 4095) & !(4095)) as u64;
+                        //     unsafe {
+                        //         let guest_memory = std::slice::from_raw_parts_mut(
+                        //             self.v as *mut u8,
+                        //             rom_info.rom_size as usize,
+                        //         );
+                        //         let rom = std::slice::from_raw_parts(
+                        //             rom_info.kvm_region.userspace_addr as *const u8,
+                        //             rom_info.rom_size as usize,
+                        //         );
+                        //         LOG!("ROM first bytes: {:?}", &rom[0..64]);
+                        //         guest_memory.copy_from_slice(rom);
+                        //     }
+                        //     // let mut resource_allocator = self.vm.resource_allocator();
+                        //     // resource_allocator
+                        //     //     .mmio32_memory
+                        //     //     .free(
+                        //     //         &RangeInclusive::new(rom_start, rom_start + rom_size - 1)
+                        //     //             .unwrap(),
+                        //     //     )
+                        //     //     .unwrap();
+                        //     // TODO: tell allocator that new range is in use now
+                        //
+                        //     rom_info.kvm_region.guest_phys_addr = new_gpa;
+                        //     LOG!(
+                        //         "ROM relocated to kvm gpa: [{:#x} ..{:#x}]",
+                        //         rom_info.kvm_region.guest_phys_addr,
+                        //         rom_info.kvm_region.guest_phys_addr
+                        //             + rom_info.kvm_region.memory_size
+                        //     );
+                        //     // self.vm.set_user_memory_region(rom_info.kvm_region).unwrap();
+                        // }
                     }
                 }
                 name = "ROM";
@@ -519,7 +516,7 @@ impl PciDevice for VfioDeviceBundle {
         } else if reg_idx == 12 {
             if let Some(rom_info) = self.expansion_rom_info.as_mut() {
                 if rom_info.about_to_read_size {
-                    result = !(rom_info.rom_size - 1);
+                    result = !(rom_info.rom_bytes.len() as u32 - 1);
                     rom_info.about_to_read_size = false;
                 } else {
                     result = (rom_info.kvm_region.guest_phys_addr & 0xFFFF_F800) as u32
@@ -1267,7 +1264,7 @@ pub fn device_get_expansion_rom_info(
         let (rom_raw, _) = device_get_single_bar_info(device, region_infos, 8);
         result = Some(ExpansionRomInfo {
             kvm_region,
-            rom_size,
+            rom_bytes,
             // get extra data + set the enable bit
             extra: (rom_raw & ((1 << 12) - 1)) as u16 | 0x1,
             about_to_read_size: false,
@@ -1601,8 +1598,7 @@ pub fn mmap_bars(
     infos
 }
 
-pub fn dma_map_guest_memory(container: &impl AsRawFd, guest_memory: &GuestMemoryMmap) -> u64 {
-    let mut v: u64 = 0;
+pub fn dma_map_guest_memory(container: &impl AsRawFd, guest_memory: &GuestMemoryMmap) {
     // TODO: if viortio-iommu is attached no dma setup is
     // needed at this stage
     for region in guest_memory.iter() {
@@ -1630,11 +1626,14 @@ pub fn dma_map_guest_memory(container: &impl AsRawFd, guest_memory: &GuestMemory
             };
             LOG!("DMA guest memory: [{:#x}..{:#x}]", iova, iova + size);
             iommu_map_dma(container, &dma_map).unwrap();
-
-            v = vaddr;
         }
     }
-    v
+}
+
+pub fn copy_rom_into_legacy_location(guest_memory: &GuestMemoryMmap, rom_info: &ExpansionRomInfo) {
+    guest_memory
+        .write(&rom_info.rom_bytes, GuestAddress(0xC0000))
+        .unwrap();
 }
 
 pub fn set_msix_irqs(device: &impl AsRawFd, irq_infos: &[vfio_irq_info], msix_config: &MsixConfig) {
