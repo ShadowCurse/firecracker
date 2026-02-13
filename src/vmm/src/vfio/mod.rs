@@ -218,9 +218,7 @@ pub struct ConfigSpaceInfo {
 
 #[derive(Debug)]
 pub struct ExpansionRomInfo {
-    pub kvm_slot: u32,
-    pub gpa: u64,
-    pub host_addr: u64,
+    pub kvm_region: kvm_userspace_memory_region,
     // The actual size of the mapping is aligned up to page boudary
     pub rom_size: u32,
     // Validation status and Validation Details
@@ -421,33 +419,27 @@ impl PciDevice for VfioDeviceBundle {
                     } else {
                         rom_info.extra = (data & ((1 << 12) - 1)) as u16;
                         let new_gpa = (data & ((1 << 11) - 1)) as u64;
-                        if new_gpa != rom_info.gpa {
-                            let size = ((rom_info.rom_size + 4095) & !(4095)) as u64;
-
+                        if new_gpa != rom_info.kvm_region.guest_phys_addr {
+                            let rom_start = rom_info.kvm_region.guest_phys_addr;
+                            let rom_size = ((rom_info.rom_size + 4095) & !(4095)) as u64;
                             let mut resource_allocator = self.vm.resource_allocator();
                             resource_allocator
                                 .mmio32_memory
                                 .free(
-                                    &RangeInclusive::new(rom_info.gpa, rom_info.gpa + size - 1)
+                                    &RangeInclusive::new(rom_start, rom_start + rom_size - 1)
                                         .unwrap(),
                                 )
                                 .unwrap();
                             // TODO: tell allocator that new range is in use now
 
-                            let kvm_memory_region = kvm_userspace_memory_region {
-                                slot: rom_info.kvm_slot,
-                                flags: 0,
-                                guest_phys_addr: new_gpa,
-                                memory_size: size,
-                                userspace_addr: rom_info.host_addr as u64,
-                            };
+                            rom_info.kvm_region.guest_phys_addr = new_gpa;
                             LOG!(
                                 "ROM relocated to kvm gpa: [{:#x} ..{:#x}]",
-                                new_gpa,
-                                new_gpa + size
+                                rom_info.kvm_region.guest_phys_addr,
+                                rom_info.kvm_region.guest_phys_addr
+                                    + rom_info.kvm_region.memory_size
                             );
-                            self.vm.set_user_memory_region(kvm_memory_region).unwrap();
-                            rom_info.gpa = new_gpa;
+                            self.vm.set_user_memory_region(rom_info.kvm_region).unwrap();
                         }
                     }
                 }
@@ -514,7 +506,8 @@ impl PciDevice for VfioDeviceBundle {
                     result = !(rom_info.rom_size - 1);
                     rom_info.about_to_read_size = false;
                 } else {
-                    result = (rom_info.gpa & 0xFFFF_F800) as u32 | rom_info.extra as u32;
+                    result = (rom_info.kvm_region.guest_phys_addr & 0xFFFF_F800) as u32
+                        | rom_info.extra as u32;
                 }
                 name = "ROM";
             }
@@ -1217,7 +1210,7 @@ pub fn device_get_expansion_rom_info(
         }
 
         let slot = vm.next_kvm_slot(1).unwrap();
-        let kvm_memory_region = kvm_userspace_memory_region {
+        let kvm_region = kvm_userspace_memory_region {
             slot,
             flags: 0,
             guest_phys_addr: gpa,
@@ -1225,13 +1218,11 @@ pub fn device_get_expansion_rom_info(
             userspace_addr: host_addr as u64,
         };
         LOG!("ROM kvm gpa: [{:#x} ..{:#x}]", gpa, gpa + size as u64);
-        vm.set_user_memory_region(kvm_memory_region).unwrap();
+        vm.set_user_memory_region(kvm_region).unwrap();
 
         let (rom_raw, _) = device_get_single_bar_info(device, region_infos, 8);
         result = Some(ExpansionRomInfo {
-            kvm_slot: slot,
-            gpa,
-            host_addr: host_addr as u64,
+            kvm_region,
             rom_size,
             // get extra data + set the enable bit
             extra: (rom_raw & ((1 << 12) - 1)) as u16 & 0x1,
@@ -1592,6 +1583,7 @@ pub fn dma_map_guest_memory(container: &impl AsRawFd, guest_memory: &GuestMemory
                 iova,
                 size,
             };
+            LOG!("DMA guest memory: [{:#x}..{:#x}]", iova, iova + size);
             iommu_map_dma(container, &dma_map).unwrap();
         }
     }
