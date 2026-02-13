@@ -254,6 +254,10 @@ pub struct VfioDeviceBundle {
     pub msix_config: Option<MsixConfig>,
 
     pub vm: Arc<Vm>,
+
+    // just to make ROM relocation work store the virtual address
+    // of the guest memory so we can copy ROM there
+    pub v: u64,
 }
 
 macro_rules! function_name {
@@ -420,26 +424,35 @@ impl PciDevice for VfioDeviceBundle {
                         rom_info.extra = (data & ((1 << 12) - 1)) as u16;
                         let new_gpa = (data & ((1 << 11) - 1)) as u64;
                         if new_gpa != rom_info.kvm_region.guest_phys_addr {
-                            let rom_start = rom_info.kvm_region.guest_phys_addr;
-                            let rom_size = ((rom_info.rom_size + 4095) & !(4095)) as u64;
-                            let mut resource_allocator = self.vm.resource_allocator();
-                            resource_allocator
-                                .mmio32_memory
-                                .free(
-                                    &RangeInclusive::new(rom_start, rom_start + rom_size - 1)
-                                        .unwrap(),
-                                )
-                                .unwrap();
+                            unsafe {
+                                let guest_memory =
+                                    std::slice::from_raw_parts_mut(self.v as *mut u8, 0x20000);
+                                let rom = std::slice::from_raw_parts(
+                                    rom_info.kvm_region.userspace_addr as *const u8,
+                                    0x20000,
+                                );
+                                guest_memory.copy_from_slice(rom);
+                            }
+                            // let rom_start = rom_info.kvm_region.guest_phys_addr;
+                            // let rom_size = ((rom_info.rom_size + 4095) & !(4095)) as u64;
+                            // let mut resource_allocator = self.vm.resource_allocator();
+                            // resource_allocator
+                            //     .mmio32_memory
+                            //     .free(
+                            //         &RangeInclusive::new(rom_start, rom_start + rom_size - 1)
+                            //             .unwrap(),
+                            //     )
+                            //     .unwrap();
                             // TODO: tell allocator that new range is in use now
 
-                            rom_info.kvm_region.guest_phys_addr = new_gpa;
-                            LOG!(
-                                "ROM relocated to kvm gpa: [{:#x} ..{:#x}]",
-                                rom_info.kvm_region.guest_phys_addr,
-                                rom_info.kvm_region.guest_phys_addr
-                                    + rom_info.kvm_region.memory_size
-                            );
-                            self.vm.set_user_memory_region(rom_info.kvm_region).unwrap();
+                            // rom_info.kvm_region.guest_phys_addr = new_gpa;
+                            // LOG!(
+                            //     "ROM relocated to kvm gpa: [{:#x} ..{:#x}]",
+                            //     rom_info.kvm_region.guest_phys_addr,
+                            //     rom_info.kvm_region.guest_phys_addr
+                            //         + rom_info.kvm_region.memory_size
+                            // );
+                            // self.vm.set_user_memory_region(rom_info.kvm_region).unwrap();
                         }
                     }
                 }
@@ -1557,7 +1570,8 @@ pub fn mmap_bars(
     infos
 }
 
-pub fn dma_map_guest_memory(container: &impl AsRawFd, guest_memory: &GuestMemoryMmap) {
+pub fn dma_map_guest_memory(container: &impl AsRawFd, guest_memory: &GuestMemoryMmap) -> u64 {
+    let mut v: u64 = 0;
     // TODO: if viortio-iommu is attached no dma setup is
     // needed at this stage
     for region in guest_memory.iter() {
@@ -1585,8 +1599,11 @@ pub fn dma_map_guest_memory(container: &impl AsRawFd, guest_memory: &GuestMemory
             };
             LOG!("DMA guest memory: [{:#x}..{:#x}]", iova, iova + size);
             iommu_map_dma(container, &dma_map).unwrap();
+
+            v = vaddr;
         }
     }
+    v
 }
 
 pub fn set_msix_irqs(device: &impl AsRawFd, irq_infos: &[vfio_irq_info], msix_config: &MsixConfig) {
