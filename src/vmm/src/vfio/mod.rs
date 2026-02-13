@@ -32,13 +32,13 @@ use std::fs::{File, OpenOptions};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::FileExt;
 use std::path::Path;
-use std::sync::{Arc, Barrier};
+use std::sync::{Arc, Barrier, Mutex};
 
 pub use bindings::*;
 pub use ioctls::*;
 use kvm_bindings::kvm_userspace_memory_region;
 use pci::{PciCapabilityId, PciExpressCapabilityId};
-use vm_allocator::AllocPolicy;
+use vm_allocator::{AllocPolicy, RangeInclusive};
 use vm_memory::{GuestMemory, GuestMemoryRegion};
 use zerocopy::IntoBytes;
 
@@ -149,16 +149,6 @@ impl MsixCap {
         self.pba_offset & 0xffff_fff8
     }
 
-    // pub fn table_set_offset(&mut self, addr: u32) {
-    //     self.table_offset &= 0x7;
-    //     self.table_offset += addr;
-    // }
-    //
-    // pub fn pba_set_offset(&mut self, addr: u32) {
-    //     self.pba_offset &= 0x7;
-    //     self.pba_offset += addr;
-    // }
-
     pub fn table_bir(&self) -> u32 {
         self.table_offset & 0x7
     }
@@ -219,6 +209,27 @@ pub struct BarHoleInfo {
 }
 
 #[derive(Debug)]
+pub struct ConfigSpaceInfo {
+    pub vendor_id: u16,
+    pub device_id: u16,
+    pub class_code: u32,
+    pub revision_id: u8,
+}
+
+#[derive(Debug)]
+pub struct ExpansionRomInfo {
+    pub kvm_slot: u32,
+    pub gpa: u64,
+    pub host_addr: u64,
+    // The actual size of the mapping is aligned up to page boudary
+    pub rom_size: u32,
+    // Validation status and Validation Details
+    pub extra: u16,
+    // just for testing
+    pub about_to_read_size: bool,
+}
+
+#[derive(Debug)]
 pub struct VfioDevice {
     pub file: File,
     pub info: vfio_device_info,
@@ -243,6 +254,8 @@ pub struct VfioDeviceBundle {
     pub masks: Option<Vec<RegisterMask>>,
 
     pub msix_config: Option<MsixConfig>,
+
+    pub vm: Arc<Vm>,
 }
 
 macro_rules! function_name {
@@ -298,17 +311,6 @@ impl BusDevice for VfioDeviceBundle {
                     }
                     handled = true;
                 }
-            }
-            if !handled {
-                // if let Some(rom_info) = self.expansion_rom_info.as_ref() {
-                //     if rom_info.gpa == base {
-                //         data.clone_from_slice(
-                //             &rom_info.rom_bytes[offset as usize..offset as usize + data.len()],
-                //         );
-                //         name = "ROM";
-                //         handled = true;
-                //     }
-                // }
             }
             if !handled {
                 for d in data.iter_mut() {
@@ -413,11 +415,40 @@ impl PciDevice for VfioDeviceBundle {
         } else if reg_idx == 12 {
             if let Some(rom_info) = self.expansion_rom_info.as_mut() {
                 if data.len() == 4 {
-                    let d: u32 = u32::from_le_bytes(data.try_into().unwrap());
-                    if d & 0xFFFFF800 == 0xFFFFF800 {
+                    let data: u32 = u32::from_le_bytes(data.try_into().unwrap());
+                    if data & 0xFFFFF800 == 0xFFFFF800 {
                         rom_info.about_to_read_size = true;
                     } else {
-                        rom_info.extra = (d & ((1 << 12) - 1)) as u16;
+                        rom_info.extra = (data & ((1 << 12) - 1)) as u16;
+                        let new_gpa = (data & ((1 << 11) - 1)) as u64;
+                        if new_gpa != rom_info.gpa {
+                            let size = ((rom_info.rom_size + 4095) & !(4095)) as u64;
+
+                            let mut resource_allocator = self.vm.resource_allocator();
+                            resource_allocator
+                                .mmio32_memory
+                                .free(
+                                    &RangeInclusive::new(rom_info.gpa, rom_info.gpa + size - 1)
+                                        .unwrap(),
+                                )
+                                .unwrap();
+                            // TODO: tell allocator that new range is in use now
+
+                            let kvm_memory_region = kvm_userspace_memory_region {
+                                slot: rom_info.kvm_slot,
+                                flags: 0,
+                                guest_phys_addr: new_gpa,
+                                memory_size: size,
+                                userspace_addr: rom_info.host_addr as u64,
+                            };
+                            LOG!(
+                                "ROM relocated to kvm gpa: [{:#x} ..{:#x}]",
+                                new_gpa,
+                                new_gpa + size
+                            );
+                            self.vm.set_user_memory_region(kvm_memory_region).unwrap();
+                            rom_info.gpa = new_gpa;
+                        }
                     }
                 }
                 name = "ROM";
@@ -1129,14 +1160,6 @@ pub fn device_get_bar_infos(
     bar_infos
 }
 
-pub struct ExpansionRomInfo {
-    pub gpa: u64,
-    pub rom_size: u32,
-    // Validation status and Validation Details
-    pub extra: u16,
-    // just for testing
-    pub about_to_read_size: bool,
-}
 pub fn device_get_expansion_rom_info(
     device: &File,
     region_infos: &[VfioRegionInfo],
@@ -1193,8 +1216,9 @@ pub fn device_get_expansion_rom_info(
             );
         }
 
+        let slot = vm.next_kvm_slot(1).unwrap();
         let kvm_memory_region = kvm_userspace_memory_region {
-            slot: vm.next_kvm_slot(1).unwrap(),
+            slot,
             flags: 0,
             guest_phys_addr: gpa,
             memory_size: size as u64,
@@ -1205,9 +1229,12 @@ pub fn device_get_expansion_rom_info(
 
         let (rom_raw, _) = device_get_single_bar_info(device, region_infos, 8);
         result = Some(ExpansionRomInfo {
+            kvm_slot: slot,
             gpa,
+            host_addr: host_addr as u64,
             rom_size,
-            extra: (rom_raw & ((1 << 12) - 1)) as u16,
+            // get extra data + set the enable bit
+            extra: (rom_raw & ((1 << 12) - 1)) as u16 & 0x1,
             about_to_read_size: false,
         });
     }
@@ -1215,12 +1242,6 @@ pub fn device_get_expansion_rom_info(
     return result;
 }
 
-pub struct ConfigSpaceInfo {
-    pub vendor_id: u16,
-    pub device_id: u16,
-    pub class_code: u32,
-    pub revision_id: u8,
-}
 pub fn device_get_config_space_info(
     device: &impl FileExt,
     region_infos: &[VfioRegionInfo],

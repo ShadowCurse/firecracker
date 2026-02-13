@@ -258,6 +258,7 @@ impl PciDevices {
             msix_cap,
             masks,
             msix_config,
+            vm: vm.clone(),
         }));
 
         // This is for bars (or the poked holes in them where MSIx and PBA tables live)
