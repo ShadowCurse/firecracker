@@ -424,17 +424,20 @@ impl PciDevice for VfioDeviceBundle {
                         rom_info.extra = (data & ((1 << 12) - 1)) as u16;
                         let new_gpa = (data & ((1 << 11) - 1)) as u64;
                         if new_gpa != rom_info.kvm_region.guest_phys_addr {
-                            unsafe {
-                                let guest_memory =
-                                    std::slice::from_raw_parts_mut(self.v as *mut u8, 0x20000);
-                                let rom = std::slice::from_raw_parts(
-                                    rom_info.kvm_region.userspace_addr as *const u8,
-                                    0x20000,
-                                );
-                                guest_memory.copy_from_slice(rom);
-                            }
                             // let rom_start = rom_info.kvm_region.guest_phys_addr;
                             // let rom_size = ((rom_info.rom_size + 4095) & !(4095)) as u64;
+                            unsafe {
+                                let guest_memory = std::slice::from_raw_parts_mut(
+                                    self.v as *mut u8,
+                                    rom_info.rom_size as usize,
+                                );
+                                let rom = std::slice::from_raw_parts(
+                                    rom_info.kvm_region.userspace_addr as *const u8,
+                                    rom_info.rom_size as usize,
+                                );
+                                LOG!("ROM first bytes: {:?}", &rom[0..64]);
+                                guest_memory.copy_from_slice(rom);
+                            }
                             // let mut resource_allocator = self.vm.resource_allocator();
                             // resource_allocator
                             //     .mmio32_memory
@@ -445,13 +448,13 @@ impl PciDevice for VfioDeviceBundle {
                             //     .unwrap();
                             // TODO: tell allocator that new range is in use now
 
-                            // rom_info.kvm_region.guest_phys_addr = new_gpa;
-                            // LOG!(
-                            //     "ROM relocated to kvm gpa: [{:#x} ..{:#x}]",
-                            //     rom_info.kvm_region.guest_phys_addr,
-                            //     rom_info.kvm_region.guest_phys_addr
-                            //         + rom_info.kvm_region.memory_size
-                            // );
+                            rom_info.kvm_region.guest_phys_addr = new_gpa;
+                            LOG!(
+                                "ROM relocated to kvm gpa: [{:#x} ..{:#x}]",
+                                rom_info.kvm_region.guest_phys_addr,
+                                rom_info.kvm_region.guest_phys_addr
+                                    + rom_info.kvm_region.memory_size
+                            );
                             // self.vm.set_user_memory_region(rom_info.kvm_region).unwrap();
                         }
                     }
