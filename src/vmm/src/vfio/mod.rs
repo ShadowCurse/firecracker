@@ -1269,7 +1269,7 @@ pub fn device_get_expansion_rom_info(
             kvm_region,
             rom_size,
             // get extra data + set the enable bit
-            extra: (rom_raw & ((1 << 12) - 1)) as u16 & 0x1,
+            extra: (rom_raw & ((1 << 12) - 1)) as u16 | 0x1,
             about_to_read_size: false,
         });
     }
