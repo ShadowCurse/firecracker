@@ -4,7 +4,7 @@
 use std::io::ErrorKind;
 
 use libc::{c_void, iovec, size_t};
-use serde::{Deserialize, Serialize};
+use bitcode::{Decode, Encode};
 use vm_memory::bitmap::Bitmap;
 use vm_memory::{
     GuestMemory, GuestMemoryError, ReadVolatile, VolatileMemoryError, VolatileSlice, WriteVolatile,
@@ -217,7 +217,7 @@ impl IoVecBuffer {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Decode, Encode)]
 pub struct ParsedDescriptorChain {
     pub head_index: u16,
     pub length: u32,

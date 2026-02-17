@@ -7,7 +7,7 @@ use std::num::Wrapping;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
-use serde::{Deserialize, Serialize};
+use bitcode::{Decode, Encode};
 
 use super::queue::{InvalidAvailIdx, QueueError};
 use super::transport::mmio::IrqTrigger;
@@ -30,7 +30,7 @@ pub enum PersistError {
 }
 
 /// Queue information saved in snapshot.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct QueueState {
     /// The maximal size in elements offered by the device
     max_size: u16,
@@ -114,7 +114,7 @@ impl Persist<'_> for Queue {
 }
 
 /// State of a VirtioDevice.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct VirtioDeviceState {
     /// Device type.
     pub device_type: VirtioDeviceType,
@@ -191,7 +191,7 @@ impl VirtioDeviceState {
 }
 
 /// Transport information saved in snapshot.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct MmioTransportState {
     // The register where feature bits are stored.
     features_select: u32,
@@ -370,13 +370,13 @@ mod tests {
         queue.initialize(&mem).unwrap();
 
         let queue_state = queue.save();
-        let serialized_data = bitcode::serialize(&queue_state).unwrap();
+        let serialized_data = bitcode::encode(&queue_state);
 
         let ca = QueueConstructorArgs {
             mem,
             is_activated: true,
         };
-        let restored_state = bitcode::deserialize(&serialized_data).unwrap();
+        let restored_state = bitcode::decode(&serialized_data).unwrap();
         let restored_queue = Queue::restore(ca, &restored_state).unwrap();
 
         assert_eq!(restored_queue, queue);
@@ -387,9 +387,9 @@ mod tests {
         let dummy = DummyDevice::new();
 
         let state = VirtioDeviceState::from_device(&dummy);
-        let serialized_data = bitcode::serialize(&state).unwrap();
+        let serialized_data = bitcode::encode(&state);
 
-        let restored_state: VirtioDeviceState = bitcode::deserialize(&serialized_data).unwrap();
+        let restored_state: VirtioDeviceState = bitcode::decode(&serialized_data).unwrap();
         assert_eq!(restored_state, state);
     }
 
@@ -415,7 +415,7 @@ mod tests {
         device: Arc<Mutex<dyn VirtioDevice>>,
     ) {
         let transport_state = mmio_transport.save();
-        let serialized_data = bitcode::serialize(&transport_state).unwrap();
+        let serialized_data = bitcode::encode(&transport_state);
 
         let restore_args = MmioTransportConstructorArgs {
             mem,
@@ -423,7 +423,7 @@ mod tests {
             device,
             is_vhost_user: false,
         };
-        let restored_state = bitcode::deserialize(&serialized_data).unwrap();
+        let restored_state = bitcode::decode(&serialized_data).unwrap();
         let restored_mmio_transport =
             MmioTransport::restore(restore_args, &restored_state).unwrap();
 

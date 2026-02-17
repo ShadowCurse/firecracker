@@ -3,6 +3,7 @@
 
 use std::sync::{Arc, Mutex};
 
+use bitcode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
 pub use crate::devices::virtio::balloon::BALLOON_DEV_ID;
@@ -24,7 +25,7 @@ pub enum BalloonConfigError {
 
 /// This struct represents the strongly typed equivalent of the json body
 /// from balloon related requests.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Decode, Encode, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct BalloonDeviceConfig {
     /// Target balloon size in MiB.
@@ -56,7 +57,7 @@ impl From<BalloonConfig> for BalloonDeviceConfig {
 
 /// The data fed into a balloon update request. Currently, only the number
 /// of pages and the stats polling interval can be updated.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Decode, Encode, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct BalloonUpdateConfig {
     /// Target balloon size in MiB.
@@ -67,7 +68,7 @@ pub struct BalloonUpdateConfig {
 /// Note that the state of the statistics cannot be changed from ON to OFF
 /// or vice versa after boot, only the interval of polling can be changed
 /// if the statistics were activated in the device configuration.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Decode, Encode, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct BalloonUpdateStatsConfig {
     /// Interval in seconds between refreshing statistics.

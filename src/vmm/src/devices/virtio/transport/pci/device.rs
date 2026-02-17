@@ -20,7 +20,7 @@ use pci::{
     PciBdf, PciCapabilityId, PciClassCode, PciMassStorageSubclass, PciNetworkControllerSubclass,
     PciSubclass,
 };
-use serde::{Deserialize, Serialize};
+use bitcode::{Decode, Encode};
 use thiserror::Error;
 use vm_allocator::{AddressAllocator, AllocPolicy, RangeInclusive};
 use vm_memory::{Address, ByteValued, GuestAddress, Le32};
@@ -235,7 +235,7 @@ const NOTIFY_OFF_MULTIPLIER: u32 = 4; // A dword per notification address.
 const VIRTIO_PCI_VENDOR_ID: u16 = 0x1af4;
 const VIRTIO_PCI_DEVICE_ID_BASE: u16 = 0x1040; // Add to device type to get device ID.
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Decode, Encode)]
 pub struct VirtioPciDeviceState {
     pub pci_device_bdf: PciBdf,
     pub device_activated: bool,

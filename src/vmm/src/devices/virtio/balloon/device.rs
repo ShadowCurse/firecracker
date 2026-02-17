@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use log::{debug, error, info, warn};
+use bitcode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use utils::time::TimerFd;
 use vmm_sys_util::eventfd::EventFd;
@@ -66,7 +67,7 @@ pub(crate) struct ConfigSpace {
 unsafe impl ByteValued for ConfigSpace {}
 
 /// Holds state of the free page hinting run
-#[derive(Copy, Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Default, Decode, Encode)]
 pub(crate) struct HintingState {
     /// The command requested by us. Set to STOP by default.
     pub host_cmd: u32,
@@ -130,10 +131,8 @@ pub struct BalloonConfig {
     /// Interval of time in seconds at which the balloon statistics are updated.
     pub stats_polling_interval_s: u16,
     /// Free page hinting enabled
-    #[serde(default)]
     pub free_page_hinting: bool,
     /// Free page reporting enabled
-    #[serde(default)]
     pub free_page_reporting: bool,
 }
 
@@ -150,58 +149,42 @@ pub struct BalloonStats {
     /// The number of MiB the device is currently holding.
     pub actual_mib: u32,
     /// Amount of memory swapped in.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub swap_in: Option<u64>,
     /// Amount of memory swapped out.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub swap_out: Option<u64>,
     /// Number of major faults.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub major_faults: Option<u64>,
     /// Number of minor faults.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub minor_faults: Option<u64>,
     /// The amount of memory not being used for any
     /// purpose (in bytes).
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub free_memory: Option<u64>,
     /// Total amount of memory available (in bytes).
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub total_memory: Option<u64>,
     /// An estimate of how much memory is available (in
     /// bytes) for starting new applications, without pushing the system to swap.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub available_memory: Option<u64>,
     /// The amount of memory, in bytes, that can be
     /// quickly reclaimed without additional I/O. Typically these pages are used for
     /// caching files from disk.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub disk_caches: Option<u64>,
     /// The number of successful hugetlb page
     /// allocations in the guest.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub hugetlb_allocations: Option<u64>,
     /// The number of failed hugetlb page allocations
     /// in the guest.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub hugetlb_failures: Option<u64>,
     /// OOM killer invocations. since linux v6.12.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub oom_kill: Option<u64>,
     /// Stall count of memory allocatoin. since linux v6.12.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub alloc_stall: Option<u64>,
     /// Amount of memory scanned asynchronously. since linux v6.12.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub async_scan: Option<u64>,
     /// Amount of memory scanned directly. since linux v6.12.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub direct_scan: Option<u64>,
     /// Amount of memory reclaimed asynchronously. since linux v6.12.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub async_reclaim: Option<u64>,
     /// Amount of memory reclaimed directly. since linux v6.12.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub direct_reclaim: Option<u64>,
 }
 

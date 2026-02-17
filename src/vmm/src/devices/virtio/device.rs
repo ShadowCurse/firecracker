@@ -9,7 +9,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 
-use serde::{Deserialize, Serialize};
+use bitcode::{Decode, Encode};
 use vmm_sys_util::eventfd::EventFd;
 
 use super::ActivateError;
@@ -58,7 +58,7 @@ impl DeviceState {
 /// All used types fit in u8.
 #[allow(clippy::cast_possible_truncation)]
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Decode, Encode)]
 pub enum VirtioDeviceType {
     Net = virtio_ids::VIRTIO_ID_NET as u8,
     Block = virtio_ids::VIRTIO_ID_BLOCK as u8,

@@ -3,7 +3,7 @@
 
 use std::sync::Mutex;
 
-use serde::{Deserialize, Serialize};
+use bitcode::{Decode, Encode};
 
 use crate::Kvm;
 use crate::arch::aarch64::gic::GicState;
@@ -97,7 +97,7 @@ impl ArchVm {
 }
 
 /// Structure holding an general specific VM state.
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Decode, Encode)]
 pub struct VmState {
     /// Guest memory state
     pub memory: GuestMemoryState,

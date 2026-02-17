@@ -5,6 +5,7 @@ use std::convert::From;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use bitcode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use vm_memory::GuestAddress;
 
@@ -69,7 +70,7 @@ pub enum ResourcesError {
     MemoryHotplugConfig(#[from] MemoryHotplugConfigError),
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, Decode, Encode, PartialEq, Eq, Debug)]
 #[serde(untagged)]
 #[allow(missing_docs)]
 pub enum CustomCpuTemplateOrPath {
@@ -78,7 +79,7 @@ pub enum CustomCpuTemplateOrPath {
 }
 
 /// Used for configuring a vmm from one single json passed to the Firecracker process.
-#[derive(Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Default, PartialEq, Eq, Deserialize, Decode, Encode, Serialize)]
 #[serde(rename_all = "kebab-case")]
 #[allow(missing_docs)]
 pub struct VmmConfig {

@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use kvm_bindings::*;
 use kvm_ioctls::{VcpuExit, VcpuFd, VmFd};
-use serde::{Deserialize, Serialize};
+use bitcode::{Decode, Encode};
 use vm_memory::GuestAddress;
 
 use super::get_fdt_addr;
@@ -497,7 +497,7 @@ impl Peripherals {
 }
 
 /// Structure holding VCPU kvm state.
-#[derive(Default, Clone, Serialize, Deserialize)]
+#[derive(Default, Clone, Decode, Encode)]
 pub struct VcpuState {
     /// Multiprocessing state.
     pub mp_state: kvm_mp_state,

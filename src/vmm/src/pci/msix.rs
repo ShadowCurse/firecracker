@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use byteorder::{ByteOrder, LittleEndian};
 use pci::PciCapabilityId;
+use bitcode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use vm_memory::ByteValued;
 
@@ -24,7 +25,7 @@ const BITS_PER_PBA_ENTRY: usize = 64;
 const FUNCTION_MASK_BIT: u8 = 14;
 const MSIX_ENABLE_BIT: u8 = 15;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Debug, Clone, Decode, Encode, Eq, PartialEq)]
 /// MSI-X table entries
 pub struct MsixTableEntry {
     /// Lower 32 bits of the vector address
@@ -55,7 +56,7 @@ impl Default for MsixTableEntry {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Decode, Encode)]
 /// State for (de)serializing MSI-X configuration
 pub struct MsixConfigState {
     table_entries: Vec<MsixTableEntry>,
@@ -465,6 +466,32 @@ pub struct MsixCap {
 
 // SAFETY: All members are simple numbers and any value is valid.
 unsafe impl ByteValued for MsixCap {}
+
+impl bitcode::__private::ConvertFrom<&MsixCap> for [u8; std::mem::size_of::<MsixCap>()] {
+    fn convert_from(value: &MsixCap) -> Self {
+        let mut bytes = [0u8; std::mem::size_of::<MsixCap>()];
+        // SAFETY: MsixCap is repr(C, packed), so as_slice() returns a contiguous byte view
+        bytes.copy_from_slice(value.as_slice());
+        bytes
+    }
+}
+
+impl bitcode::__private::ConvertFrom<[u8; std::mem::size_of::<MsixCap>()]> for MsixCap {
+    fn convert_from(bytes: [u8; std::mem::size_of::<MsixCap>()]) -> Self {
+        // SAFETY: MsixCap is repr(C, packed) with only numeric fields, any bit pattern is valid.
+        // read_unaligned handles the alignment-1 source correctly on all architectures.
+        unsafe { std::ptr::read_unaligned(bytes.as_ptr().cast()) }
+    }
+}
+
+impl Encode for MsixCap {
+    type Encoder = bitcode::__private::ConvertIntoEncoder<[u8; std::mem::size_of::<MsixCap>()]>;
+}
+
+impl<'de> Decode<'de> for MsixCap {
+    type Decoder =
+        bitcode::__private::ConvertFromDecoder<'de, [u8; std::mem::size_of::<MsixCap>()]>;
+}
 
 impl PciCapability for MsixCap {
     fn bytes(&self) -> &[u8] {

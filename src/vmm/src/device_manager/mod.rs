@@ -19,7 +19,7 @@ use log::{error, info};
 use mmio::{MMIODeviceManager, MmioError};
 use pci_mngr::{PciDevices, PciDevicesConstructorArgs, PciManagerError};
 use persist::MMIODevManagerConstructorArgs;
-use serde::{Deserialize, Serialize};
+use bitcode::{Decode, Encode};
 use utils::time::TimestampUs;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -393,7 +393,7 @@ impl DeviceManager {
     }
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Decode, Encode)]
 /// State of devices in the system
 pub struct DevicesState {
     /// MMIO devices state

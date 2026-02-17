@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
+use bitcode::{Decode, Encode};
 
 use crate::devices::virtio::device::VirtioDeviceType;
 use crate::devices::virtio::persist::{PersistError as VirtioStateError, VirtioDeviceState};
@@ -17,7 +17,7 @@ use crate::rate_limiter::persist::RateLimiterState;
 use crate::snapshot::Persist;
 use crate::vstate::memory::GuestMemoryMmap;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Decode, Encode)]
 pub struct EntropyState {
     pub virtio_state: VirtioDeviceState,
     rate_limiter_state: RateLimiterState,
@@ -84,10 +84,10 @@ mod tests {
         let entropy = Entropy::new(RateLimiter::default()).unwrap();
 
         let entropy_state = entropy.save();
-        let serialized_data = bitcode::serialize(&entropy_state).unwrap();
+        let serialized_data = bitcode::encode(&entropy_state);
 
         let guest_mem = create_virtio_mem();
-        let restored_state = bitcode::deserialize(&serialized_data).unwrap();
+        let restored_state = bitcode::decode(&serialized_data).unwrap();
         let restored =
             Entropy::restore(EntropyConstructorArgs { mem: guest_mem }, &restored_state).unwrap();
 

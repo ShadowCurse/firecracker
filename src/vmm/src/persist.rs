@@ -13,7 +13,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use semver::Version;
-use serde::{Deserialize, Serialize};
+use bitcode::{Decode, Encode};
 use userfaultfd::{FeatureFlags, Uffd, UffdBuilder};
 use vmm_sys_util::sock_ctrl_msg::ScmSocket;
 
@@ -44,7 +44,7 @@ use crate::vstate::vm::{VmError, VmState};
 use crate::{EventManager, Vmm, vstate};
 
 /// Holds information related to the VM that is not part of VmState.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Default, Decode, Encode, PartialEq, Eq)]
 pub struct VmInfo {
     /// Guest memory size.
     pub mem_size_mib: u64,
@@ -84,7 +84,7 @@ impl From<&Vmm> for VmInfo {
 }
 
 /// Contains the necessary state for saving/restoring a microVM.
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Decode, Encode)]
 pub struct MicrovmState {
     /// Miscellaneous VM info.
     pub vm_info: VmInfo,
@@ -106,7 +106,7 @@ pub struct MicrovmState {
 /// E.g. Guest memory contents for a region of `size` bytes can be found in the
 /// backend at `offset` bytes from the beginning, and should be copied/populated
 /// into `base_host_address`.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Decode, Encode, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct GuestRegionUffdMapping {
     /// Base host virtual address where the guest memory contents for this
     /// region should be copied/populated.
@@ -172,7 +172,7 @@ pub fn create_snapshot(
         .save_state(vm_info)
         .map_err(CreateSnapshotError::MicrovmState)?;
 
-    snapshot_state_to_file(&microvm_state, &params.snapshot_path)?;
+    snapshot_state_to_file(microvm_state, &params.snapshot_path)?;
 
     vmm.vm
         .snapshot_memory_to_file(&params.mem_file_path, params.snapshot_type)?;
@@ -187,7 +187,7 @@ pub fn create_snapshot(
 }
 
 fn snapshot_state_to_file(
-    microvm_state: &MicrovmState,
+    microvm_state: MicrovmState,
     snapshot_path: &Path,
 ) -> Result<(), CreateSnapshotError> {
     use self::CreateSnapshotError::*;
@@ -720,9 +720,9 @@ mod tests {
             vm_state: vmm.vm.save_state().unwrap(),
         };
 
-        let serialized_data = bitcode::serialize(&microvm_state).unwrap();
+        let serialized_data = bitcode::encode(&microvm_state);
 
-        let restored_microvm_state: MicrovmState = bitcode::deserialize(&serialized_data).unwrap();
+        let restored_microvm_state: MicrovmState = bitcode::decode(&serialized_data).unwrap();
 
         assert_eq!(restored_microvm_state.vm_info, microvm_state.vm_info);
         assert_eq!(

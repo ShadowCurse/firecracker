@@ -4,6 +4,7 @@
 use std::convert::TryFrom;
 use std::sync::{Arc, Mutex};
 
+use bitcode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
 use crate::devices::virtio::vsock::{Vsock, VsockError, VsockUnixBackend, VsockUnixBackendError};
@@ -21,7 +22,7 @@ pub enum VsockConfigError {
 
 /// This struct represents the strongly typed equivalent of the json body
 /// from vsock related requests.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Decode, Encode, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct VsockDeviceConfig {
     #[serde(default)]

@@ -4,13 +4,14 @@
 //! Auxiliary module for configuring the metrics system.
 use std::path::PathBuf;
 
+use bitcode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
 use crate::logger::{FcLineWriter, METRICS};
 use crate::utils::open_file_write_nonblock;
 
 /// Strongly typed structure used to describe the metrics system.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Decode, Encode, Serialize)]
 pub struct MetricsConfig {
     /// Named pipe or file used as output for metrics.
     pub metrics_path: PathBuf,

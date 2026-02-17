@@ -6,7 +6,7 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
+use bitcode::{Decode, Encode};
 
 use super::*;
 use crate::devices::virtio::device::{ActiveState, DeviceState, VirtioDeviceType};
@@ -17,7 +17,7 @@ use crate::snapshot::Persist;
 use crate::vstate::memory::GuestMemoryMmap;
 
 /// The Vsock serializable state.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Decode, Encode)]
 pub struct VsockState {
     /// The vsock backend state.
     pub backend: VsockBackendState,
@@ -26,7 +26,7 @@ pub struct VsockState {
 }
 
 /// The Vsock frontend serializable state.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Decode, Encode)]
 pub struct VsockFrontendState {
     /// Context Identifier.
     pub cid: u64,
@@ -34,14 +34,14 @@ pub struct VsockFrontendState {
 }
 
 /// An enum for the serializable backend state types.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Decode, Encode)]
 pub enum VsockBackendState {
     /// UDS backend state.
     Uds(VsockUdsState),
 }
 
 /// The Vsock Unix Backend serializable state.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Decode, Encode)]
 pub struct VsockUdsState {
     /// The path for the UDS socket.
     pub(crate) path: String,
@@ -174,9 +174,9 @@ pub(crate) mod tests {
             frontend: ctx.device.save(),
         };
 
-        let serialized_data = bitcode::serialize(&state).unwrap();
+        let serialized_data = bitcode::encode(&state);
 
-        let restored_state: VsockState = bitcode::deserialize(&serialized_data).unwrap();
+        let restored_state: VsockState = bitcode::decode(&serialized_data).unwrap();
         let mut restored_device = Vsock::restore(
             VsockConstructorArgs {
                 mem: ctx.mem.clone(),

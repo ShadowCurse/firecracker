@@ -6,7 +6,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
+use bitcode::{Decode, Encode};
 
 use super::*;
 use crate::devices::virtio::balloon::device::{BalloonStats, ConfigSpace, HintingState};
@@ -19,7 +19,7 @@ use crate::vstate::memory::GuestMemoryMmap;
 
 /// Information about the balloon config's that are saved
 /// at snapshot.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Decode, Encode)]
 pub struct BalloonConfigSpaceState {
     num_pages: u32,
     actual_pages: u32,
@@ -27,7 +27,7 @@ pub struct BalloonConfigSpaceState {
 
 /// Information about the balloon stats that are saved
 /// at snapshot.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Decode, Encode)]
 pub struct BalloonStatsState {
     swap_in: Option<u64>,
     swap_out: Option<u64>,
@@ -97,7 +97,7 @@ impl BalloonStatsState {
 
 /// Information about the balloon that are saved
 /// at snapshot.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Decode, Encode)]
 pub struct BalloonState {
     stats_polling_interval_s: u16,
     stats_desc_index: Option<u16>,
@@ -215,10 +215,10 @@ mod tests {
         let balloon = Balloon::new(0x42, false, 2, false, false).unwrap();
 
         let balloon_state = balloon.save();
-        let serialized_data = bitcode::serialize(&balloon_state).unwrap();
+        let serialized_data = bitcode::encode(&balloon_state);
 
         // Deserialize and restore the balloon device.
-        let restored_state = bitcode::deserialize(&serialized_data).unwrap();
+        let restored_state = bitcode::decode(&serialized_data).unwrap();
         let restored_balloon =
             Balloon::restore(BalloonConstructorArgs { mem: guest_mem }, &restored_state).unwrap();
 

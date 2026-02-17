@@ -15,7 +15,7 @@ use kvm_ioctls::IoEventAddress;
 use linux_loader::cmdline as kernel_cmdline;
 #[cfg(target_arch = "x86_64")]
 use log::debug;
-use serde::{Deserialize, Serialize};
+use bitcode::{Decode, Encode};
 use vm_allocator::AllocPolicy;
 
 use crate::Vm;
@@ -62,7 +62,7 @@ pub enum MmioError {
 pub const MMIO_LEN: u64 = 0x1000;
 
 /// Stores the address range and irq allocated to this device.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct MMIODeviceInfo {
     /// Mmio address at which the device is registered.
     pub addr: u64,

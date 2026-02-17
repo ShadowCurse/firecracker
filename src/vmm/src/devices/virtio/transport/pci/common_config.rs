@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
 
 use byteorder::{ByteOrder, LittleEndian};
-use serde::{Deserialize, Serialize};
+use bitcode::{Decode, Encode};
 use vm_memory::GuestAddress;
 
 use crate::devices::virtio::device::VirtioDevice;
@@ -21,7 +21,7 @@ use crate::logger::warn;
 
 pub const VIRTIO_PCI_COMMON_CONFIG_ID: &str = "virtio_pci_common_config";
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Decode, Encode)]
 pub struct VirtioPciCommonConfigState {
     pub driver_status: u8,
     pub config_generation: u8,

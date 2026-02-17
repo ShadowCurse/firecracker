@@ -1,7 +1,7 @@
 // Copyright 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use serde::{Deserialize, Serialize};
+use bitcode::{Decode, Encode};
 use vm_memory::GuestAddress;
 
 use super::device::{ConfigSpace, Pmem, PmemError};
@@ -14,7 +14,7 @@ use crate::vmm_config::pmem::PmemConfig;
 use crate::vstate::memory::{GuestMemoryMmap, GuestRegionMmap};
 use crate::vstate::vm::VmError;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Decode, Encode)]
 pub struct PmemState {
     pub virtio_state: VirtioDeviceState,
     pub config_space: ConfigSpace,
@@ -100,10 +100,10 @@ mod tests {
 
         // Save the block device.
         let pmem_state = pmem.save();
-        let serialized_data = bitcode::serialize(&pmem_state).unwrap();
+        let serialized_data = bitcode::encode(&pmem_state);
 
         // Restore the block device.
-        let restored_state = bitcode::deserialize(&serialized_data).unwrap();
+        let restored_state = bitcode::decode(&serialized_data).unwrap();
         let restored_pmem = Pmem::restore(
             PmemConstructorArgs {
                 mem: &guest_mem,

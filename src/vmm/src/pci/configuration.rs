@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use byteorder::{ByteOrder, LittleEndian};
 use pci::{PciCapabilityId, PciClassCode, PciSubclass};
-use serde::{Deserialize, Serialize};
+use bitcode::{Decode, Encode};
 
 use super::BarReprogrammingParams;
 use super::msix::MsixConfig;
@@ -58,7 +58,7 @@ fn decode_64_bits_bar_size(bar_size_hi: u32, bar_size_lo: u32) -> u64 {
     size
 }
 
-#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, Decode, Encode)]
 struct PciBar {
     addr: u32,
     size: u32,
@@ -66,7 +66,7 @@ struct PciBar {
 }
 
 /// PCI configuration space state for (de)serialization
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Decode, Encode)]
 pub struct PciConfigurationState {
     registers: Vec<u32>,
     writable_bits: Vec<u32>,

@@ -4,6 +4,7 @@
 use std::fs::File;
 use std::io;
 
+use bitcode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
 /// Default guest kernel command line:
@@ -20,7 +21,7 @@ pub const DEFAULT_KERNEL_CMDLINE: &str = "reboot=k panic=1 nomodule 8250.nr_uart
 
 /// Strongly typed data structure used to configure the boot source of the
 /// microvm.
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Decode, Encode, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct BootSourceConfig {
     /// Path of the kernel image.
@@ -129,12 +130,12 @@ pub(crate) mod tests {
         };
 
         // Use bitcode serialization directly for the test data
-        let serialized_data = bitcode::serialize(&boot_src_cfg).unwrap();
-        let restored_boot_cfg: BootSourceConfig = bitcode::deserialize(&serialized_data).unwrap();
+        let serialized_data = bitcode::encode(&boot_src_cfg);
+        let restored_boot_cfg: BootSourceConfig = bitcode::decode(&serialized_data).unwrap();
         assert_eq!(boot_src_cfg, restored_boot_cfg);
 
         // Also test with Snapshot wrapper
-        let snapshot_data = bitcode::serialize(&Snapshot::new(boot_src_cfg.clone())).unwrap();
+        let snapshot_data = bitcode::encode(&Snapshot::new(boot_src_cfg.clone()));
         let restored_snapshot = Snapshot::load_without_crc_check(&snapshot_data).unwrap();
         assert_eq!(boot_src_cfg, restored_snapshot.data);
     }

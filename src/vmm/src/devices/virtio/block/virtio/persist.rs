@@ -4,7 +4,7 @@
 //! Defines the structures needed for saving/restoring block devices.
 
 use device::ConfigSpace;
-use serde::{Deserialize, Serialize};
+use bitcode::{Decode, Encode};
 use vmm_sys_util::eventfd::EventFd;
 
 use super::device::DiskProperties;
@@ -20,7 +20,7 @@ use crate::rate_limiter::persist::RateLimiterState;
 use crate::snapshot::Persist;
 
 /// Holds info about block's file engine type. Gets saved in snapshot.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Decode, Encode)]
 pub enum FileEngineTypeState {
     /// Sync File Engine.
     // If the snap version does not contain the `FileEngineType`, it must have been snapshotted
@@ -50,7 +50,7 @@ impl From<FileEngineTypeState> for FileEngineType {
 }
 
 /// Holds info about the block device. Gets saved in snapshot.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Decode, Encode)]
 pub struct VirtioBlockState {
     id: String,
     partuuid: Option<String>,
@@ -168,7 +168,7 @@ mod tests {
 
         // Save the block device.
         let block_state = block.save();
-        let _serialized_data = bitcode::serialize(&block_state).unwrap();
+        let _serialized_data = bitcode::encode(&block_state);
     }
 
     #[test]
@@ -210,10 +210,10 @@ mod tests {
 
         // Save the block device.
         let block_state = block.save();
-        let serialized_data = bitcode::serialize(&block_state).unwrap();
+        let serialized_data = bitcode::encode(&block_state);
 
         // Restore the block device.
-        let restored_state = bitcode::deserialize(&serialized_data).unwrap();
+        let restored_state = bitcode::decode(&serialized_data).unwrap();
         let restored_block =
             VirtioBlock::restore(BlockConstructorArgs { mem: guest_mem }, &restored_state).unwrap();
 

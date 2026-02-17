@@ -7,7 +7,7 @@ use acpi_tables::{Aml, aml};
 use aws_lc_rs::error::Unspecified as RandError;
 use aws_lc_rs::rand;
 use log::{debug, error};
-use serde::{Deserialize, Serialize};
+use bitcode::{Decode, Encode};
 use vm_memory::{GuestAddress, GuestMemoryError};
 use vm_superio::Trigger;
 use vmm_sys_util::eventfd::EventFd;
@@ -111,7 +111,7 @@ impl VmGenId {
 
 /// Logic to save/restore the state of a VMGenID device
 
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, Decode, Encode)]
 pub struct VMGenIDState {
     /// GSI used for VMGenID device
     pub gsi: u32,

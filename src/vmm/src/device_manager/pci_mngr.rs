@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use event_manager::{MutEventSubscriber, SubscriberOps};
 use log::{debug, error, warn};
-use serde::{Deserialize, Serialize};
+use bitcode::{Decode, Encode};
 
 use super::persist::MmdsState;
 use crate::devices::pci::PciSegment;
@@ -222,7 +222,7 @@ impl PciDevices {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Decode, Encode)]
 pub struct VirtioDeviceState<T> {
     /// Device identifier
     pub device_id: String,
@@ -234,7 +234,7 @@ pub struct VirtioDeviceState<T> {
     pub transport_state: VirtioPciDeviceState,
 }
 
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, Decode, Encode)]
 pub struct PciDevicesState {
     /// Whether PCI is enabled
     pub pci_enabled: bool,
@@ -760,7 +760,7 @@ mod tests {
             );
 
             let device_state = vmm.device_manager.save();
-            serialized_data = bitcode::serialize(&device_state).unwrap();
+            serialized_data = bitcode::encode(&device_state);
         }
 
         tmp_sock_file.remove().unwrap();
@@ -772,7 +772,7 @@ mod tests {
         // object and calling default_vmm() is the easiest way to create one.
         let vmm = default_vmm();
         let device_manager_state: device_manager::DevicesState =
-            bitcode::deserialize(&serialized_data).unwrap();
+            bitcode::decode(&serialized_data).unwrap();
         let vm_resources = &mut VmResources::default();
         let restore_args = PciDevicesConstructorArgs {
             vm: &vmm.vm,

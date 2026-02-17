@@ -61,7 +61,7 @@ pub fn deserialize_binary<R: Read>(reader: R) -> Result<BpfThreadMap, Deserializ
         ));
     }
 
-    let result: HashMap<String, _> = bitcode::deserialize(&buf)?;
+    let result: HashMap<String, _> = bitcode::decode(&buf)?;
 
     Ok(result
         .into_iter()
@@ -157,7 +157,7 @@ mod tests {
         let bpf_prog = vec![0; 2];
         let mut filter_map: HashMap<String, BpfProgram> = HashMap::new();
         filter_map.insert("VcpU".to_string(), bpf_prog.clone());
-        let bytes = bitcode::serialize(&filter_map).unwrap();
+        let bytes = bitcode::encode(&filter_map);
 
         let mut expected_res = BpfThreadMap::new();
         expected_res.insert("vcpu".to_string(), Arc::new(bpf_prog));

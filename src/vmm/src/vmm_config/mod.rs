@@ -4,6 +4,7 @@
 use std::convert::{From, TryInto};
 use std::io;
 
+use bitcode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
 use crate::rate_limiter::{BucketUpdate, RateLimiter, TokenBucket};
@@ -47,7 +48,7 @@ pub mod vsock;
 
 /// A public-facing, stateless structure, holding all the data we need to create a TokenBucket
 /// (live) object.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Decode, Encode, Serialize)]
 pub struct TokenBucketConfig {
     /// See TokenBucket::size.
     pub size: u64,
@@ -73,7 +74,7 @@ impl From<&TokenBucket> for TokenBucketConfig {
 
 /// A public-facing, stateless structure, holding all the data we need to create a RateLimiter
 /// (live) object.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Decode, Encode, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RateLimiterConfig {
     /// Data used to initialize the RateLimiter::bandwidth bucket.

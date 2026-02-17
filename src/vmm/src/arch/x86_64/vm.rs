@@ -9,7 +9,7 @@ use kvm_bindings::{
     KVM_PIT_SPEAKER_DUMMY, MsrList, kvm_clock_data, kvm_irqchip, kvm_pit_config, kvm_pit_state2,
 };
 use kvm_ioctls::Cap;
-use serde::{Deserialize, Serialize};
+use bitcode::{Decode, Encode};
 
 use crate::arch::x86_64::msr::MsrError;
 use crate::snapshot::Persist;
@@ -217,7 +217,7 @@ impl ArchVm {
     }
 }
 
-#[derive(Default, Deserialize, Serialize)]
+#[derive(Default, Decode, Encode)]
 /// Structure holding VM kvm state.
 pub struct VmState {
     /// guest memory state
@@ -318,8 +318,8 @@ mod tests {
         let state = vm.save_state().unwrap();
 
         // Test direct bitcode serialization
-        let serialized_data = bitcode::serialize(&state).unwrap();
-        let restored_state: VmState = bitcode::deserialize(&serialized_data).unwrap();
+        let serialized_data = bitcode::encode(&state);
+        let restored_state: VmState = bitcode::decode(&serialized_data).unwrap();
 
         vm.restore_state(&restored_state).unwrap();
     }

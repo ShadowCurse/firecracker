@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use event_manager::{MutEventSubscriber, SubscriberOps};
 use log::{error, warn};
-use serde::{Deserialize, Serialize};
+use bitcode::{Decode, Encode};
 
 use super::acpi::ACPIDeviceManager;
 use super::mmio::*;
@@ -92,7 +92,7 @@ pub enum DevicePersistError {
 }
 
 /// Holds the state of a MMIO VirtIO device
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Decode, Encode)]
 pub struct VirtioDeviceState<T> {
     /// Device identifier.
     pub device_id: String,
@@ -106,7 +106,7 @@ pub struct VirtioDeviceState<T> {
 
 /// Holds the state of a legacy device connected to the MMIO space.
 #[cfg(target_arch = "aarch64")]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Decode, Encode)]
 pub struct ConnectedLegacyState {
     /// Device identifier.
     pub type_: DeviceType,
@@ -114,14 +114,14 @@ pub struct ConnectedLegacyState {
     pub device_info: MMIODeviceInfo,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Decode, Encode)]
 pub struct MmdsState {
     pub version: MmdsVersion,
     pub imds_compat: bool,
 }
 
 /// Holds the device states.
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Decode, Encode)]
 pub struct DeviceStates {
     #[cfg(target_arch = "aarch64")]
     // State of legacy devices in MMIO space.
@@ -164,7 +164,7 @@ impl fmt::Debug for MMIODevManagerConstructorArgs<'_> {
     }
 }
 
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, Decode, Encode)]
 pub struct ACPIDeviceManagerState {
     vmgenid: VMGenIDState,
     vmclock: VmClockState,
@@ -764,7 +764,7 @@ mod tests {
             );
 
             let device_state = vmm.device_manager.save();
-            serialized_data = bitcode::serialize(&device_state).unwrap();
+            serialized_data = bitcode::encode(&device_state);
         }
 
         tmp_sock_file.remove().unwrap();
@@ -772,7 +772,7 @@ mod tests {
         let mut event_manager = EventManager::new().expect("Unable to create EventManager");
         let vmm = default_vmm();
         let device_manager_state: device_manager::DevicesState =
-            bitcode::deserialize(&serialized_data).unwrap();
+            bitcode::decode(&serialized_data).unwrap();
         let vm_resources = &mut VmResources::default();
         let restore_args = MMIODevManagerConstructorArgs {
             mem: vmm.vm.guest_memory(),

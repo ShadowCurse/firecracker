@@ -69,6 +69,30 @@ impl serde::Serialize for PciBdf {
     }
 }
 
+#[cfg(feature = "with-bitcode")]
+impl bitcode::__private::ConvertFrom<&PciBdf> for u32 {
+    fn convert_from(value: &PciBdf) -> Self {
+        value.0
+    }
+}
+
+#[cfg(feature = "with-bitcode")]
+impl bitcode::__private::ConvertFrom<u32> for PciBdf {
+    fn convert_from(value: u32) -> Self {
+        PciBdf(value)
+    }
+}
+
+#[cfg(feature = "with-bitcode")]
+impl bitcode::Encode for PciBdf {
+    type Encoder = bitcode::__private::ConvertIntoEncoder<u32>;
+}
+
+#[cfg(feature = "with-bitcode")]
+impl<'de> bitcode::Decode<'de> for PciBdf {
+    type Decoder = bitcode::__private::ConvertFromDecoder<'de, u32>;
+}
+
 impl PciBdf {
     pub fn segment(&self) -> u16 {
         ((self.0 >> 16) & 0xffff) as u16

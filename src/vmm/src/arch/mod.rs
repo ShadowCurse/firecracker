@@ -5,7 +5,7 @@ use std::fmt;
 use std::sync::LazyLock;
 
 use log::warn;
-use serde::{Deserialize, Serialize};
+use bitcode::{Decode, Encode};
 use vm_memory::GuestAddress;
 
 /// Module for aarch64 related functionality.
@@ -42,7 +42,7 @@ pub use crate::arch::x86_64::{
 };
 
 /// Types of devices that can get attached to this platform.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Copy, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Copy, Decode, Encode)]
 pub enum DeviceType {
     /// Device Type: Virtio.
     Virtio(u32),

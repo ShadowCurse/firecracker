@@ -9,6 +9,7 @@ use std::fmt::Write;
 use std::mem::offset_of;
 
 use kvm_bindings::*;
+use bitcode::{Decode, Encode};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[allow(non_upper_case_globals)]
@@ -543,8 +544,8 @@ mod tests {
         v.push(reg1);
         v.push(reg2);
 
-        let serialized_data = bitcode::serialize(&v).unwrap();
-        let restored: Aarch64RegisterVec = bitcode::deserialize(&serialized_data).unwrap();
+        let serialized_data = bitcode::encode(&v);
+        let restored: Aarch64RegisterVec = bitcode::decode(&serialized_data).unwrap();
 
         for (old, new) in v.iter().zip(restored.iter()) {
             assert_eq!(old, new);
@@ -567,11 +568,11 @@ mod tests {
         v.push(reg1);
         v.push(reg2);
 
-        let serialized_data = bitcode::serialize(&v).unwrap();
+        let serialized_data = bitcode::encode(&v);
 
         // Total size of registers according IDs are 16 + 16 = 32,
         // but actual data size is 8 + 16 = 24.
-        bitcode::deserialize::<Aarch64RegisterVec>(&serialized_data).unwrap_err();
+        bitcode::decode::<Aarch64RegisterVec>(&serialized_data).unwrap_err();
     }
 
     #[test]
@@ -588,10 +589,10 @@ mod tests {
 
         v.push(reg);
 
-        let serialized_data = bitcode::serialize(&v).unwrap();
+        let serialized_data = bitcode::encode(&v);
 
         // 4096 bit wide registers are not supported.
-        bitcode::deserialize::<Aarch64RegisterVec>(&serialized_data).unwrap_err();
+        bitcode::decode::<Aarch64RegisterVec>(&serialized_data).unwrap_err();
     }
 
     #[test]

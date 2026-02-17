@@ -8,7 +8,7 @@ use std::sync::atomic::AtomicU32;
 
 use bitvec::vec::BitVec;
 use log::info;
-use serde::{Deserialize, Serialize};
+use bitcode::{Decode, Encode};
 use vm_memory::{
     Address, Bytes, GuestAddress, GuestMemory, GuestMemoryError, GuestMemoryRegion, GuestUsize,
 };
@@ -102,8 +102,7 @@ pub struct VirtioMem {
 }
 
 /// Memory hotplug device status information.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, serde::Serialize)]
 pub struct VirtioMemStatus {
     /// Block size in MiB.
     pub block_size_mib: usize,

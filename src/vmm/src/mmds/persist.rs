@@ -6,7 +6,7 @@
 use std::net::Ipv4Addr;
 use std::sync::{Arc, Mutex};
 
-use serde::{Deserialize, Serialize};
+use bitcode::{Decode, Encode};
 
 use super::ns::MmdsNetworkStack;
 use crate::mmds::data_store::Mmds;
@@ -14,7 +14,7 @@ use crate::snapshot::Persist;
 use crate::utils::net::mac::{MAC_ADDR_LEN, MacAddr};
 
 /// State of a MmdsNetworkStack.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Decode, Encode)]
 pub struct MmdsNetworkStackState {
     mac_addr: [u8; MAC_ADDR_LEN as usize],
     ipv4_addr: u32,
@@ -57,9 +57,9 @@ mod tests {
         let ns = MmdsNetworkStack::new_with_defaults(None, Arc::new(Mutex::new(Mmds::default())));
 
         let ns_state = ns.save();
-        let serialized_data = bitcode::serialize(&ns_state).unwrap();
+        let serialized_data = bitcode::encode(&ns_state);
 
-        let restored_state = bitcode::deserialize(&serialized_data).unwrap();
+        let restored_state = bitcode::decode(&serialized_data).unwrap();
         let restored_ns =
             MmdsNetworkStack::restore(Arc::new(Mutex::new(Mmds::default())), &restored_state)
                 .unwrap();

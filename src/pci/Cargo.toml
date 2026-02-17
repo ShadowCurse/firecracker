@@ -10,6 +10,7 @@ bench = false
 
 [features]
 default = []
+with-bitcode = ["dep:bitcode"]
 
 [dependencies]
 
@@ -17,6 +18,7 @@ displaydoc = "0.2.5"
 libc = "0.2.180"
 log = "0.4.29"
 serde = { version = "1.0.228", features = ["derive"] }
+bitcode = { version = "0.6.9", features = ["derive"], optional = true }
 thiserror = "2.0.18"
 
 [dev-dependencies]

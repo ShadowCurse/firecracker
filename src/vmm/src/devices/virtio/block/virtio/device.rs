@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use block_io::FileEngine;
+use bitcode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use vm_memory::ByteValued;
 use vmm_sys_util::eventfd::EventFd;
@@ -42,7 +43,7 @@ use crate::vmm_config::drive::BlockDeviceConfig;
 use crate::vstate::memory::GuestMemoryMmap;
 
 /// The engine file type, either Sync or Async (through io_uring).
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Decode, Encode, Serialize)]
 pub enum FileEngineType {
     /// Use an Async engine, based on io_uring.
     Async,
@@ -169,8 +170,7 @@ pub struct ConfigSpace {
 unsafe impl ByteValued for ConfigSpace {}
 
 /// Use this structure to set up the Block Device before booting the kernel.
-#[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, PartialEq, Eq, Decode, Encode)]
 pub struct VirtioBlockConfig {
     /// Unique identifier of the drive.
     pub drive_id: String,
@@ -183,7 +183,6 @@ pub struct VirtioBlockConfig {
     pub is_root_device: bool,
     /// If set to true, the drive will ignore flush requests coming from
     /// the guest driver.
-    #[serde(default)]
     pub cache_type: CacheType,
 
     /// If set to true, the drive is opened in read-only mode. Otherwise, the
@@ -194,8 +193,6 @@ pub struct VirtioBlockConfig {
     /// Rate Limiter for I/O operations.
     pub rate_limiter: Option<RateLimiterConfig>,
     /// The type of IO engine used by the device.
-    #[serde(default)]
-    #[serde(rename = "io_engine")]
     pub file_engine_type: FileEngineType,
 }
 

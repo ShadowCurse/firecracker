@@ -6,6 +6,7 @@
 use std::borrow::Cow;
 
 use serde::de::Error;
+use bitcode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
 use crate::arch::aarch64::regs::{RegSize, reg_size};
@@ -33,7 +34,7 @@ impl GetCpuTemplate for Option<CpuTemplateType> {
 }
 
 /// Wrapper type to containing aarch64 CPU config modifiers.
-#[derive(Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize, Decode, Encode)]
 #[serde(deny_unknown_fields)]
 pub struct CustomCpuTemplate {
     /// Additional kvm capabilities to check before
@@ -88,7 +89,7 @@ impl CustomCpuTemplate {
 }
 
 /// Struct for defining enabled vcpu features
-#[derive(Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize, Decode, Encode)]
 pub struct VcpuFeatures {
     /// Index in the `kvm_bindings::kvm_vcpu_init.features` array.
     pub index: u32,
@@ -98,7 +99,7 @@ pub struct VcpuFeatures {
 
 /// Wrapper of a mask defined as a bitmap to apply
 /// changes to a given register's value.
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize, Decode, Encode, Hash)]
 pub struct RegisterModifier {
     /// Pointer of the location to be bit mapped.
     #[serde(

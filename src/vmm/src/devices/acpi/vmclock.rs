@@ -7,7 +7,7 @@ use std::sync::atomic::{Ordering, fence};
 
 use acpi_tables::{Aml, aml};
 use log::{debug, error};
-use serde::{Deserialize, Serialize};
+use bitcode::{Decode, Encode};
 use vm_allocator::AllocPolicy;
 use vm_memory::{Address, ByteValued, Bytes, GuestAddress, GuestMemoryError};
 use vm_superio::Trigger;
@@ -141,7 +141,7 @@ impl VmClock {
 /// (De)serialize-able state of the [`VmClock`]
 ///
 /// We could avoid this and reuse [`VmClock`] itself if `GuestAddress` was `Serialize`/`Deserialize`
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, Decode, Encode)]
 pub struct VmClockState {
     /// Guest address in which we write the [`VmClock`] info
     pub guest_address: u64,

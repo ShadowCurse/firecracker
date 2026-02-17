@@ -3,14 +3,14 @@
 
 //! Defines the structures needed for saving/restoring a RateLimiter.
 
-use serde::{Deserialize, Serialize};
+use bitcode::{Decode, Encode};
 use utils::time::TimerFd;
 
 use super::*;
 use crate::snapshot::Persist;
 
 /// State for saving a TokenBucket.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Decode, Encode)]
 pub struct TokenBucketState {
     size: u64,
     one_time_burst: u64,
@@ -53,7 +53,7 @@ impl Persist<'_> for TokenBucket {
 }
 
 /// State for saving a RateLimiter.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Decode, Encode)]
 pub struct RateLimiterState {
     ops: Option<TokenBucketState>,
     bandwidth: Option<TokenBucketState>,
@@ -116,9 +116,9 @@ mod tests {
 
         // Test serialization.
         let tb_state = tb.save();
-        let serialized_data = bitcode::serialize(&tb_state).unwrap();
+        let serialized_data = bitcode::encode(&tb_state);
 
-        let restored_state = bitcode::deserialize(&serialized_data).unwrap();
+        let restored_state = bitcode::decode(&serialized_data).unwrap();
         let restored_tb = TokenBucket::restore((), &restored_state).unwrap();
         assert!(tb.partial_eq(&restored_tb));
     }
@@ -186,9 +186,9 @@ mod tests {
 
         // Test serialization.
         let rate_limiter_state = rate_limiter.save();
-        let serialized_data = bitcode::serialize(&rate_limiter_state).unwrap();
+        let serialized_data = bitcode::encode(&rate_limiter_state);
 
-        let restored_state = bitcode::deserialize(&serialized_data).unwrap();
+        let restored_state = bitcode::decode(&serialized_data).unwrap();
         let restored_rate_limiter = RateLimiter::restore((), &restored_state).unwrap();
 
         assert!(

@@ -34,6 +34,7 @@
 
 use std::convert::TryFrom;
 use std::mem::{size_of, transmute};
+use bitcode::{Decode, Encode};
 
 /// cpuid utility functions.
 pub mod common;
@@ -475,7 +476,7 @@ impl std::cmp::Ord for CpuidKey {
 
 /// Definitions from `kvm/arch/x86/include/uapi/asm/kvm.h
 #[derive(
-    Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash,
+    Debug, serde::Serialize, serde::Deserialize, Decode, Encode, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash,
 )]
 pub struct KvmCpuidFlags(pub u32);
 impl KvmCpuidFlags {
@@ -499,7 +500,7 @@ impl Default for KvmCpuidFlags {
 }
 
 /// CPUID entry information stored for each leaf of [`IntelCpuid`].
-#[derive(Debug, Default, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Decode, Encode)]
 #[repr(C)]
 pub struct CpuidEntry {
     /// The KVM requires a `flags` parameter which indicates if a given CPUID leaf has sub-leaves.
@@ -555,7 +556,7 @@ pub struct CpuidEntry {
 /// To transmute this into leaves such that we can return mutable reference to it with leaf specific
 /// accessors, requires this to have a consistent member ordering.
 /// [`core::arch::x86_64::CpuidResult`] is not `repr(C)`.
-#[derive(Debug, Default, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Decode, Encode)]
 #[repr(C)]
 pub struct CpuidRegisters {
     /// EAX

@@ -6,7 +6,7 @@
 use std::io;
 use std::sync::{Arc, Mutex};
 
-use serde::{Deserialize, Serialize};
+use bitcode::{Decode, Encode};
 
 use super::device::{Net, RxBuffers};
 use super::{NET_NUM_QUEUES, NET_QUEUE_MAX_SIZE, RX_INDEX, TapError};
@@ -24,14 +24,14 @@ use crate::vstate::memory::GuestMemoryMmap;
 
 /// Information about the network config's that are saved
 /// at snapshot.
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Decode, Encode)]
 pub struct NetConfigSpaceState {
     guest_mac: Option<MacAddr>,
 }
 
 /// Information about the network device that are saved
 /// at snapshot.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Decode, Encode)]
 pub struct NetState {
     pub id: String,
     pub tap_if_name: String,
@@ -152,7 +152,7 @@ mod tests {
         // Create and save the net device.
         {
             let net_state = net.save();
-            serialized_data = bitcode::serialize(&net_state).unwrap();
+            serialized_data = bitcode::encode(&net_state);
 
             // Save some fields that we want to check later.
             id = net.id.clone();
@@ -167,7 +167,7 @@ mod tests {
         drop(net);
         {
             // Deserialize and restore the net device.
-            let restored_state = bitcode::deserialize(&serialized_data).unwrap();
+            let restored_state = bitcode::decode(&serialized_data).unwrap();
             match Net::restore(
                 NetConstructorArgs {
                     mem: guest_mem,

@@ -3,7 +3,7 @@
 
 use kvm_bindings::KVM_API_VERSION;
 use kvm_ioctls::Kvm as KvmFd;
-use serde::{Deserialize, Serialize};
+use bitcode::{Decode, Encode};
 
 pub use crate::arch::{Kvm, KvmArchError};
 use crate::cpu_config::templates::KvmCapability;
@@ -89,7 +89,7 @@ impl Kvm {
 }
 
 /// Structure holding an general specific VM state.
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Decode, Encode)]
 pub struct KvmState {
     /// Additional capabilities that were specified in cpu template.
     pub kvm_cap_modifiers: Vec<KvmCapability>,

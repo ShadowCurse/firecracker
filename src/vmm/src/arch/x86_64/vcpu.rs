@@ -15,7 +15,7 @@ use kvm_bindings::{
 };
 use kvm_ioctls::{VcpuExit, VcpuFd};
 use log::{error, warn};
-use serde::{Deserialize, Serialize};
+use bitcode::{Decode, Encode};
 use vmm_sys_util::fam::{self, FamStruct};
 
 use crate::arch::EntryPoint;
@@ -757,7 +757,7 @@ impl Peripherals {
 }
 
 /// Structure holding VCPU kvm state.
-#[derive(Serialize, Deserialize)]
+#[derive(Decode, Encode)]
 pub struct VcpuState {
     /// CpuId.
     pub cpuid: CpuId,

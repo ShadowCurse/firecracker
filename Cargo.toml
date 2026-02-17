@@ -41,3 +41,9 @@ strip = "none"
 
 [profile.bench]
 strip = "debuginfo"
+
+[patch.crates-io]
+kvm-bindings = { path = "vendor/kvm-bindings" }
+bitcode = { path = "vendor/bitcode" }
+vm-allocator = { path = "vendor/vm-allocator" }
+vmm-sys-util = { path = "vendor/vmm-sys-util" }

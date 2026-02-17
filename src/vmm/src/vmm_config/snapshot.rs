@@ -7,11 +7,12 @@ use std::path::PathBuf;
 
 /// For crates that depend on `vmm` we export.
 pub use semver::Version;
+use bitcode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
 /// The snapshot type options that are available when
 /// creating a new snapshot.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Decode, Encode, Serialize)]
 pub enum SnapshotType {
     /// Diff snapshot.
     Diff,
@@ -114,7 +115,7 @@ pub struct MemBackendConfig {
 }
 
 /// The microVM state options.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Decode, Encode, Serialize)]
 pub enum VmState {
     /// The microVM is paused, which means that we can create a snapshot of it.
     Paused,
@@ -123,7 +124,7 @@ pub enum VmState {
 }
 
 /// Keeps the microVM state necessary in the snapshotting context.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Decode, Encode, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Vm {
     /// The microVM state, which can be `paused` or `resumed`.

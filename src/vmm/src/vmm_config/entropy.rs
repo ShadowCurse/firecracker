@@ -4,6 +4,7 @@
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 
+use bitcode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
 use super::RateLimiterConfig;
@@ -11,7 +12,7 @@ use crate::devices::virtio::rng::{Entropy, EntropyError};
 
 /// This struct represents the strongly typed equivalent of the json body from entropy device
 /// related requests.
-#[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize, Decode, Encode, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EntropyDeviceConfig {
     /// Configuration for RateLimiter of Entropy device

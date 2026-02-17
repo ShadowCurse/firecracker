@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use bitvec::vec::BitVec;
-use serde::{Deserialize, Serialize};
+use bitcode::{Decode, Encode};
 use vm_memory::Address;
 
 use crate::Vm;
@@ -20,7 +20,7 @@ use crate::snapshot::Persist;
 use crate::utils::usize_to_u64;
 use crate::vstate::memory::{GuestMemoryMmap, GuestRegionMmap};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Decode, Encode)]
 pub struct VirtioMemState {
     pub virtio_state: VirtioDeviceState,
     addr: u64,

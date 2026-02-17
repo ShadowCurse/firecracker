@@ -4,6 +4,7 @@
 use std::fmt;
 use std::fmt::{Display, Formatter};
 
+use bitcode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, to_vec};
 
@@ -21,7 +22,7 @@ pub struct Mmds {
 }
 
 /// MMDS version.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Decode, Encode, Serialize)]
 pub enum MmdsVersion {
     #[default]
     /// MMDS version 1

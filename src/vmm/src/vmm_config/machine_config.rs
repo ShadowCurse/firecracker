@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 use std::fmt::Debug;
 
+use bitcode::{Decode, Encode};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::cpu_config::templates::{CpuTemplateType, CustomCpuTemplate, StaticCpuTemplate};
@@ -32,7 +33,7 @@ pub enum MachineConfigError {
 }
 
 /// Describes the possible (huge)page configurations for a microVM's memory.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, Decode, Encode)]
 pub enum HugePageConfig {
     /// Do not use hugepages, e.g. back guest memory by 4K
     #[default]
@@ -88,7 +89,7 @@ impl From<HugePageConfig> for Option<memfd::HugetlbSize> {
 }
 
 /// Struct used in PUT `/machine-config` API call.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Decode, Encode, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct MachineConfig {
     /// Number of vcpu to start.

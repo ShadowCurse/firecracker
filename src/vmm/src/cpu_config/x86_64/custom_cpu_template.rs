@@ -5,6 +5,7 @@
 /// config templates.
 use std::borrow::Cow;
 
+use bitcode::{Decode, Encode};
 use serde::de::Error as SerdeError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -69,7 +70,7 @@ impl GetCpuTemplate for Option<CpuTemplateType> {
 
 /// CPUID register enumeration
 #[allow(missing_docs)]
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Hash, Ord, PartialOrd)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Decode, Encode, Hash, Ord, PartialOrd)]
 pub enum CpuidRegister {
     Eax,
     Ebx,
@@ -78,7 +79,7 @@ pub enum CpuidRegister {
 }
 
 /// Target register to be modified by a bitmap.
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Decode, Encode, Hash)]
 pub struct CpuidRegisterModifier {
     /// CPUID register to be modified by the bitmap.
     #[serde(
@@ -94,7 +95,7 @@ pub struct CpuidRegisterModifier {
 /// Composite type that holistically provides
 /// the location of a specific register being used
 /// in the context of a CPUID tree.
-#[derive(Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize, Decode, Encode, Hash)]
 pub struct CpuidLeafModifier {
     /// Leaf value.
     #[serde(
@@ -116,7 +117,7 @@ pub struct CpuidLeafModifier {
 }
 
 /// Wrapper type to containing x86_64 CPU config modifiers.
-#[derive(Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize, Decode, Encode)]
 #[serde(deny_unknown_fields)]
 pub struct CustomCpuTemplate {
     /// Additional kvm capabilities to check before
@@ -145,7 +146,7 @@ impl CustomCpuTemplate {
 
 /// Wrapper of a mask defined as a bitmap to apply
 /// changes to a given register's value.
-#[derive(Debug, Default, Clone, Copy, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Debug, Default, Clone, Copy, Eq, PartialEq, Serialize, Deserialize, Decode, Encode, Hash)]
 pub struct RegisterModifier {
     /// Pointer of the location to be bit mapped.
     #[serde(

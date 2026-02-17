@@ -20,7 +20,7 @@ use kvm_bindings::{
 };
 use kvm_ioctls::VmFd;
 use log::debug;
-use serde::{Deserialize, Serialize};
+use bitcode::{Decode, Encode};
 use vmm_sys_util::errno;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -40,7 +40,7 @@ use crate::vstate::resources::ResourceAllocator;
 use crate::vstate::vcpu::VcpuError;
 use crate::{DirtyBitmap, Vcpu, mem_size_mib};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Decode, Encode)]
 /// A struct representing an interrupt line used by some device of the microVM
 pub struct RoutingEntry {
     entry: kvm_irq_routing_entry,
@@ -875,9 +875,9 @@ pub(crate) mod tests {
         };
 
         let state = vm.save_state().unwrap();
-        let serialized_data = bitcode::serialize(&state).unwrap();
+        let serialized_data = bitcode::encode(&state);
 
-        let restored_state: VmState = bitcode::deserialize(&serialized_data).unwrap();
+        let restored_state: VmState = bitcode::decode(&serialized_data).unwrap();
         vm.restore_state(&restored_state).unwrap();
 
         let mut resource_allocator = vm.resource_allocator();

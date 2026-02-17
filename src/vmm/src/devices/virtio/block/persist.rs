@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
+use bitcode::{Decode, Encode};
 
 use super::vhost_user::persist::VhostUserBlockState;
 use super::virtio::persist::VirtioBlockState;
@@ -11,7 +11,7 @@ use crate::devices::virtio::transport::VirtioInterrupt;
 use crate::vstate::memory::GuestMemoryMmap;
 
 /// Block device state.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Decode, Encode)]
 pub enum BlockState {
     Virtio(VirtioBlockState),
     VhostUser(VhostUserBlockState),

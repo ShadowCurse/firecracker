@@ -3,7 +3,7 @@
 
 use std::convert::Infallible;
 
-use serde::{Deserialize, Serialize};
+use bitcode::{Decode, Encode};
 pub use vm_allocator::AllocPolicy;
 use vm_allocator::{AddressAllocator, IdAllocator};
 
@@ -40,7 +40,7 @@ fn allocate_many_ids(
 /// * GSIs for legacy x86_64 devices
 /// * GSIs for MMIO devicecs
 /// * Memory allocations in the MMIO address space
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Decode, Encode)]
 pub struct ResourceAllocator {
     /// Allocator for legacy device interrupt lines
     pub gsi_legacy_allocator: IdAllocator,
@@ -287,8 +287,8 @@ mod tests {
 
     fn clone_allocator(allocator: &ResourceAllocator) -> ResourceAllocator {
         let state = allocator.save();
-        let serialized_data = bitcode::serialize(&state).unwrap();
-        let restored_state: ResourceAllocator = bitcode::deserialize(&serialized_data).unwrap();
+        let serialized_data = bitcode::encode(&state);
+        let restored_state: ResourceAllocator = bitcode::decode(&serialized_data).unwrap();
         ResourceAllocator::restore((), &restored_state).unwrap()
     }
 

@@ -2,13 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 use std::net::Ipv4Addr;
 
+use bitcode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
 use crate::mmds::data_store;
 use crate::mmds::data_store::MmdsVersion;
 
 /// Keeps the MMDS configuration.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Decode, Encode, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct MmdsConfig {
     /// MMDS version.

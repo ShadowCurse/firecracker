@@ -23,6 +23,7 @@ use std::borrow::Cow;
 use std::fmt::Debug;
 
 pub use common_types::*;
+use bitcode::{Decode, Encode};
 use serde::de::Error as SerdeError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -53,7 +54,7 @@ pub trait GetCpuTemplate {
 }
 
 /// Enum that represents types of cpu templates available.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub enum CpuTemplateType {
     /// Custom cpu template
     Custom(CustomCpuTemplate),
@@ -104,7 +105,7 @@ impl TryFrom<&str> for CustomCpuTemplate {
 /// Struct to represent user defined kvm capability.
 /// Users can add or remove kvm capabilities to be checked
 /// by FC in addition to those FC checks by default.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Encode, Decode)]
 pub enum KvmCapability {
     /// Add capability to the check list.
     Add(u32),
@@ -155,7 +156,7 @@ impl<'de> Deserialize<'de> for KvmCapability {
 }
 
 /// Bit-mapped value to adjust targeted bits of a register.
-#[derive(Debug, Default, Clone, Copy, Eq, PartialEq, Hash)]
+#[derive(Debug, Default, Clone, Copy, Eq, PartialEq, Hash, Encode, Decode)]
 pub struct RegisterValueFilter<V>
 where
     V: Numeric,
@@ -258,6 +259,7 @@ where
         Ok(RegisterValueFilter { filter, value })
     }
 }
+
 
 /// Trait for numeric types
 pub trait Numeric:

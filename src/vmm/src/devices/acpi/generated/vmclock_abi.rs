@@ -16,7 +16,7 @@
     clippy::redundant_static_lifetimes
 )]
 
-use serde::{Deserialize, Serialize};
+use bitcode::{Decode, Encode};
 
 pub const __BITS_PER_LONG: u32 = 64;
 pub const __BITS_PER_LONG_LONG: u32 = 64;
@@ -131,7 +131,7 @@ pub type __sum16 = __u16;
 pub type __wsum = __u32;
 pub type __poll_t = ::std::os::raw::c_uint;
 #[repr(C)]
-#[derive(Debug, Default, Copy, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Decode, Encode)]
 pub struct vmclock_abi {
     pub magic: __le32,
     pub size: __le32,

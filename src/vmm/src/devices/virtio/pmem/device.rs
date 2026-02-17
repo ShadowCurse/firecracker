@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use kvm_bindings::{KVM_MEM_READONLY, kvm_userspace_memory_region};
 use kvm_ioctls::VmFd;
-use serde::{Deserialize, Serialize};
+use bitcode::{Decode, Encode};
 use vm_allocator::AllocPolicy;
 use vm_memory::mmap::{MmapRegionBuilder, MmapRegionError};
 use vm_memory::{GuestAddress, GuestMemoryError};
@@ -60,7 +60,7 @@ const VIRTIO_PMEM_REQ_TYPE_FLUSH: u32 = 0;
 const SUCCESS: i32 = 0;
 const FAILURE: i32 = -1;
 
-#[derive(Debug, Default, Copy, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Copy, Clone, Decode, Encode)]
 #[repr(C)]
 pub struct ConfigSpace {
     // Physical address of the first byte of the persistent memory region.

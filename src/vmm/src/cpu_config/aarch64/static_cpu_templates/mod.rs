@@ -1,13 +1,14 @@
 // Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use bitcode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
 /// Module with V1N1 CPU template for aarch64
 pub mod v1n1;
 
 /// Templates available for configuring the supported ARM CPU types.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Decode, Encode)]
 pub enum StaticCpuTemplate {
     /// Template to mask Neoverse-V1 as Neoverse-N1
     V1N1,

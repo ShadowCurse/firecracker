@@ -5,6 +5,7 @@ use std::collections::VecDeque;
 use std::io;
 use std::sync::{Arc, Mutex};
 
+use bitcode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
 use super::RateLimiterConfig;
@@ -30,7 +31,7 @@ pub enum DriveError {
 }
 
 /// Use this structure to set up the Block Device before booting the kernel.
-#[derive(Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Default, PartialEq, Eq, Deserialize, Decode, Encode, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct BlockDeviceConfig {
     /// Unique identifier of the drive.

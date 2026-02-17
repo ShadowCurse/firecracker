@@ -9,6 +9,7 @@ use std::sync::{Mutex, OnceLock};
 use std::thread;
 
 use log::{Log, Metadata, Record};
+use bitcode::{Decode, Encode};
 use serde::{Deserialize, Deserializer, Serialize};
 use utils::time::LocalTime;
 
@@ -176,7 +177,7 @@ impl Log for Logger {
 }
 
 /// Strongly typed structure used to describe the logger.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Decode, Encode, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct LoggerConfig {
     /// Named pipe or file used as output for logs.
@@ -195,7 +196,7 @@ pub struct LoggerConfig {
 /// the log level filter. It would be a breaking change to no longer support this. In the next
 /// breaking release this should be removed (replaced with `log::LevelFilter` and only supporting
 /// its default deserialization).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Encode, Decode)]
 pub enum LevelFilter {
     /// [`log::LevelFilter::Off`]
     Off,

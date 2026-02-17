@@ -1,6 +1,7 @@
 // Copyright 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use bitcode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
 use crate::devices::virtio::mem::{
@@ -33,7 +34,7 @@ fn default_slot_size_mib() -> usize {
 }
 
 /// Configuration for memory hotplug device.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Decode, Encode, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct MemoryHotplugConfig {
     /// Total memory size in MiB that can be hotplugged.
@@ -97,7 +98,7 @@ impl From<&VirtioMem> for MemoryHotplugConfig {
 }
 
 /// Configuration for memory hotplug device.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Decode, Encode, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct MemoryHotplugSizeUpdate {
     /// Requested size in MiB to resize the hotpluggable memory to.

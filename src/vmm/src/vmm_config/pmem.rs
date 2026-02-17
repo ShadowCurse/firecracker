@@ -3,6 +3,7 @@
 
 use std::sync::{Arc, Mutex};
 
+use bitcode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
 use crate::devices::virtio::pmem::device::{Pmem, PmemError};
@@ -21,7 +22,7 @@ pub enum PmemConfigError {
 }
 
 /// Use this structure to setup a Pmem device before boothing the kernel.
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize, Decode, Encode)]
 #[serde(deny_unknown_fields)]
 pub struct PmemConfig {
     /// Unique identifier of the device.

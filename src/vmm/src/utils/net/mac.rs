@@ -13,6 +13,7 @@
 use std::fmt;
 use std::str::FromStr;
 
+use bitcode::{Decode, Encode};
 use serde::de::{Deserialize, Deserializer, Error};
 use serde::ser::{Serialize, Serializer};
 
@@ -114,6 +115,26 @@ impl<'de> Deserialize<'de> for MacAddr {
         let s = <std::string::String as Deserialize>::deserialize(deserializer)?;
         MacAddr::from_str(&s).map_err(|_| D::Error::custom("The provided MAC address is invalid."))
     }
+}
+
+impl bitcode::__private::ConvertFrom<&MacAddr> for [u8; MAC_ADDR_LEN as usize] {
+    fn convert_from(value: &MacAddr) -> Self {
+        value.bytes
+    }
+}
+
+impl bitcode::__private::ConvertFrom<[u8; MAC_ADDR_LEN as usize]> for MacAddr {
+    fn convert_from(bytes: [u8; MAC_ADDR_LEN as usize]) -> Self {
+        MacAddr { bytes }
+    }
+}
+
+impl Encode for MacAddr {
+    type Encoder = bitcode::__private::ConvertIntoEncoder<[u8; MAC_ADDR_LEN as usize]>;
+}
+
+impl<'de> Decode<'de> for MacAddr {
+    type Decoder = bitcode::__private::ConvertFromDecoder<'de, [u8; MAC_ADDR_LEN as usize]>;
 }
 
 #[cfg(test)]

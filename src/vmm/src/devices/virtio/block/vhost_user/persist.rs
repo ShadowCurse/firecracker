@@ -3,7 +3,7 @@
 
 //! Defines the structures needed for saving/restoring block devices.
 
-use serde::{Deserialize, Serialize};
+use bitcode::{Decode, Encode};
 
 use super::VhostUserBlockError;
 use super::device::VhostUserBlock;
@@ -13,7 +13,7 @@ use crate::devices::virtio::persist::VirtioDeviceState;
 use crate::snapshot::Persist;
 
 /// vhost-user block device state.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Decode, Encode)]
 pub struct VhostUserBlockState {
     id: String,
     partuuid: Option<String>,

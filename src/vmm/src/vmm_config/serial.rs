@@ -3,10 +3,11 @@
 
 use std::path::PathBuf;
 
+use bitcode::{Decode, Encode};
 use serde::Deserialize;
 
 /// The body of a PUT /serial request.
-#[derive(Debug, PartialEq, Eq, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Deserialize, Decode, Encode)]
 #[serde(deny_unknown_fields)]
 pub struct SerialConfig {
     /// Named pipe or file used as output for guest serial console.
