@@ -708,26 +708,47 @@ apply_linux_61_tweaks() {
         echo -e "CPU not vulnerable to iTLB multihit, using kvm.nx_huge_pages=never mitigation"
         # we need a lock so another process is not running the same thing and to
         # avoid race conditions.
-        set -C # noclobber
+        LOCK_TIMEOUT=120  # seconds
+        LOCK_START=$SECONDS
         while true; do
-            if echo "$$" > "$KVM_MODULE_LOCKFILE"; then
+            # Use noclobber in a subshell to avoid leaking it to the rest of the script
+            if (set -C; echo "$$" > "$KVM_MODULE_LOCKFILE") 2>/dev/null; then
                 echo "Successfully acquired lock"
-                if ! grep -q "never" $NX_HUGEPAGES; then
-                    echo "Reloading KVM modules with nx_huge_pages=never"
-                    sudo modprobe -r $KVM_VENDOR_MOD kvm
+                break
+            else
+                # Check for stale lock from a dead process
+                if [ -f "$KVM_MODULE_LOCKFILE" ]; then
+                    LOCK_PID=$(cat "$KVM_MODULE_LOCKFILE" 2>/dev/null)
+                    if [ -n "$LOCK_PID" ] && ! kill -0 "$LOCK_PID" 2>/dev/null; then
+                        echo "Removing stale lock from dead process $LOCK_PID"
+                        rm -f "$KVM_MODULE_LOCKFILE"
+                        continue
+                    fi
+                fi
+                if (( LOCK_TIMEOUT <= SECONDS - LOCK_START )); then
+                    say_warn "Timed out waiting for KVM module lock after ${LOCK_TIMEOUT}s"
+                    break
+                fi
+                sleep 5s
+            fi
+        done
+        # Only proceed if we actually hold the lock
+        if [ -f "$KVM_MODULE_LOCKFILE" ] && [ "$(cat "$KVM_MODULE_LOCKFILE" 2>/dev/null)" = "$$" ]; then
+            if ! grep -q "never" $NX_HUGEPAGES; then
+                echo "Reloading KVM modules with nx_huge_pages=never"
+                if sudo modprobe -r $KVM_VENDOR_MOD kvm; then
                     sudo modprobe kvm nx_huge_pages=never
                     if [[ $KVM_VENDOR_MOD == "kvm_amd" ]]; then
                         sudo modprobe kvm_amd avic=1
                     else
                         sudo modprobe $KVM_VENDOR_MOD
                     fi
+                else
+                    say_warn "Failed to unload KVM modules (may be in use), skipping nx_huge_pages tweak"
                 fi
-                rm "$KVM_MODULE_LOCKFILE"
-                break
-            else
-                sleep 5s
             fi
-        done
+            rm -f "$KVM_MODULE_LOCKFILE"
+        fi
         tail -v $ITLB_MULTIHIT $NX_HUGEPAGES
     # else (m5d Skylake and CascadeLake)
     else
