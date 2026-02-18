@@ -1,0 +1,80 @@
+diff --git a/vendor/bitcode/src/derive/convert.rs b/vendor/bitcode/src/derive/convert.rs
+index bd77fcc..4c29146 100644
+--- a/vendor/bitcode/src/derive/convert.rs
++++ b/vendor/bitcode/src/derive/convert.rs
+@@ -21,7 +21,7 @@ macro_rules! impl_convert {
+ pub(crate) use impl_convert;
+ 
+ // Like [`From`] but we can implement it ourselves.
+-pub(crate) trait ConvertFrom<T>: Sized {
++pub trait ConvertFrom<T>: Sized {
+     fn convert_from(value: T) -> Self;
+ }
+ 
+diff --git a/vendor/bitcode/src/derive/impls.rs b/vendor/bitcode/src/derive/impls.rs
+index 61fd569..26957e0 100644
+--- a/vendor/bitcode/src/derive/impls.rs
++++ b/vendor/bitcode/src/derive/impls.rs
+@@ -213,6 +213,50 @@ impl<'a, T> Decode<'a> for PhantomData<T> {
+     type Decoder = EmptyCoder;
+ }
+ 
++// Wrapping<T> - encode/decode as T via convert
++impl<T: Encode + Copy> Encode for core::num::Wrapping<T> {
++    type Encoder = crate::derive::convert::ConvertIntoEncoder<T>;
++}
++impl<'a, T: Decode<'a>> Decode<'a> for core::num::Wrapping<T> {
++    type Decoder = crate::derive::convert::ConvertFromDecoder<'a, T>;
++}
++
++impl<T: Copy> crate::derive::convert::ConvertFrom<&core::num::Wrapping<T>> for T {
++    fn convert_from(value: &core::num::Wrapping<T>) -> Self {
++        value.0
++    }
++}
++
++impl<T> crate::derive::convert::ConvertFrom<T> for core::num::Wrapping<T> {
++    fn convert_from(value: T) -> Self {
++        core::num::Wrapping(value)
++    }
++}
++
++// PathBuf - encode/decode as String via convert
++#[cfg(feature = "std")]
++impl Encode for std::path::PathBuf {
++    type Encoder = crate::derive::convert::ConvertIntoEncoder<String>;
++}
++#[cfg(feature = "std")]
++impl<'a> Decode<'a> for std::path::PathBuf {
++    type Decoder = crate::derive::convert::ConvertFromDecoder<'a, String>;
++}
++
++#[cfg(feature = "std")]
++impl crate::derive::convert::ConvertFrom<&std::path::PathBuf> for String {
++    fn convert_from(value: &std::path::PathBuf) -> Self {
++        value.to_string_lossy().into_owned()
++    }
++}
++
++#[cfg(feature = "std")]
++impl crate::derive::convert::ConvertFrom<String> for std::path::PathBuf {
++    fn convert_from(value: String) -> Self {
++        std::path::PathBuf::from(value)
++    }
++}
++
+ macro_rules! impl_tuples {
+     ($(($($n:tt $name:ident)*))+) => {
+         $(
+diff --git a/vendor/bitcode/src/derive/mod.rs b/vendor/bitcode/src/derive/mod.rs
+index 235d711..9071a6f 100644
+--- a/vendor/bitcode/src/derive/mod.rs
++++ b/vendor/bitcode/src/derive/mod.rs
+@@ -27,6 +27,7 @@ pub(crate) mod vec;
+ pub mod __private {
+     extern crate alloc;
+     pub use crate::coder::{uninit_field, Buffer, Decoder, Encoder, Result, View};
++    pub use crate::derive::convert::{ConvertFrom, ConvertFromDecoder, ConvertIntoEncoder};
+     pub use crate::derive::variant::{VariantDecoder, VariantEncoder};
+     pub use crate::derive::{Decode, Encode};
+     pub fn invalid_enum_variant<T>() -> Result<T> {

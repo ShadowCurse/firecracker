@@ -1,0 +1,138 @@
+diff --git a/vendor/vm-allocator/Cargo.toml b/vendor/vm-allocator/Cargo.toml
+index 078d49a..b1e4305 100644
+--- a/vendor/vm-allocator/Cargo.toml
++++ b/vendor/vm-allocator/Cargo.toml
+@@ -43,5 +43,14 @@ version = "1.0.137"
+ features = ["derive"]
+ optional = true
+ 
++[dependencies.bitcode]
++version = "0.6.9"
++features = ["derive"]
++optional = true
++
+ [dependencies.thiserror]
+ version = "2.0"
++
++[features]
++serde = ["dep:serde"]
++with-bitcode = ["dep:bitcode"]
+diff --git a/vendor/vm-allocator/src/address_allocator.rs b/vendor/vm-allocator/src/address_allocator.rs
+index 320a559..dff8762 100644
+--- a/vendor/vm-allocator/src/address_allocator.rs
++++ b/vendor/vm-allocator/src/address_allocator.rs
+@@ -84,6 +84,37 @@ impl AddressAllocator {
+     }
+ }
+ 
++#[cfg(feature = "with-bitcode")]
++mod bitcode_impl {
++    use super::*;
++    use crate::allocation_engine::NodeState;
++
++    type Repr = (RangeInclusive, Vec<(RangeInclusive, NodeState)>);
++
++    impl bitcode::__private::ConvertFrom<&AddressAllocator> for Repr {
++        fn convert_from(value: &AddressAllocator) -> Self {
++            (value.address_space, value.interval_tree.collect_nodes())
++        }
++    }
++
++    impl bitcode::__private::ConvertFrom<Repr> for AddressAllocator {
++        fn convert_from((address_space, nodes): Repr) -> Self {
++            AddressAllocator {
++                address_space,
++                interval_tree: IntervalTree::from_nodes(&nodes),
++            }
++        }
++    }
++
++    impl bitcode::Encode for AddressAllocator {
++        type Encoder = bitcode::__private::ConvertIntoEncoder<Repr>;
++    }
++
++    impl<'de> bitcode::Decode<'de> for AddressAllocator {
++        type Decoder = bitcode::__private::ConvertFromDecoder<'de, Repr>;
++    }
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+diff --git a/vendor/vm-allocator/src/allocation_engine/interval_tree.rs b/vendor/vm-allocator/src/allocation_engine/interval_tree.rs
+index cbb56fa..bd00486 100644
+--- a/vendor/vm-allocator/src/allocation_engine/interval_tree.rs
++++ b/vendor/vm-allocator/src/allocation_engine/interval_tree.rs
+@@ -42,6 +42,7 @@ pub fn align_up(address: u64, alignment: u64) -> Result<u64> {
+ /// - * -> None: IntervalTree::delete()
+ #[derive(Clone, Copy, Debug, PartialEq, PartialOrd, Eq, Ord)]
+ #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
++#[cfg_attr(feature = "with-bitcode", derive(bitcode::Encode, bitcode::Decode))]
+ pub enum NodeState {
+     /// Node is free.
+     Free,
+@@ -652,6 +653,40 @@ impl IntervalTree {
+         self.insert(range, NodeState::Free)?;
+         Ok(())
+     }
++
++    /// Collect all nodes as (key, state) pairs via in-order traversal.
++    #[cfg(feature = "with-bitcode")]
++    pub fn collect_nodes(&self) -> Vec<(RangeInclusive, NodeState)> {
++        let mut nodes = Vec::new();
++        fn collect(node: &Option<Box<InnerNode>>, out: &mut Vec<(RangeInclusive, NodeState)>) {
++            if let Some(n) = node {
++                collect(&n.left, out);
++                out.push((n.key, n.node_state));
++                collect(&n.right, out);
++            }
++        }
++        collect(&self.root, &mut nodes);
++        nodes
++    }
++
++    /// Reconstruct an IntervalTree from sorted (key, state) pairs.
++    #[cfg(feature = "with-bitcode")]
++    pub fn from_nodes(nodes: &[(RangeInclusive, NodeState)]) -> Self {
++        fn build(nodes: &[(RangeInclusive, NodeState)]) -> Option<Box<InnerNode>> {
++            if nodes.is_empty() {
++                return None;
++            }
++            let mid = nodes.len() / 2;
++            let mut node = InnerNode::new(nodes[mid].0, nodes[mid].1);
++            node.left = build(&nodes[..mid]);
++            node.right = build(&nodes[mid + 1..]);
++            node.height = 1 + std::cmp::max(height(&node.left), height(&node.right));
++            Some(Box::new(node))
++        }
++        IntervalTree {
++            root: build(nodes),
++        }
++    }
+ }
+ 
+ #[cfg(test)]
+diff --git a/vendor/vm-allocator/src/id_allocator.rs b/vendor/vm-allocator/src/id_allocator.rs
+index 86037ff..70c3ab5 100644
+--- a/vendor/vm-allocator/src/id_allocator.rs
++++ b/vendor/vm-allocator/src/id_allocator.rs
+@@ -19,6 +19,7 @@ use std::collections::BTreeSet;
+ // are sorted so we will always use the first available ID.
+ #[derive(Debug, Clone)]
+ #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
++#[cfg_attr(feature = "with-bitcode", derive(bitcode::Encode, bitcode::Decode))]
+ pub struct IdAllocator {
+     // Beginning of the range of IDs that we want to manage.
+     range_base: u32,
+diff --git a/vendor/vm-allocator/src/lib.rs b/vendor/vm-allocator/src/lib.rs
+index 4167b7b..b9f8302 100644
+--- a/vendor/vm-allocator/src/lib.rs
++++ b/vendor/vm-allocator/src/lib.rs
+@@ -159,6 +159,7 @@ pub type Result<T> = result::Result<T, Error>;
+ // This structure represents the key of the Node object in the interval tree implementation.
+ #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Hash, Ord, Debug)]
+ #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
++#[cfg_attr(feature = "with-bitcode", derive(bitcode::Encode, bitcode::Decode))]
+ pub struct RangeInclusive {
+     /// Lower boundary of the interval.
+     start: u64,

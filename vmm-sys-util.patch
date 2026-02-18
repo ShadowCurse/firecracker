@@ -1,0 +1,82 @@
+diff --git a/vendor/vmm-sys-util/Cargo.toml b/vendor/vmm-sys-util/Cargo.toml
+index 755dfe7..023d162 100644
+--- a/vendor/vmm-sys-util/Cargo.toml
++++ b/vendor/vmm-sys-util/Cargo.toml
+@@ -38,6 +38,9 @@ with-serde = [
+     "serde",
+     "serde_derive",
+ ]
++with-bitcode = [
++    "dep:bitcode",
++]
+ 
+ [lib]
+ name = "vmm_sys_util"
+@@ -57,6 +60,11 @@ optional = true
+ version = "1.0.27"
+ optional = true
+ 
++[dependencies.bitcode]
++version = "0.6.9"
++features = ["derive"]
++optional = true
++
+ [dev-dependencies.bincode]
+ version = "1.3.3"
+ 
+diff --git a/vendor/vmm-sys-util/src/fam.rs b/vendor/vmm-sys-util/src/fam.rs
+index 135cdd7..42d16c7 100644
+--- a/vendor/vmm-sys-util/src/fam.rs
++++ b/vendor/vmm-sys-util/src/fam.rs
+@@ -621,6 +621,51 @@ where
+     }
+ }
+ 
++#[cfg(feature = "with-bitcode")]
++impl<T: Default + FamStruct + bitcode::Encode> bitcode::Encode for FamStructWrapper<T>
++where
++    <T as FamStruct>::Entry: bitcode::Encode,
++{
++    type Encoder = bitcode::__private::ConvertIntoEncoder<(T, Vec<<T as FamStruct>::Entry>)>;
++}
++
++#[cfg(feature = "with-bitcode")]
++impl<'de, T: Default + FamStruct + for<'a> bitcode::Decode<'a>> bitcode::Decode<'de>
++    for FamStructWrapper<T>
++where
++    <T as FamStruct>::Entry: Copy + for<'a> bitcode::Decode<'a>,
++{
++    type Decoder =
++        bitcode::__private::ConvertFromDecoder<'de, (T, Vec<<T as FamStruct>::Entry>)>;
++}
++
++#[cfg(feature = "with-bitcode")]
++impl<T: Default + FamStruct + bitcode::Encode> bitcode::__private::ConvertFrom<&FamStructWrapper<T>>
++    for (T, Vec<<T as FamStruct>::Entry>)
++where
++    <T as FamStruct>::Entry: bitcode::Encode + Clone,
++{
++    fn convert_from(value: &FamStructWrapper<T>) -> Self {
++        // SAFETY: T is a repr(C) FamStruct, reading it as bytes is safe
++        let header = unsafe { std::ptr::read(value.as_fam_struct_ref()) };
++        (header, value.as_slice().to_vec())
++    }
++}
++
++#[cfg(feature = "with-bitcode")]
++impl<T: Default + FamStruct + for<'a> bitcode::Decode<'a>> bitcode::__private::ConvertFrom<(T, Vec<<T as FamStruct>::Entry>)>
++    for FamStructWrapper<T>
++where
++    <T as FamStruct>::Entry: Copy + for<'a> bitcode::Decode<'a>,
++{
++    fn convert_from((header, entries): (T, Vec<<T as FamStruct>::Entry>)) -> Self {
++        let mut wrapper = FamStructWrapper::from_entries(entries.as_slice())
++            .expect("FamStructWrapper reconstruction should not fail");
++        wrapper.mem_allocator[0] = header;
++        wrapper
++    }
++}
++
+ /// Generate `FamStruct` implementation for structs with flexible array member.
+ #[macro_export]
+ macro_rules! generate_fam_struct_impl {

@@ -1,0 +1,160 @@
+diff --git a/vendor/kvm-bindings/Cargo.toml b/vendor/kvm-bindings/Cargo.toml
+index e903554..40fd902 100644
+--- a/vendor/kvm-bindings/Cargo.toml
++++ b/vendor/kvm-bindings/Cargo.toml
+@@ -41,6 +41,10 @@ serde = [
+     "serde/derive",
+     "dep:zerocopy",
+ ]
++bitcode = [
++    "dep:bitcode",
++    "dep:zerocopy",
++]
+ 
+ [lib]
+ name = "kvm_bindings"
+@@ -51,6 +55,11 @@ version = "1.0.0"
+ features = ["derive"]
+ optional = true
+ 
++[dependencies.bitcode]
++version = "0.6.9"
++features = ["derive"]
++optional = true
++
+ [dependencies.vmm-sys-util]
+ version = ">=0.14, <=0.15"
+ optional = true
+diff --git a/vendor/kvm-bindings/src/bitcode_impl.rs b/vendor/kvm-bindings/src/bitcode_impl.rs
+new file mode 100644
+index 0000000..1de9af9
+--- /dev/null
++++ b/vendor/kvm-bindings/src/bitcode_impl.rs
+@@ -0,0 +1,38 @@
++// Copyright 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
++// SPDX-License-Identifier: Apache-2.0
++//! Module containing bitcode Encode/Decode utilities
++
++/// Macro that generates bitcode::Encode and bitcode::Decode implementations for the given types.
++/// This macro assumes that the types implement zerocopy::FromBytes and zerocopy::IntoBytes, and uses
++/// these implementations to serialize/deserialize as opaque byte vectors.
++/// During deserialization, it will try to deserialize a `Vec<u8>`. If the deserialized `Vec` has a
++/// length that equals `size_of::<T>`, it will transmute to `T` (using zerocopy), otherwise the
++/// `Vec` will either be zero-padded, or truncated. This mirrors the serde_impls! behavior.
++macro_rules! bitcode_impls {
++    ($($typ: ty),*) => {
++        $(
++            impl bitcode::__private::ConvertFrom<&$typ> for Vec<u8> {
++                fn convert_from(value: &$typ) -> Self {
++                    value.as_bytes().to_vec()
++                }
++            }
++
++            impl bitcode::__private::ConvertFrom<Vec<u8>> for $typ {
++                fn convert_from(bytes: Vec<u8>) -> Self {
++                    let mut backing = [0u8; std::mem::size_of::<$typ>()];
++                    let limit = bytes.len().min(backing.len());
++                    backing[..limit].copy_from_slice(&bytes[..limit]);
++                    transmute!(backing)
++                }
++            }
++
++            impl bitcode::Encode for $typ {
++                type Encoder = bitcode::__private::ConvertIntoEncoder<Vec<u8>>;
++            }
++
++            impl<'de> bitcode::Decode<'de> for $typ {
++                type Decoder = bitcode::__private::ConvertFromDecoder<'de, Vec<u8>>;
++            }
++        )*
++    }
++}
+diff --git a/vendor/kvm-bindings/src/lib.rs b/vendor/kvm-bindings/src/lib.rs
+index ec56e59..2b588b3 100644
+--- a/vendor/kvm-bindings/src/lib.rs
++++ b/vendor/kvm-bindings/src/lib.rs
+@@ -19,12 +19,22 @@ extern crate serde;
+ #[cfg(feature = "serde")]
+ extern crate zerocopy;
+ 
++#[cfg(feature = "bitcode")]
++extern crate bitcode;
++
++#[cfg(all(feature = "bitcode", not(feature = "serde")))]
++extern crate zerocopy;
++
+ extern crate core;
+ 
+ #[cfg(feature = "serde")]
+ #[macro_use]
+ mod serialize;
+ 
++#[cfg(feature = "bitcode")]
++#[macro_use]
++mod bitcode_impl;
++
+ #[cfg(target_arch = "x86_64")]
+ mod x86_64;
+ #[cfg(target_arch = "x86_64")]
+diff --git a/vendor/kvm-bindings/src/x86_64/bitcode_impl.rs b/vendor/kvm-bindings/src/x86_64/bitcode_impl.rs
+new file mode 100644
+index 0000000..1bab0bb
+--- /dev/null
++++ b/vendor/kvm-bindings/src/x86_64/bitcode_impl.rs
+@@ -0,0 +1,42 @@
++// Copyright 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
++// SPDX-License-Identifier: Apache-2.0
++
++use super::bindings::{
++    kvm_clock_data, kvm_cpuid_entry2, kvm_cpuid2, kvm_debugregs, kvm_dtable,
++    kvm_irq_routing, kvm_irq_routing_entry, kvm_irqchip,
++    kvm_lapic_state, kvm_mp_state, kvm_msr_entry, kvm_msrs,
++    kvm_pit_channel_state, kvm_pit_state2, kvm_regs, kvm_segment,
++    kvm_sregs, kvm_vcpu_events, kvm_xcr, kvm_xcrs, kvm_xsave,
++};
++use super::fam_wrappers::kvm_xsave2;
++use super::nested::KvmNestedStateBuffer;
++use zerocopy::{IntoBytes, transmute};
++
++extern crate alloc;
++use alloc::vec::Vec;
++
++bitcode_impls!(
++    kvm_regs,
++    kvm_segment,
++    kvm_dtable,
++    kvm_sregs,
++    kvm_msr_entry,
++    kvm_cpuid_entry2,
++    kvm_pit_channel_state,
++    kvm_pit_state2,
++    kvm_vcpu_events,
++    kvm_debugregs,
++    kvm_xcr,
++    kvm_xcrs,
++    kvm_mp_state,
++    kvm_clock_data,
++    kvm_lapic_state,
++    kvm_msrs,
++    kvm_cpuid2,
++    kvm_xsave,
++    kvm_xsave2,
++    kvm_irqchip,
++    kvm_irq_routing,
++    kvm_irq_routing_entry,
++    KvmNestedStateBuffer
++);
+diff --git a/vendor/kvm-bindings/src/x86_64/mod.rs b/vendor/kvm-bindings/src/x86_64/mod.rs
+index 85c8dfe..ec529ac 100644
+--- a/vendor/kvm-bindings/src/x86_64/mod.rs
++++ b/vendor/kvm-bindings/src/x86_64/mod.rs
+@@ -11,6 +11,9 @@ pub mod nested;
+ #[cfg(feature = "serde")]
+ mod serialize;
+ 
++#[cfg(feature = "bitcode")]
++mod bitcode_impl;
++
+ pub use self::bindings::*;
+ #[cfg(feature = "fam-wrappers")]
+ pub use self::fam_wrappers::*;
