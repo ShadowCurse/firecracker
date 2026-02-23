@@ -2,9 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::fs::File;
-use std::io::{Seek, SeekFrom, Write};
+use std::io::Write;
+use std::os::unix::fs::FileExt;
 
-use vm_memory::{GuestMemoryError, ReadVolatile, WriteVolatile};
+use vm_memory::GuestMemoryError;
+use vm_memory::bitmap::Bitmap;
 
 use crate::vstate::memory::{GuestAddress, GuestMemory, GuestMemoryMmap};
 
@@ -12,12 +14,12 @@ use crate::vstate::memory::{GuestAddress, GuestMemory, GuestMemoryMmap};
 pub enum SyncIoError {
     /// Flush: {0}
     Flush(std::io::Error),
-    /// Seek: {0}
-    Seek(std::io::Error),
     /// SyncAll: {0}
     SyncAll(std::io::Error),
     /// Transfer: {0}
     Transfer(GuestMemoryError),
+    /// Pread/Pwrite: {0}
+    PreadPwrite(std::io::Error),
 }
 
 #[derive(Debug)]
@@ -50,12 +52,30 @@ impl SyncFileEngine {
         addr: GuestAddress,
         count: u32,
     ) -> Result<u32, SyncIoError> {
-        self.file
-            .seek(SeekFrom::Start(offset))
-            .map_err(SyncIoError::Seek)?;
-        mem.get_slice(addr, count as usize)
-            .and_then(|mut slice| Ok(self.file.read_exact_volatile(&mut slice)?))
+        let slice = mem
+            .get_slice(addr, count as usize)
             .map_err(SyncIoError::Transfer)?;
+        let guard = slice.ptr_guard_mut();
+        // SAFETY: The VolatileSlice guarantees the memory at `guard.as_ptr()` of length
+        // `guard.len()` is valid, mapped, and not aliased by any Rust references.
+        let buf = unsafe { std::slice::from_raw_parts_mut(guard.as_ptr(), guard.len()) };
+
+        let mut bytes_done = 0usize;
+        while bytes_done < buf.len() {
+            match self.file.read_at(&mut buf[bytes_done..], offset + bytes_done as u64) {
+                Ok(0) => {
+                    return Err(SyncIoError::PreadPwrite(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "failed to fill whole buffer",
+                    )));
+                }
+                Ok(n) => bytes_done += n,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(SyncIoError::PreadPwrite(e)),
+            }
+        }
+
+        slice.bitmap().mark_dirty(0, count as usize);
         Ok(count)
     }
 
@@ -66,12 +86,29 @@ impl SyncFileEngine {
         addr: GuestAddress,
         count: u32,
     ) -> Result<u32, SyncIoError> {
-        self.file
-            .seek(SeekFrom::Start(offset))
-            .map_err(SyncIoError::Seek)?;
-        mem.get_slice(addr, count as usize)
-            .and_then(|slice| Ok(self.file.write_all_volatile(&slice)?))
+        let slice = mem
+            .get_slice(addr, count as usize)
             .map_err(SyncIoError::Transfer)?;
+        let guard = slice.ptr_guard();
+        // SAFETY: The VolatileSlice guarantees the memory at `guard.as_ptr()` of length
+        // `guard.len()` is valid and mapped.
+        let buf = unsafe { std::slice::from_raw_parts(guard.as_ptr(), guard.len()) };
+
+        let mut bytes_done = 0usize;
+        while bytes_done < buf.len() {
+            match self.file.write_at(&buf[bytes_done..], offset + bytes_done as u64) {
+                Ok(0) => {
+                    return Err(SyncIoError::PreadPwrite(std::io::Error::new(
+                        std::io::ErrorKind::WriteZero,
+                        "failed to write whole buffer",
+                    )));
+                }
+                Ok(n) => bytes_done += n,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(SyncIoError::PreadPwrite(e)),
+            }
+        }
+
         Ok(count)
     }
 
