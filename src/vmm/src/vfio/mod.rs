@@ -104,10 +104,11 @@ pub enum VfioError {
 struct VfioRegionInfoWithCap {
     // use u64 to have 8 byte aligment of data
     pub bytes: Vec<u64>,
-    pub next_cap_offset: usize,
+    pub next_cap_offset: u32,
 }
 impl VfioRegionInfoWithCap {
     pub fn new_with_argsz(n: u32) -> Self {
+        assert!(std::mem::size_of::<vfio_region_info>() <= n as usize);
         let total_bytes_u64 = (n + 63) / 64;
         let bytes = vec![0_u64; total_bytes_u64 as usize];
         Self {
@@ -120,13 +121,14 @@ impl VfioRegionInfoWithCap {
     }
     pub fn next_info_cap_header(&mut self) -> Option<&vfio_info_cap_header> {
         let vfio_region_info_bytes = std::mem::size_of::<vfio_region_info>();
-        if self.next_cap_offset < vfio_region_info_bytes {
+        if self.next_cap_offset < vfio_region_info_bytes as u32 {
             None
         } else {
             let cap_header = unsafe {
-                &*(self.bytes[self.next_cap_offset..].as_ptr() as *const vfio_info_cap_header)
+                &*(self.bytes[self.next_cap_offset as usize..].as_ptr()
+                    as *const vfio_info_cap_header)
             };
-            self.next_cap_offset = cap_header.next as usize;
+            self.next_cap_offset = cap_header.next;
             Some(cap_header)
         }
     }
@@ -871,6 +873,7 @@ pub fn vfio_device_get_region_infos(
                 region_info_with_caps.offset = 0;
                 ioctls::device_get_region_info(device, region_info_with_caps)?;
 
+                vfio_region_info_with_caps.next_cap_offset = region_info_with_caps.cap_offset;
                 while let Some(cap_header) = vfio_region_info_with_caps.next_info_cap_header() {
                     LOG!("Cap id: {}", cap_header.id);
                     match u32::from(cap_header.id) {
@@ -2034,4 +2037,24 @@ pub fn do_vfio_magic(path: &str) -> Result<(), VfioError> {
     //     LOG!("vfio path: {}", path);
     // }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[should_panic]
+    fn test_vfio_region_info_with_caps_panic() {
+        _ = VfioRegionInfoWithCap::new_with_argsz(
+            std::mem::size_of::<vfio_region_info>() as u32 - 1,
+        );
+    }
+
+    // #[test]
+    // fn test_vfio_region_info_with_caps_panic() {
+    //     _ = VfioRegionInfoWithCap::new_with_argsz(
+    //         std::mem::size_of::<vfio_region_info>(),
+    //     );
+    // }
 }
