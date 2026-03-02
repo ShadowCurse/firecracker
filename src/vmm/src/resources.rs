@@ -657,6 +657,7 @@ mod tests {
             pci_enabled: false,
             serial_out_path: None,
             memory_hotplug: Default::default(),
+            vfio: None,
         }
     }
 
