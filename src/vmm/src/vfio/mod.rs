@@ -1007,7 +1007,13 @@ pub fn vfio_device_region_read(
 ) -> Result<(), VfioError> {
     let region_info = &region_infos[index as usize];
     let end = offset + buf.len() as u64;
-    assert!(end <= region_info.size);
+    assert!(
+        end <= region_info.size + 1,
+        "Invalid device region read of [{:x}..{:x}], but region is [0..{:x}]",
+        offset,
+        end,
+        region_info.size
+    );
     device
         .read_exact_at(buf, region_info.offset + offset)
         .map_err(|e| VfioError::RegionRead(index, offset, e))?;
@@ -1023,7 +1029,13 @@ pub fn vfio_device_region_write(
 ) -> Result<(), VfioError> {
     let region_info = &region_infos[index as usize];
     let end = offset + buf.len() as u64;
-    assert!(end <= region_info.size);
+    assert!(
+        end <= region_info.size + 1,
+        "Invalid device region write of [{:x}..{:x}], but region is [0..{:x}]",
+        offset,
+        end,
+        region_info.size
+    );
     device
         .write_all_at(buf, region_info.offset + offset)
         .map_err(|e| VfioError::RegionWrite(index, offset, e))?;
