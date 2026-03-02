@@ -19,7 +19,7 @@ use vmm_sys_util::ioctl::{
 use vmm_sys_util::ioctl_io_nr;
 
 use crate::vfio::bindings::vfio::*;
-use crate::vfio::fam::vec_with_array_field;
+// use crate::vfio::fam::vec_with_array_field;
 use crate::vfio::ioctls::VfioError;
 // use crate::vfio_device::{VfioDeviceInfo, vfio_region_info_with_cap};
 // use crate::{Result, VfioContainer, VfioDevice, VfioError, VfioGroup};
@@ -206,6 +206,36 @@ pub fn device_reset(device: &impl AsRawFd) -> i32 {
     unsafe { ioctl(device, VFIO_DEVICE_RESET()) }
 }
 
+/// Retrieve information about a device IRQ.  Caller provides
+/// struct vfio_irq_info with index value set.  Caller sets argsz.
+/// Implementation of IRQ mapping is bus driver specific.  Indexes
+/// using multiple IRQs are primarily intended to support MSI-like
+/// interrupt blocks.  Zero count irq blocks may be used to describe
+/// unimplemented interrupt types.
+///
+/// The EVENTFD flag indicates the interrupt index supports eventfd based
+/// signaling.
+///
+/// The MASKABLE flags indicates the index supports MASK and UNMASK
+/// actions described below.
+///
+/// AUTOMASKED indicates that after signaling, the interrupt line is
+/// automatically masked by VFIO and the user needs to unmask the line
+/// to receive new interrupts.  This is primarily intended to distinguish
+/// level triggered interrupts.
+///
+/// The NORESIZE flag indicates that the interrupt lines within the index
+/// are setup as a set and new subindexes cannot be enabled without first
+/// disabling the entire index.  This is used for interrupts like PCI MSI
+/// and MSI-X where the driver may only use a subset of the available
+/// indexes, but VFIO needs to enable a specific number of vectors
+/// upfront.  In the case of MSI-X, where the user can enable MSI-X and
+/// then add and unmask vectors, it's up to userspace to make the decision
+/// whether to allocate the maximum supported number of vectors or tear
+/// down setup and incrementally increase the vectors as each is enabled.
+/// Absence of the NORESIZE flag indicates that vectors can be enabled
+/// and disabled dynamically without impacting other vectors within the
+/// index.
 pub fn device_get_irq_info(
     device: &impl AsRawFd,
     irq_info: &mut vfio_irq_info,
@@ -219,6 +249,13 @@ pub fn device_get_irq_info(
     }
 }
 
+/// Retrieve information about a device region.  Caller provides
+/// struct vfio_region_info with index value set.  Caller sets argsz.
+/// Implementation of region mapping is bus driver specific.  This is
+/// intended to describe MMIO, I/O port, as well as bus specific
+/// regions (ex. PCI config space).  Zero sized regions may be used
+/// to describe unimplemented regions (ex. unimplemented PCI BARs).
+/// Return: 0 on success, -errno on failure.
 pub fn device_get_region_info(
     device: &impl AsRawFd,
     reg_info: &mut vfio_region_info,

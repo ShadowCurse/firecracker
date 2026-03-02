@@ -36,7 +36,7 @@ use crate::devices::virtio::vsock::{Vsock, VsockUnixBackend};
 use crate::pci::bus::PciRootError;
 use crate::resources::VmResources;
 use crate::snapshot::Persist;
-use crate::vfio::{VfioDevice, VfioDeviceBundle};
+use crate::vfio::{VfioDevice, VfioDeviceBundle, VfioError};
 use crate::vmm_config::memory_hotplug::MemoryHotplugConfig;
 use crate::vstate::bus::BusError;
 use crate::vstate::interrupts::InterruptError;
@@ -69,6 +69,10 @@ pub enum PciManagerError {
     VirtioPciDevice(#[from] VirtioPciDeviceError),
     /// KVM error: {0}
     Kvm(#[from] vmm_sys_util::errno::Error),
+    /// MMDS error: {0}
+    Mmds(#[from] MmdsConfigError),
+    /// Vfio error: {0}
+    Vfio(#[from] VfioError),
 }
 
 impl PciDevices {
@@ -87,9 +91,9 @@ impl PciDevices {
         self.pci_segment = Some(pci_segment);
 
         assert!(self.vfio_container.is_none());
-        let vfio_container = crate::vfio::vfio_open();
-        crate::vfio::vfio_check_api_version(&vfio_container);
-        crate::vfio::vfio_check_extension(&vfio_container, crate::vfio::VFIO_TYPE1v2_IOMMU);
+        let vfio_container = crate::vfio::vfio_open()?;
+        crate::vfio::vfio_check_api_version(&vfio_container)?;
+        crate::vfio::vfio_check_extension(&vfio_container)?;
         self.vfio_container = Some(vfio_container);
 
         Ok(())
@@ -182,94 +186,8 @@ impl PciDevices {
 
         let container = self.vfio_container.as_ref().unwrap();
 
-        println!("Openning device at path: {}", path);
-        let group_id = crate::vfio::group_id_from_device_path(&path);
-        println!("Group id: {}", group_id);
-        let group = crate::vfio::vfio_group_open(group_id);
-        crate::vfio::vfio_group_check_status(&group);
-        crate::vfio::group_set_container(&group, container).unwrap();
-
-        // only set after getting the first group
-        crate::vfio::vfio_container_set_iommu(container, crate::vfio::VFIO_TYPE1v2_IOMMU);
-
-        let device = crate::vfio::get_device(&group, path);
-
-        let (bar_infos, expansion_rom_info) = {
-            let mut resource_allocator_lock = vm.resource_allocator();
-            let resource_allocator = resource_allocator_lock.deref_mut();
-            let bar_infos = crate::vfio::device_get_bar_infos(
-                &device.file,
-                &device.region_infos,
-                resource_allocator,
-            );
-            let rom_info = crate::vfio::device_get_expansion_rom_info(
-                &device.file,
-                &device.region_infos,
-                resource_allocator,
-                vm.as_ref(),
-            );
-            (bar_infos, rom_info)
-        };
-        let (msi_cap, msix_cap, masks) = crate::vfio::vfio_device_get_pci_capabilities(
-            &device.file,
-            &device.region_infos,
-            &device.irq_infos,
-        );
-        let bar_hole_infos = crate::vfio::mmap_bars(
-            &container,
-            &device.file,
-            &bar_infos,
-            &device.region_infos,
-            msix_cap.as_ref(),
-            vm.as_ref(),
-        );
-        crate::vfio::dma_map_guest_memory(container, vm.guest_memory());
-
-        // #[cfg(x86_64)]
-        if let Some(rom_info) = expansion_rom_info.as_ref() {
-            crate::vfio::copy_rom_into_legacy_location(vm.guest_memory(), rom_info);
-        }
-
-        let _config_space_info =
-            crate::vfio::device_get_config_space_info(&device.file, &device.region_infos);
-
-        let mut msix_config = None;
-        if crate::vfio::VFIO_PCI_MSIX_IRQ_INDEX < device.irq_infos.len() as u32 {
-            let msix_irq_info = &device.irq_infos[crate::vfio::VFIO_PCI_MSIX_IRQ_INDEX as usize];
-            let msix_num = msix_irq_info.count as u16;
-            println!("VFIO msix_num: {msix_num}");
-            let msix_vectors = Vm::create_msix_group(vm.clone(), msix_num).unwrap();
-            let config =
-                crate::pci::msix::MsixConfig::new(Arc::new(msix_vectors), pci_device_bdf.into());
-            crate::vfio::set_msix_irqs(&device.file, &device.irq_infos, &config);
-            msix_config = Some(config);
-        }
-
-        // Garbage language requires this
-        let bar_hole_infos_copy = bar_hole_infos.clone();
-
-        // add to the segment since we will need to configure MSIs
-        let vfio_device_bundle = Arc::new(Mutex::new(VfioDeviceBundle {
-            id,
-            group_id,
-            group,
-            device,
-            bar_infos,
-            expansion_rom_info,
-            bar_hole_infos,
-            msi_cap,
-            msix_cap,
-            masks,
-            msix_config,
-            vm: vm.clone(),
-        }));
-
-        // This is for bars (or the poked holes in them where MSIx and PBA tables live)
-        for hole in bar_hole_infos_copy.iter() {
-            vm.common
-                .mmio_bus
-                .insert(vfio_device_bundle.clone(), hole.gpa, hole.size)?;
-        }
+        let vfio_device_bundle =
+            crate::vfio::init_vfio_device(container, vm, id, path, pci_device_bdf, true)?;
 
         // This is for config space
         pci_segment

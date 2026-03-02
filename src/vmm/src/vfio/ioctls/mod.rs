@@ -6,11 +6,11 @@ use std::io;
 use vmm_sys_util::errno::Error as SysError;
 
 /// fam
-pub mod fam;
+// mod fam;
 /// device
-pub mod device;
+// mod device;
 /// ioctls
-pub mod ioctls;
+mod ioctls;
 
 pub use ioctls::*;
 
