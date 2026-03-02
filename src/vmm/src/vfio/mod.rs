@@ -102,15 +102,22 @@ pub enum VfioError {
 }
 
 struct VfioRegionInfoWithCap {
-    // use u64 to have 8 byte aligment of data
-    pub bytes: Vec<u64>,
+    pub bytes: Vec<u8>,
     pub next_cap_offset: u32,
 }
 impl VfioRegionInfoWithCap {
     pub fn new_with_argsz(n: u32) -> Self {
         assert!(std::mem::size_of::<vfio_region_info>() <= n as usize);
-        let total_bytes_u64 = (n + 63) / 64;
+        // Need 8 byte alignment, but Rust is making it hard
+        // There can be some left overs after rounding up, but
+        // this is not an issue.
+        let total_bytes_u64 = (n + 7) / 8;
         let bytes = vec![0_u64; total_bytes_u64 as usize];
+        let ptr = bytes.as_ptr();
+        let len = bytes.len();
+        let cap = bytes.capacity();
+        std::mem::forget(bytes);
+        let bytes: Vec<u8> = unsafe { Vec::from_raw_parts(ptr as *mut u8, len * 8, cap * 8) };
         Self {
             bytes,
             next_cap_offset: 0,
@@ -124,9 +131,12 @@ impl VfioRegionInfoWithCap {
         if self.next_cap_offset < vfio_region_info_bytes as u32 {
             None
         } else {
+            let next_cap_offset = self.next_cap_offset as usize;
+            let next_cap_header_end = next_cap_offset + std::mem::size_of::<vfio_info_cap_header>();
+            assert!(next_cap_offset < self.bytes.len());
+            assert!(next_cap_header_end <= self.bytes.len());
             let cap_header = unsafe {
-                &*(self.bytes[self.next_cap_offset as usize..].as_ptr()
-                    as *const vfio_info_cap_header)
+                &*(self.bytes.as_ptr().add(next_cap_offset) as *const vfio_info_cap_header)
             };
             self.next_cap_offset = cap_header.next;
             Some(cap_header)
@@ -135,8 +145,7 @@ impl VfioRegionInfoWithCap {
 }
 
 struct VfioIrqSet<T: Sized> {
-    // use u64 to have 8 byte aligment of data
-    pub bytes: Vec<u64>,
+    pub bytes: Vec<u8>,
     _pd: PhantomData<T>,
 }
 
@@ -145,21 +154,28 @@ impl<T: Sized> VfioIrqSet<T> {
         let vfio_irq_set_bytes = std::mem::size_of::<vfio_irq_set>();
         let entries_bytes = std::mem::size_of::<T>() * n;
         let total_bytes = vfio_irq_set_bytes + entries_bytes;
-        let total_bytes_u64 = (total_bytes + 63) / 64;
+
+        // Need 8 byte alignment, but Rust is making it hard
+        // There can be some left overs after rounding up, but
+        // this is not an issue.
+        let total_bytes_u64 = (total_bytes + 7) / 8;
         let bytes = vec![0_u64; total_bytes_u64];
+        let ptr = bytes.as_ptr();
+        let len = bytes.len();
+        let cap = bytes.capacity();
+        std::mem::forget(bytes);
+        let bytes: Vec<u8> = unsafe { Vec::from_raw_parts(ptr as *mut u8, len * 8, cap * 8) };
         Self {
             bytes,
             _pd: PhantomData,
         }
     }
-
     pub fn irq_set_mut(&mut self) -> &mut vfio_irq_set {
         unsafe { &mut *(self.bytes.as_mut_ptr() as *mut vfio_irq_set) }
     }
-
     pub fn entries_mut(&mut self) -> &mut [T] {
         let vfio_irq_set_bytes = std::mem::size_of::<vfio_irq_set>();
-        let entries_start = unsafe { (self.bytes.as_mut_ptr() as *mut u8).add(vfio_irq_set_bytes) };
+        let entries_start = unsafe { self.bytes.as_mut_ptr().add(vfio_irq_set_bytes) };
 
         let entry_bytes = std::mem::size_of::<T>();
         let entries_size = (self.bytes.len() - vfio_irq_set_bytes) / entry_bytes;
