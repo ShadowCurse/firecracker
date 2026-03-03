@@ -211,7 +211,7 @@ impl PciDevices {
 
         let pci_segment = self.pci_segment.as_ref().unwrap();
         let pci_device_bdf = pci_segment.next_device_bdf()?;
-        debug!("VFIO: Allocating BDF: {pci_device_bdf:?} for device");
+        warn!("VFIO: Allocating BDF: {pci_device_bdf:?} for device");
 
         let vfio_kvm_and_container = self.vfio_kvm_and_container.as_ref().unwrap();
 

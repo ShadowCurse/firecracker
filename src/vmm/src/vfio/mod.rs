@@ -454,8 +454,9 @@ impl BusDevice for VfioDeviceBundle {
                 }
             }
             LOG!(
-                "base: {base:<#10x} offset: {offset:<#5x} data: {data:<4?} name: {name} handled: \
-                 {handled}"
+                "[{}] base: {base:<#10x} offset: {offset:<#5x} data: {data:<4?} name: {name} \
+                 handled: {handled}",
+                self.id,
             );
         } else {
             panic!("Should never happen");
@@ -502,7 +503,10 @@ impl BusDevice for VfioDeviceBundle {
                 }
             }
             assert!(handled);
-            LOG!("base: {base:<#10x} offset: {offset:<#5x} data: {data:<4?} table_name: {name}");
+            LOG!(
+                "[{}] base: {base:<#10x} offset: {offset:<#5x} data: {data:<4?} table_name: {name}",
+                self.id
+            );
         } else {
             panic!("Should never happen");
         }
@@ -623,7 +627,10 @@ impl PciDevice for VfioDeviceBundle {
                 data,
             );
         }
-        LOG!("reg: {reg_idx:>3}({config_offset:>#6x}) data: {data:<4?} name: {name}");
+        LOG!(
+            "[{}] reg: {reg_idx:>3}({config_offset:>#6x}) data: {data:<4?} name: {name}",
+            self.id
+        );
         None
     }
     fn read_config_register(&mut self, reg_idx: usize) -> u32 {
@@ -691,7 +698,8 @@ impl PciDevice for VfioDeviceBundle {
             }
         }
         LOG!(
-            "reg: {reg_idx:>3}({config_offset:>#6x}) data: {:<4?} name: {name}",
+            "[{}] reg: {reg_idx:>3}({config_offset:>#6x}) data: {:<4?} name: {name}",
+            self.id,
             result.as_bytes()
         );
         result
