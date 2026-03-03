@@ -283,7 +283,7 @@ pub fn build_microvm_for_boot(
         for path in vfio.paths.iter() {
             device_manager
                 .pci_devices
-                .attach_vfio_device(&vm, path.clone(), &path);
+                .attach_vfio_device(&vm, path.clone(), &path)?;
         }
     }
     // panic!("STOP");

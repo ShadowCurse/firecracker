@@ -1904,7 +1904,7 @@ pub fn init_vfio_device(
     id: String,
     path: &str,
     bdf: PciBdf,
-    need_to_set_container_iommu: bool,
+    first_vfio_device: bool,
 ) -> Result<Arc<Mutex<VfioDeviceBundle>>, VfioError> {
     let container = &vfio_kvm_and_container.container;
     let kvm_device = &vfio_kvm_and_container.kvm_device;
@@ -1917,7 +1917,7 @@ pub fn init_vfio_device(
     kvm_vfio_device_file_add(kvm_device, &group);
 
     // only set after getting the first group
-    if need_to_set_container_iommu {
+    if first_vfio_device {
         vfio_container_set_iommu(container, VFIO_TYPE1v2_IOMMU)?;
     }
 
@@ -1949,7 +1949,9 @@ pub fn init_vfio_device(
         msix_cap.as_ref(),
         vm.as_ref(),
     )?;
-    dma_map_guest_memory(container, vm.guest_memory())?;
+    if first_vfio_device {
+        dma_map_guest_memory(container, vm.guest_memory())?;
+    }
 
     // #[cfg(x86_64)]
     // if let Some(rom_info) = expansion_rom_info.as_ref() {

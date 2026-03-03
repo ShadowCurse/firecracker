@@ -211,18 +211,18 @@ impl PciDevices {
 
         let pci_segment = self.pci_segment.as_ref().unwrap();
         let pci_device_bdf = pci_segment.next_device_bdf()?;
-        warn!("VFIO: Allocating BDF: {pci_device_bdf:?} for device");
+        debug!("VFIO: Allocating BDF: {pci_device_bdf:?} for device");
 
         let vfio_kvm_and_container = self.vfio_kvm_and_container.as_ref().unwrap();
 
-        let need_to_set_container_iommu = self.vfio_devices.is_empty();
+        let first_vfio_device = self.vfio_devices.is_empty();
         let vfio_device_bundle = crate::vfio::init_vfio_device(
             &vfio_kvm_and_container,
             vm,
             id.clone(),
             path,
             pci_device_bdf,
-            need_to_set_container_iommu,
+            first_vfio_device,
         )?;
 
         // This is for config space
