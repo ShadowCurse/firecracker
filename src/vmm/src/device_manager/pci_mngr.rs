@@ -38,6 +38,7 @@ use crate::resources::VmResources;
 use crate::snapshot::Persist;
 use crate::vfio::{VfioDevice, VfioDeviceBundle, VfioError, VfioKvmAndContainer};
 use crate::vmm_config::memory_hotplug::MemoryHotplugConfig;
+use crate::vmm_config::mmds::MmdsConfigError;
 use crate::vstate::bus::BusError;
 use crate::vstate::interrupts::InterruptError;
 use crate::vstate::memory::GuestMemoryMmap;
