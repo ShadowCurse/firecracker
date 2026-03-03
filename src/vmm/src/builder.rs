@@ -280,9 +280,11 @@ pub fn build_microvm_for_boot(
     }
 
     if let Some(vfio) = &vm_resources.vfio {
-        device_manager
-            .pci_devices
-            .attach_vfio_device(&vm, vfio.paths[0].clone(), &vfio.paths[0]);
+        for path in vfio.paths.iter() {
+            device_manager
+                .pci_devices
+                .attach_vfio_device(&vm, vfio.paths[0].clone(), &path);
+        }
     }
     // panic!("STOP");
 
