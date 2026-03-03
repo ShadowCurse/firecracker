@@ -45,7 +45,7 @@ use kvm_bindings::{
 };
 use pci::{PciBdf, PciCapabilityId, PciExpressCapabilityId};
 use vm_allocator::AllocPolicy;
-use vm_memory::{Bytes, GuestAddress, GuestMemory, GuestMemoryRegion};
+use vm_memory::{GuestMemory, GuestMemoryRegion};
 use zerocopy::IntoBytes;
 
 use crate::Vm;
@@ -55,7 +55,6 @@ use crate::pci::{BarReprogrammingParams, DeviceRelocationError, PciDevice};
 use crate::utils::usize_to_u64;
 use crate::vfio::ioctls::VfioError as VfioIoctlError;
 use crate::vstate::bus::BusDevice;
-use crate::vstate::interrupts::{MsixVector, MsixVectorConfig};
 use crate::vstate::memory::{GuestMemoryMmap, GuestRegionType};
 use crate::vstate::resources::ResourceAllocator;
 
@@ -75,8 +74,9 @@ pub enum VfioError {
     ParseGroupId(std::num::ParseIntError),
     /// Cannot open /dev/vfio/{0}: {1}
     OpenGroup(u32, std::io::Error),
-    /// Group is not viable
-    GroupNotViable,
+    /// Group {0} is not viable.
+    /// Please ensure all devices within the iommu_group are bound to their vfio bus driver.
+    GroupNotViable(u32),
     /// Invalid IOMMU type: {0}
     InvalidIommuType(u32),
     /// Invalid device path
@@ -388,6 +388,12 @@ pub struct VfioDeviceBundle {
     // pub msi_cap: Option<MsiCap>,
     pub masks: Vec<RegisterMask>,
     pub vm: Arc<Vm>,
+}
+
+#[derive(Debug)]
+pub struct VfioKvmAndContainer {
+    pub container: File,
+    pub kvm_device: DeviceFd,
 }
 
 macro_rules! function_name {
@@ -745,23 +751,21 @@ pub fn group_id_from_device_path(device_path: &impl AsRef<Path>) -> Result<u32, 
 
 pub fn vfio_group_open(id: u32) -> Result<File, VfioError> {
     let group_path = Path::new("/dev/vfio").join(id.to_string());
-    OpenOptions::new()
+    let group = OpenOptions::new()
         .read(true)
         .write(true)
         .open(group_path)
-        .map_err(|e| VfioError::OpenGroup(id, e))
-}
+        .map_err(|e| VfioError::OpenGroup(id, e));
 
-pub fn vfio_group_check_status(group: &impl AsRawFd) -> Result<(), VfioError> {
     let mut group_status = vfio_group_status {
         argsz: std::mem::size_of::<vfio_group_status>() as u32,
         flags: 0,
     };
-    ioctls::group_get_status(group, &mut group_status)?;
+    ioctls::group_get_status(&group, &mut group_status)?;
     if group_status.flags != VFIO_GROUP_FLAGS_VIABLE {
-        return Err(VfioError::GroupNotViable);
+        return Err(VfioError::GroupNotViable(id));
     }
-    Ok(())
+    group
 }
 
 pub fn vfio_container_set_iommu(container: &impl AsRawFd, val: u32) -> Result<(), VfioError> {
@@ -1864,7 +1868,7 @@ pub fn set_msix_irqs(
     Ok(())
 }
 
-fn kvm_create_vfio_device(vm: &Vm) -> Result<DeviceFd, VfioError> {
+pub fn kvm_create_vfio_device(vm: &Vm) -> Result<DeviceFd, VfioError> {
     let mut vfio_dev = kvm_create_device {
         type_: kvm_device_type_KVM_DEV_TYPE_VFIO,
         fd: 0,
@@ -1875,7 +1879,7 @@ fn kvm_create_vfio_device(vm: &Vm) -> Result<DeviceFd, VfioError> {
         .map_err(VfioError::KVMCreateVfioDevice)
 }
 // flags: KVM_DEV_VFIO_FILE_ADD or KVM_DEV_VFIO_FILE_DEL;
-fn kvm_vfio_device_file_add(device: &DeviceFd, file: &impl AsRawFd) {
+pub fn kvm_vfio_device_file_add(device: &DeviceFd, file: &impl AsRawFd) {
     let file_fd = file.as_raw_fd();
     let dev_attr = kvm_device_attr {
         flags: 0,
@@ -1898,7 +1902,6 @@ pub fn init_vfio_device(
     let group_id = group_id_from_device_path(&path)?;
     LOG!("Group id: {}", group_id);
     let group = vfio_group_open(group_id)?;
-    vfio_group_check_status(&group)?;
     ioctls::group_set_container(&group, vfio_container).map_err(VfioError::from)?;
 
     // only set after getting the first group
@@ -2053,10 +2056,18 @@ mod tests {
 
     #[test]
     #[should_panic]
-    fn test_vfio_region_info_with_caps_panic() {
+    fn test_vfio_region_info_with_caps_panic_new() {
         _ = VfioRegionInfoWithCap::new_with_argsz(
             std::mem::size_of::<vfio_region_info>() as u32 - 1,
         );
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_vfio_region_info_with_caps_panic_caps_at_offset() {
+        let vfio_region_info_bytes = std::mem::size_of::<vfio_region_info>();
+        let mut vriwc = VfioRegionInfoWithCap::new_with_argsz(vfio_region_info_bytes as u32);
+        vriwc.vfio_info_cap_header_at_offset((vfio_region_info_bytes + 1) as u32);
     }
 
     #[test]

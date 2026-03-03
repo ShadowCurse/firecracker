@@ -36,7 +36,7 @@ use crate::devices::virtio::vsock::{Vsock, VsockUnixBackend};
 use crate::pci::bus::PciRootError;
 use crate::resources::VmResources;
 use crate::snapshot::Persist;
-use crate::vfio::{VfioDevice, VfioDeviceBundle, VfioError};
+use crate::vfio::{VfioDevice, VfioDeviceBundle, VfioError, VfioKvmAndContainer};
 use crate::vmm_config::memory_hotplug::MemoryHotplugConfig;
 use crate::vstate::bus::BusError;
 use crate::vstate::interrupts::InterruptError;
@@ -50,7 +50,7 @@ pub struct PciDevices {
     /// All VirtIO PCI devices of the system
     pub virtio_devices: HashMap<(VirtioDeviceType, String), Arc<Mutex<VirtioPciDevice>>>,
 
-    pub vfio_container: Option<std::fs::File>,
+    pub vfio_kvm_and_container: Option<VfioKvmAndContainer>,
     // All Vfio PCI devices
     pub vfio_devices: HashMap<(VirtioDeviceType, String), Arc<Mutex<VfioDevice>>>,
 }
@@ -90,11 +90,31 @@ impl PciDevices {
         let pci_segment = PciSegment::new(0, vm, &[0u8; 32])?;
         self.pci_segment = Some(pci_segment);
 
-        assert!(self.vfio_container.is_none());
-        let vfio_container = crate::vfio::vfio_open()?;
-        crate::vfio::vfio_check_api_version(&vfio_container)?;
-        crate::vfio::vfio_check_extension(&vfio_container)?;
-        self.vfio_container = Some(vfio_container);
+        // TODO only do this if vfio decises are present.
+        // TODO qemu also does a bunch of checks for the container:
+        // vfio_get_iommu_info(container, &info)
+        // if (info->flags & VFIO_IOMMU_INFO_PGSIZES) {
+        //     bcontainer->pgsizes = info->iova_pgsizes;
+        // } else {
+        //     bcontainer->pgsizes = qemu_real_host_page_size();
+        // }
+        // if (!vfio_get_info_dma_avail(info, &bcontainer->dma_max_mappings)) {
+        //     bcontainer->dma_max_mappings = 65535;
+        // }
+        // vfio_get_info_iova_range(info, bcontainer);
+        // ret = ioctl(container->fd, VFIO_CHECK_EXTENSION, VFIO_UNMAP_ALL);
+        // container->unmap_all_supported = !!ret;
+        // vfio_get_iommu_info_migration(container, info);
+        // Do we need these?
+        assert!(self.vfio_kvm_and_container.is_none());
+        let container = crate::vfio::vfio_open()?;
+        crate::vfio::vfio_check_api_version(&container)?;
+        crate::vfio::vfio_check_extension(&container)?;
+        let kvm_device = crate::vfio::kvm_create_vfio_device(vm.as_ref())?;
+        self.vfio_kvm_and_container = Some(VfioKvmAndContainer {
+            container,
+            kvm_device,
+        });
 
         Ok(())
     }
@@ -184,8 +204,10 @@ impl PciDevices {
         let pci_device_bdf = pci_segment.next_device_bdf()?;
         debug!("VFIO: Allocating BDF: {pci_device_bdf:?} for device");
 
-        let container = self.vfio_container.as_ref().unwrap();
+        let vfio_kvm_and_container = self.vfio_kvm_and_container.as_ref().unwrap();
+        let container = &vfio_kvm_and_container.container;
 
+        // TODO loop over existing devices and check that id is not already in use.
         let vfio_device_bundle =
             crate::vfio::init_vfio_device(container, vm, id, path, pci_device_bdf, true)?;
 
