@@ -36,7 +36,7 @@ use crate::devices::virtio::vsock::{Vsock, VsockUnixBackend};
 use crate::pci::bus::PciRootError;
 use crate::resources::VmResources;
 use crate::snapshot::Persist;
-use crate::vfio::{VfioDevice, VfioDeviceBundle, VfioError, VfioKvmAndContainer};
+use crate::vfio::{VfioDeviceBundle, VfioError, VfioKvmAndContainer};
 use crate::vmm_config::memory_hotplug::MemoryHotplugConfig;
 use crate::vmm_config::mmds::MmdsConfigError;
 use crate::vstate::bus::BusError;
@@ -53,7 +53,7 @@ pub struct PciDevices {
 
     pub vfio_kvm_and_container: Option<VfioKvmAndContainer>,
     // All Vfio PCI devices
-    pub vfio_devices: HashMap<(VirtioDeviceType, String), Arc<Mutex<VfioDevice>>>,
+    pub vfio_devices: HashMap<String, Arc<Mutex<VfioDeviceBundle>>>,
 }
 
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
@@ -72,6 +72,8 @@ pub enum PciManagerError {
     Kvm(#[from] vmm_sys_util::errno::Error),
     /// MMDS error: {0}
     Mmds(#[from] MmdsConfigError),
+    /// Trying to add duplicate device with id: {0}
+    VfioDuplicateDevice(String),
     /// Vfio error: {0}
     Vfio(#[from] VfioError),
 }
@@ -201,23 +203,37 @@ impl PciDevices {
         id: String,
         path: &str,
     ) -> Result<(), PciManagerError> {
+        for existing_id in self.vfio_devices.keys() {
+            if id == *existing_id {
+                return Err(PciManagerError::VfioDuplicateDevice(id));
+            }
+        }
+
         let pci_segment = self.pci_segment.as_ref().unwrap();
         let pci_device_bdf = pci_segment.next_device_bdf()?;
         debug!("VFIO: Allocating BDF: {pci_device_bdf:?} for device");
 
         let vfio_kvm_and_container = self.vfio_kvm_and_container.as_ref().unwrap();
-        let container = &vfio_kvm_and_container.container;
 
-        // TODO loop over existing devices and check that id is not already in use.
-        let vfio_device_bundle =
-            crate::vfio::init_vfio_device(container, vm, id, path, pci_device_bdf, true)?;
+        let need_to_set_container_iommu = self.vfio_devices.is_empty();
+        let vfio_device_bundle = crate::vfio::init_vfio_device(
+            &vfio_kvm_and_container,
+            vm,
+            id.clone(),
+            path,
+            pci_device_bdf,
+            need_to_set_container_iommu,
+        )?;
 
         // This is for config space
         pci_segment
             .pci_bus
             .lock()
             .expect("Poisoned lock")
-            .add_device(pci_device_bdf.device() as u32, vfio_device_bundle);
+            .add_device(pci_device_bdf.device() as u32, vfio_device_bundle.clone());
+
+        self.vfio_devices.insert(id, vfio_device_bundle);
+
         Ok(())
     }
 

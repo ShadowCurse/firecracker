@@ -75,7 +75,6 @@ pub enum VfioError {
     /// Cannot open /dev/vfio/{0}: {1}
     OpenGroup(u32, std::io::Error),
     /// Group {0} is not viable.
-    /// Please ensure all devices within the iommu_group are bound to their vfio bus driver.
     GroupNotViable(u32),
     /// Invalid IOMMU type: {0}
     InvalidIommuType(u32),
@@ -755,7 +754,7 @@ pub fn vfio_group_open(id: u32) -> Result<File, VfioError> {
         .read(true)
         .write(true)
         .open(group_path)
-        .map_err(|e| VfioError::OpenGroup(id, e));
+        .map_err(|e| VfioError::OpenGroup(id, e))?;
 
     let mut group_status = vfio_group_status {
         argsz: std::mem::size_of::<vfio_group_status>() as u32,
@@ -765,7 +764,7 @@ pub fn vfio_group_open(id: u32) -> Result<File, VfioError> {
     if group_status.flags != VFIO_GROUP_FLAGS_VIABLE {
         return Err(VfioError::GroupNotViable(id));
     }
-    group
+    Ok(group)
 }
 
 pub fn vfio_container_set_iommu(container: &impl AsRawFd, val: u32) -> Result<(), VfioError> {
@@ -1878,6 +1877,7 @@ pub fn kvm_create_vfio_device(vm: &Vm) -> Result<DeviceFd, VfioError> {
         .create_device(&mut vfio_dev)
         .map_err(VfioError::KVMCreateVfioDevice)
 }
+// The `file` in this case shoud be a group `File` descriptor.
 // flags: KVM_DEV_VFIO_FILE_ADD or KVM_DEV_VFIO_FILE_DEL;
 pub fn kvm_vfio_device_file_add(device: &DeviceFd, file: &impl AsRawFd) {
     let file_fd = file.as_raw_fd();
@@ -1891,22 +1891,26 @@ pub fn kvm_vfio_device_file_add(device: &DeviceFd, file: &impl AsRawFd) {
 }
 
 pub fn init_vfio_device(
-    vfio_container: &impl AsRawFd,
+    vfio_kvm_and_container: &VfioKvmAndContainer,
     vm: &Arc<Vm>,
     id: String,
     path: &str,
     bdf: PciBdf,
     need_to_set_container_iommu: bool,
 ) -> Result<Arc<Mutex<VfioDeviceBundle>>, VfioError> {
+    let container = &vfio_kvm_and_container.container;
+    let kvm_device = &vfio_kvm_and_container.kvm_device;
+
     LOG!("Openning device at path: {}", path);
     let group_id = group_id_from_device_path(&path)?;
     LOG!("Group id: {}", group_id);
     let group = vfio_group_open(group_id)?;
-    ioctls::group_set_container(&group, vfio_container).map_err(VfioError::from)?;
+    ioctls::group_set_container(&group, container).map_err(VfioError::from)?;
+    kvm_vfio_device_file_add(kvm_device, &group);
 
     // only set after getting the first group
     if need_to_set_container_iommu {
-        vfio_container_set_iommu(vfio_container, VFIO_TYPE1v2_IOMMU)?;
+        vfio_container_set_iommu(container, VFIO_TYPE1v2_IOMMU)?;
     }
 
     let device = get_device(&group, path)?;
@@ -1930,14 +1934,14 @@ pub fn init_vfio_device(
     let (msix_cap, masks) =
         vfio_device_get_pci_capabilities(&device.file, &device.region_infos, &device.irq_infos)?;
     let bar_hole_infos = mmap_bars(
-        vfio_container,
+        container,
         &device.file,
         &bar_infos,
         &device.region_infos,
         msix_cap.as_ref(),
         vm.as_ref(),
     )?;
-    dma_map_guest_memory(vfio_container, vm.guest_memory())?;
+    dma_map_guest_memory(container, vm.guest_memory())?;
 
     // #[cfg(x86_64)]
     // if let Some(rom_info) = expansion_rom_info.as_ref() {
@@ -2004,7 +2008,6 @@ pub fn do_vfio_magic(path: &str) -> Result<(), VfioError> {
     let group_id = group_id_from_device_path(&(path.to_string()))?;
     LOG!("Group id: {}", group_id);
     let group = vfio_group_open(group_id)?;
-    vfio_group_check_status(&group)?;
     ioctls::group_set_container(&group, &container)?;
 
     // only set after getting the first group
