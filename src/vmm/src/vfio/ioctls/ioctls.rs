@@ -18,7 +18,7 @@ use vmm_sys_util::ioctl::{
 };
 use vmm_sys_util::ioctl_io_nr;
 
-use crate::vfio::bindings::vfio::*;
+use vfio_bindings::bindings::vfio::*;
 // use crate::vfio::fam::vec_with_array_field;
 use crate::vfio::ioctls::VfioError;
 // use crate::vfio_device::{VfioDeviceInfo, vfio_region_info_with_cap};

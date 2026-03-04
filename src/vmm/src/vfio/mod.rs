@@ -1,10 +1,10 @@
 #![allow(missing_docs)]
 /// bindings
-pub mod bindings;
+// pub mod bindings;
 /// ioctls
 pub mod ioctls;
 
-pub use bindings::*;
+// pub use bindings::*;
 use kvm_ioctls::DeviceFd;
 
 // First BAR offset in the PCI config space.
@@ -14,21 +14,13 @@ pub const PCI_CONFIG_CAPABILITY_OFFSET: u32 = 0x34;
 // Extended capabilities register offset in the PCI config space.
 pub const PCI_CONFIG_EXTENDED_CAPABILITY_OFFSET: u32 = 0x100;
 // IO BAR when first BAR bit is 1.
-pub const PCI_CONFIG_IO_BAR: u32 = 0x1;
+pub const PCI_CONFIG_IO_BAR: u32 = 1 << 0; //0x1;
 // 64-bit memory bar flag.
-pub const PCI_CONFIG_MEMORY_BAR_64BIT: u32 = 0x4;
+pub const PCI_CONFIG_MEMORY_BAR_64BIT: u32 = 1 << 2; // 0x4;
 // Prefetchable BAR bit
-pub const PCI_CONFIG_BAR_PREFETCHABLE: u32 = 0x8;
-// PCI config register size (4 bytes).
-pub const PCI_CONFIG_REGISTER_SIZE: usize = 4;
+pub const PCI_CONFIG_BAR_PREFETCHABLE: u32 = 1 << 3; //0x8;
 // Number of BARs for a PCI device
 pub const BAR_NUMS: u8 = 6;
-// PCI Header Type register index
-pub const PCI_HEADER_TYPE_REG_INDEX: usize = 3;
-// First BAR register index
-pub const PCI_CONFIG_BAR0_INDEX: usize = 4;
-// PCI ROM expansion BAR register index
-pub const PCI_ROM_EXP_BAR_INDEX: usize = 12;
 
 use std::ffi::CString;
 use std::fs::{File, OpenOptions};
@@ -44,6 +36,7 @@ use kvm_bindings::{
     kvm_device_type_KVM_DEV_TYPE_VFIO, kvm_userspace_memory_region,
 };
 use pci::{PciBdf, PciCapabilityId, PciExpressCapabilityId};
+use vfio_bindings::bindings::vfio::*;
 use vm_allocator::AllocPolicy;
 use vm_memory::{GuestMemory, GuestMemoryRegion};
 use zerocopy::IntoBytes;
@@ -892,9 +885,11 @@ pub fn vfio_device_get_region_infos(
                                 &*(cap_header as *const vfio_info_cap_header
                                     as *const vfio_region_info_cap_sparse_mmap)
                             };
-                            let areas = cap_sparse_mmap
-                                .areas
-                                .as_slice(cap_sparse_mmap.nr_areas as usize);
+                            let areas = unsafe {
+                                cap_sparse_mmap
+                                    .areas
+                                    .as_slice(cap_sparse_mmap.nr_areas as usize)
+                            };
                             let areas = areas
                                 .iter()
                                 .map(|a| VfioRegionSparseMmapArea {
