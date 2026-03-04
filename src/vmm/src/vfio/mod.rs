@@ -1,11 +1,6 @@
 #![allow(missing_docs)]
-/// bindings
-// pub mod bindings;
 /// ioctls
 pub mod ioctls;
-
-// pub use bindings::*;
-use kvm_ioctls::DeviceFd;
 
 // First BAR offset in the PCI config space.
 pub const PCI_CONFIG_BAR_OFFSET: u32 = 0x10;
@@ -35,6 +30,7 @@ use kvm_bindings::{
     KVM_DEV_VFIO_FILE, KVM_DEV_VFIO_FILE_ADD, kvm_create_device, kvm_device_attr,
     kvm_device_type_KVM_DEV_TYPE_VFIO, kvm_userspace_memory_region,
 };
+use kvm_ioctls::DeviceFd;
 use pci::{PciBdf, PciCapabilityId, PciExpressCapabilityId};
 use vfio_bindings::bindings::vfio::*;
 use vm_allocator::AllocPolicy;
@@ -46,7 +42,7 @@ use crate::arch::host_page_size;
 use crate::pci::msix::MsixConfig;
 use crate::pci::{BarReprogrammingParams, DeviceRelocationError, PciDevice};
 use crate::utils::usize_to_u64;
-use crate::vfio::ioctls::VfioError as VfioIoctlError;
+use crate::vfio::ioctls::VfioIoctlError as VfioIoctlError;
 use crate::vstate::bus::BusDevice;
 use crate::vstate::memory::{GuestMemoryMmap, GuestRegionType};
 use crate::vstate::resources::ResourceAllocator;
