@@ -35,7 +35,7 @@ pub mod serial;
 pub mod snapshot;
 /// Wrapper for configuring the vsock devices attached to the microVM.
 pub mod vsock;
-
+/// Wrapper for configuring the VFIO passthrough devices.
 pub mod vfio;
 
 // TODO: Migrate the VMM public-facing code (i.e. interface) to use stateless structures,

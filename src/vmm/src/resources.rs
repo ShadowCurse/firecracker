@@ -137,6 +137,7 @@ pub struct VmResources {
     pub pci_enabled: bool,
     /// Where serial console output should be written to
     pub serial_out_path: Option<PathBuf>,
+    /// VFIO passthrough configuration.
     pub vfio: Option<VfioConfig>,
 }
 

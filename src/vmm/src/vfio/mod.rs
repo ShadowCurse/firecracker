@@ -167,8 +167,6 @@ impl<T: Sized> VfioIrqSet<T> {
     }
 }
 
-pub struct VfioContainer {}
-
 /// Represent one area of the sparse mmap
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct VfioRegionSparseMmapArea {
@@ -1306,7 +1304,7 @@ pub fn vfio_device_get_bar_infos(
             }
 
             let idx = bar_idx;
-            let mut gpa = 0;
+            let gpa;
             if is_io_bar {
                 LOG!(
                     "BAR{bar_idx} size: {size:>#10x} io_bar: {is_io_bar} 64bits: {is_64_bits} \
