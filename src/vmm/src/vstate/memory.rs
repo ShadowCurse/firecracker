@@ -22,9 +22,9 @@ pub use vm_memory::{
     GuestUsize, MemoryRegionAddress, MmapRegion, address,
 };
 use vm_memory::{GuestMemoryError, GuestMemoryRegionBytes, VolatileSlice, WriteVolatile};
-use vmm_sys_util::errno;
 
-use crate::utils::{get_page_size, u64_to_usize};
+use crate::arch::host_page_size;
+use crate::utils::u64_to_usize;
 use crate::vmm_config::machine_config::HugePageConfig;
 use crate::vstate::vm::VmError;
 use crate::{DirtyBitmap, Vm};
@@ -39,8 +39,6 @@ pub type GuestMmapRegion = vm_memory::MmapRegion<Option<AtomicBitmap>>;
 /// Errors associated with dumping guest memory to file.
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
 pub enum MemoryError {
-    /// Cannot fetch system's page size: {0}
-    PageSize(errno::Error),
     /// Cannot dump memory: {0}
     WriteMemory(GuestMemoryError),
     /// Cannot create mmap region: {0}
@@ -709,7 +707,7 @@ impl GuestMemoryExtension for GuestMemoryMmap {
         writer: &mut T,
         dirty_bitmap: &DirtyBitmap,
     ) -> Result<(), MemoryError> {
-        let page_size = get_page_size().map_err(MemoryError::PageSize)?;
+        let page_size = host_page_size();
 
         let write_result =
             self.iter()
@@ -874,7 +872,8 @@ mod tests {
     use super::*;
     use crate::snapshot::Snapshot;
     use crate::test_utils::single_region_mem;
-    use crate::utils::{get_page_size, mib_to_bytes};
+    use crate::arch::host_page_size;
+    use crate::utils::mib_to_bytes;
     use crate::vstate::memory::test_utils::into_region_ext;
 
     #[test]
@@ -949,7 +948,7 @@ mod tests {
 
     #[test]
     fn test_mark_dirty() {
-        let page_size = get_page_size().unwrap();
+        let page_size = host_page_size();
         let region_size = page_size * 3;
 
         let regions = vec![
@@ -1009,7 +1008,7 @@ mod tests {
 
     #[test]
     fn test_serde() {
-        let page_size = get_page_size().unwrap();
+        let page_size = host_page_size();
         let region_size = page_size * 3;
 
         // Test with a single region
@@ -1036,7 +1035,7 @@ mod tests {
 
     #[test]
     fn test_describe() {
-        let page_size: usize = get_page_size().unwrap();
+        let page_size: usize = host_page_size();
 
         // Two regions of one page each, with a one page gap between them.
         let mem_regions = [
@@ -1099,7 +1098,7 @@ mod tests {
 
     #[test]
     fn test_dump() {
-        let page_size = get_page_size().unwrap();
+        let page_size = host_page_size();
 
         // Two regions of two pages each, with a one page gap between them.
         let region_1_address = GuestAddress(0);
@@ -1151,7 +1150,7 @@ mod tests {
 
     #[test]
     fn test_dump_dirty() {
-        let page_size = get_page_size().unwrap();
+        let page_size = host_page_size();
 
         // Two regions of two pages each, with a one page gap between them.
         let region_1_address = GuestAddress(0);
@@ -1316,7 +1315,7 @@ mod tests {
 
     #[test]
     fn test_store_dirty_bitmap() {
-        let page_size = get_page_size().unwrap();
+        let page_size = host_page_size();
 
         // Two regions of three pages each, with a one page gap between them.
         let region_1_address = GuestAddress(0);
