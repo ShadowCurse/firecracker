@@ -77,7 +77,7 @@ fn cpuid(leaf: u32) -> std::arch::x86_64::CpuidResult {
 fn cpuid_count(leaf: u32, subleaf: u32) -> std::arch::x86_64::CpuidResult {
     // JUSTIFICATION: There is no safe alternative.
     // SAFETY: The `cfg(cpuid)` wrapping the `cpuid` module guarantees `CPUID` is supported.
-    unsafe { std::arch::x86_64::__cpuid_count(leaf, subleaf) }
+    std::arch::x86_64::__cpuid_count(leaf, subleaf)
 }
 
 /// Gets the Intel default brand.

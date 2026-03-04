@@ -28,7 +28,7 @@ pub fn get_cpuid(leaf: u32, subleaf: u32) -> Result<std::arch::x86_64::CpuidResu
     let max_leaf =
         // JUSTIFICATION: There is no safe alternative.
         // SAFETY: This is safe because the host supports the `cpuid` instruction
-        unsafe { std::arch::x86_64::__get_cpuid_max(leaf & 0x8000_0000).0 };
+        std::arch::x86_64::__get_cpuid_max(leaf & 0x8000_0000).0;
     if leaf > max_leaf {
         return Err(GetCpuidError::UnsupportedLeaf(leaf));
     }

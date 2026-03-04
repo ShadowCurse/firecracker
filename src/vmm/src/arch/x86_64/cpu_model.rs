@@ -60,7 +60,7 @@ impl CpuModel {
     pub fn get_cpu_model() -> Self {
         // SAFETY: This operation is safe as long as the processor implements this CPUID function.
         // 0x1 is the defined code for getting the processor version information.
-        let eax = unsafe { host_cpuid(0x1) }.eax;
+        let eax = host_cpuid(0x1).eax;
         CpuModel::from(&eax)
     }
 }
