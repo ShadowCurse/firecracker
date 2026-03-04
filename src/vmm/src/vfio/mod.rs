@@ -400,56 +400,70 @@ macro_rules! LOG {
 // This should only serve BARs
 impl BusDevice for VfioDeviceBundle {
     fn read(&mut self, base: u64, offset: u64, data: &mut [u8]) {
-        if let Some(state) = self.msix_state.as_ref() {
-            let mut name = "----";
-            let mut handled: bool = false;
-            for info in state.bar_hole_infos.iter() {
-                if info.gpa == base {
-                    let hole_start = info.offset_in_hole;
-                    let hole_end = info.offset_in_hole + info.size;
-                    let data_start = offset;
-                    let data_end = offset + data.len() as u64;
-                    if hole_start <= data_start && data_end <= hole_end {
-                        match info.usage {
-                            BarHoleInfoUsage::Table => {
-                                name = "MsiTable";
-                                state.config.read_table(offset, data);
-                            }
-                            BarHoleInfoUsage::Pba => {
-                                name = "PbaTable";
-                                state.config.read_pba(offset, data);
-                            }
+        let state = self
+            .msix_state
+            .as_ref()
+            .expect("MSI-X state must exist if we intercept BAR accesses");
+        let mut name = "----";
+        let mut handled: bool = false;
+        for hole in state.bar_hole_infos.iter() {
+            if hole.gpa == base {
+                let data_start = offset;
+                let data_end = offset + data.len() as u64;
+
+                match hole.usage {
+                    BarHoleInfoUsage::Table => {
+                        let (_, table_size) = state.cap.table_range();
+                        let table_start = hole.offset_in_hole;
+                        let table_end = hole.offset_in_hole + table_size;
+                        if table_start <= data_start && data_end <= table_end {
+                            name = "MsiTable";
+                            state.config.read_table(offset, data);
+                        } else {
+                            name = "OutsideTable";
+                            let region_index = state.cap.table_bir();
+                            let _ = vfio_device_region_read(
+                                &self.device.file,
+                                &self.device.region_infos,
+                                region_index,
+                                offset,
+                                data,
+                            );
                         }
-                    } else {
-                        let region_index = match info.usage {
-                            BarHoleInfoUsage::Table => state.cap.table_bir(),
-                            BarHoleInfoUsage::Pba => state.cap.pba_bir(),
-                        };
-                        let _ = vfio_device_region_read(
-                            &self.device.file,
-                            &self.device.region_infos,
-                            region_index,
-                            offset,
-                            data,
-                        );
-                        name = "OutsideTable";
                     }
-                    handled = true;
+                    BarHoleInfoUsage::Pba => {
+                        let (_, table_size) = state.cap.pba_range();
+                        let table_start = hole.offset_in_hole;
+                        let table_end = hole.offset_in_hole + table_size;
+                        if table_start <= data_start && data_end <= table_end {
+                            name = "PbaTable";
+                            state.config.read_pba(offset, data);
+                        } else {
+                            name = "OutsideTable";
+                            let region_index = state.cap.pba_bir();
+                            let _ = vfio_device_region_read(
+                                &self.device.file,
+                                &self.device.region_infos,
+                                region_index,
+                                offset,
+                                data,
+                            );
+                        }
+                    }
                 }
+                handled = true;
             }
-            if !handled {
-                for d in data.iter_mut() {
-                    *d = 0;
-                }
-            }
-            LOG!(
-                "[{}] base: {base:<#10x} offset: {offset:<#5x} data: {data:<4?} name: {name} \
-                 handled: {handled}",
-                self.id,
-            );
-        } else {
-            panic!("Should never happen");
         }
+        if !handled {
+            for d in data.iter_mut() {
+                *d = 0;
+            }
+        }
+        LOG!(
+            "[{}] base: {base:<#10x} offset: {offset:<#5x} data: {data:<4?} name: {name} handled: \
+             {handled}",
+            self.id,
+        );
     }
 
     fn write(&mut self, base: u64, offset: u64, data: &[u8]) -> Option<Arc<Barrier>> {
