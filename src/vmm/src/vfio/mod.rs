@@ -42,7 +42,7 @@ use crate::arch::host_page_size;
 use crate::pci::msix::MsixConfig;
 use crate::pci::{BarReprogrammingParams, DeviceRelocationError, PciDevice};
 use crate::utils::usize_to_u64;
-use crate::vfio::ioctls::VfioIoctlError as VfioIoctlError;
+use crate::vfio::ioctls::VfioIoctlError;
 use crate::vstate::bus::BusDevice;
 use crate::vstate::memory::{GuestMemoryMmap, GuestRegionType};
 use crate::vstate::resources::ResourceAllocator;
@@ -166,6 +166,8 @@ impl<T: Sized> VfioIrqSet<T> {
         unsafe { std::slice::from_raw_parts_mut(entries_start as *mut T, entries_size) }
     }
 }
+
+pub struct VfioContainer {}
 
 /// Represent one area of the sparse mmap
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
@@ -1866,7 +1868,8 @@ pub fn set_msix_irqs(
     Ok(())
 }
 
-pub fn kvm_create_vfio_device(vm: &Vm) -> Result<DeviceFd, VfioError> {
+/// Init KVM_DEV_TYPE_VFIO device
+pub fn init_kvm_device_vfio(vm: &Vm) -> Result<DeviceFd, VfioError> {
     let mut vfio_dev = kvm_create_device {
         type_: kvm_device_type_KVM_DEV_TYPE_VFIO,
         fd: 0,
@@ -1878,7 +1881,7 @@ pub fn kvm_create_vfio_device(vm: &Vm) -> Result<DeviceFd, VfioError> {
 }
 // The `file` in this case shoud be a group `File` descriptor.
 // flags: KVM_DEV_VFIO_FILE_ADD or KVM_DEV_VFIO_FILE_DEL;
-pub fn kvm_vfio_device_file_add(device: &DeviceFd, file: &impl AsRawFd) {
+pub fn kvm_device_vfio_file_add(device: &DeviceFd, file: &impl AsRawFd) {
     let file_fd = file.as_raw_fd();
     let dev_attr = kvm_device_attr {
         flags: 0,
@@ -1889,6 +1892,15 @@ pub fn kvm_vfio_device_file_add(device: &DeviceFd, file: &impl AsRawFd) {
     device.set_device_attr(&dev_attr).unwrap();
 }
 
+/// Init VFIO container
+pub fn init_vfio_container() -> Result<File, VfioError> {
+    let container = vfio_open()?;
+    vfio_check_api_version(&container)?;
+    vfio_check_extension(&container)?;
+    return Ok(container);
+}
+
+/// Init VFIO device
 pub fn init_vfio_device(
     vfio_kvm_and_container: &VfioKvmAndContainer,
     vm: &Arc<Vm>,
@@ -1905,7 +1917,7 @@ pub fn init_vfio_device(
     LOG!("Group id: {}", group_id);
     let group = vfio_group_open(group_id)?;
     ioctls::group_set_container(&group, container).map_err(VfioError::from)?;
-    kvm_vfio_device_file_add(kvm_device, &group);
+    kvm_device_vfio_file_add(kvm_device, &group);
 
     // only set after getting the first group
     if first_vfio_device {

@@ -93,32 +93,6 @@ impl PciDevices {
         let pci_segment = PciSegment::new(0, vm, &[0u8; 32])?;
         self.pci_segment = Some(pci_segment);
 
-        // TODO only do this if vfio decises are present.
-        // TODO qemu also does a bunch of checks for the container:
-        // vfio_get_iommu_info(container, &info)
-        // if (info->flags & VFIO_IOMMU_INFO_PGSIZES) {
-        //     bcontainer->pgsizes = info->iova_pgsizes;
-        // } else {
-        //     bcontainer->pgsizes = qemu_real_host_page_size();
-        // }
-        // if (!vfio_get_info_dma_avail(info, &bcontainer->dma_max_mappings)) {
-        //     bcontainer->dma_max_mappings = 65535;
-        // }
-        // vfio_get_info_iova_range(info, bcontainer);
-        // ret = ioctl(container->fd, VFIO_CHECK_EXTENSION, VFIO_UNMAP_ALL);
-        // container->unmap_all_supported = !!ret;
-        // vfio_get_iommu_info_migration(container, info);
-        // Do we need these?
-        assert!(self.vfio_kvm_and_container.is_none());
-        let container = crate::vfio::vfio_open()?;
-        crate::vfio::vfio_check_api_version(&container)?;
-        crate::vfio::vfio_check_extension(&container)?;
-        let kvm_device = crate::vfio::kvm_create_vfio_device(vm.as_ref())?;
-        self.vfio_kvm_and_container = Some(VfioKvmAndContainer {
-            container,
-            kvm_device,
-        });
-
         Ok(())
     }
 
@@ -203,6 +177,33 @@ impl PciDevices {
         id: String,
         path: &str,
     ) -> Result<(), PciManagerError> {
+        let first_vfio_device = self.vfio_devices.is_empty();
+
+        if first_vfio_device {
+            // TODO qemu also does a bunch of checks for the container:
+            // vfio_get_iommu_info(container, &info)
+            // if (info->flags & VFIO_IOMMU_INFO_PGSIZES) {
+            //     bcontainer->pgsizes = info->iova_pgsizes;
+            // } else {
+            //     bcontainer->pgsizes = qemu_real_host_page_size();
+            // }
+            // if (!vfio_get_info_dma_avail(info, &bcontainer->dma_max_mappings)) {
+            //     bcontainer->dma_max_mappings = 65535;
+            // }
+            // vfio_get_info_iova_range(info, bcontainer);
+            // ret = ioctl(container->fd, VFIO_CHECK_EXTENSION, VFIO_UNMAP_ALL);
+            // container->unmap_all_supported = !!ret;
+            // vfio_get_iommu_info_migration(container, info);
+            // Do we need these?
+            assert!(self.vfio_kvm_and_container.is_none());
+            let container = crate::vfio::init_vfio_container()?;
+            let kvm_device = crate::vfio::init_kvm_device_vfio(vm.as_ref())?;
+            self.vfio_kvm_and_container = Some(VfioKvmAndContainer {
+                container,
+                kvm_device,
+            });
+        }
+
         for existing_id in self.vfio_devices.keys() {
             if id == *existing_id {
                 return Err(PciManagerError::VfioDuplicateDevice(id));
@@ -215,7 +216,6 @@ impl PciDevices {
 
         let vfio_kvm_and_container = self.vfio_kvm_and_container.as_ref().unwrap();
 
-        let first_vfio_device = self.vfio_devices.is_empty();
         let vfio_device_bundle = crate::vfio::init_vfio_device(
             &vfio_kvm_and_container,
             vm,

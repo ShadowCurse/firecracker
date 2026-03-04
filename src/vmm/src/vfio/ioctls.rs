@@ -31,6 +31,8 @@ pub enum VfioIoctlError {
     GroupSetContainer,
     /// Failed to unset vfio container
     UnsetContainer,
+    /// Failed get VFIO IOMMU info: {0}
+    IommuGetInfo(#[source] SysError),
     /// Failed to set container's IOMMU driver type as VfioType1V2: {0}
     ContainerSetIOMMU(#[source] SysError),
     /// Failed to get vfio device fd: {0}
@@ -149,21 +151,36 @@ ioctl_io_nr!(VFIO_IOMMU_DISABLE, VFIO_TYPE.into(), VFIO_BASE + 16);
 /// API version should we later need to add or change features in incompatible
 /// ways.
 /// Availability: Always
-pub fn check_api_version(vfio: &impl AsRawFd) -> i32 {
+pub fn check_api_version(container: &impl AsRawFd) -> i32 {
     // SAFETY: file is vfio container fd and ioctl is defined by kernel.
-    unsafe { ioctl(vfio, VFIO_GET_API_VERSION()) }
+    unsafe { ioctl(container, VFIO_GET_API_VERSION()) }
 }
 
 /// Check whether an extension is supported.
 /// Return: 0 if not supported, 1 (or some other positive integer) if supported.
 /// Availability: Always
-pub fn check_extension(vfio: &impl AsRawFd, val: u32) -> Result<u32, VfioIoctlError> {
+pub fn check_extension(container: &impl AsRawFd, val: u32) -> Result<u32, VfioIoctlError> {
     // SAFETY: file is vfio container and make sure val is valid.
-    let ret = unsafe { ioctl_with_val(vfio, VFIO_CHECK_EXTENSION(), val.into()) };
+    let ret = unsafe { ioctl_with_val(container, VFIO_CHECK_EXTENSION(), val.into()) };
     if ret < 0 {
         Err(VfioIoctlError::VfioExtension)
     } else {
         Ok(ret as u32)
+    }
+}
+
+// Retrieve information about the IOMMU object. Fills in provided
+// struct vfio_iommu_info. Caller sets argsz.
+pub fn iommu_get_info(
+    container: &impl AsRawFd,
+    info: &vfio_iommu_type1_info,
+) -> Result<(), VfioIoctlError> {
+    // SAFETY: file is vfio container and make sure val is valid.
+    let ret = unsafe { ioctl_with_ref(container, VFIO_IOMMU_GET_INFO(), info) };
+    if ret < 0 {
+        Err(VfioIoctlError::IommuGetInfo(SysError::last()))
+    } else {
+        Ok(())
     }
 }
 
@@ -173,9 +190,9 @@ pub fn check_extension(vfio: &impl AsRawFd, val: u32) -> Result<u32, VfioIoctlEr
 /// ioctl is available.  The IOMMU interfaces enabled by this call are
 /// specific to the value set.
 /// Availability: When VFIO group attached
-pub fn set_iommu(vfio: &impl AsRawFd, val: u32) -> Result<(), VfioIoctlError> {
+pub fn set_iommu(container: &impl AsRawFd, val: u32) -> Result<(), VfioIoctlError> {
     // SAFETY: file is vfio container and make sure val is valid.
-    let ret = unsafe { ioctl_with_val(vfio, VFIO_SET_IOMMU(), val.into()) };
+    let ret = unsafe { ioctl_with_val(container, VFIO_SET_IOMMU(), val.into()) };
     if ret < 0 {
         Err(VfioIoctlError::ContainerSetIOMMU(SysError::last()))
     } else {
@@ -194,12 +211,12 @@ pub fn set_iommu(vfio: &impl AsRawFd, val: u32) -> Result<(), VfioIoctlError> {
 /// size must match those in the original MAP_DMA call.  Protection is not
 /// changed, and the READ & WRITE flags must be 0.
 pub fn iommu_map_dma(
-    vfio: &impl AsRawFd,
+    container: &impl AsRawFd,
     dma_map: &vfio_iommu_type1_dma_map,
 ) -> Result<(), VfioIoctlError> {
     // SAFETY: file is vfio container, dma_map is constructed by us, and
     // we check the return value
-    let ret = unsafe { ioctl_with_ref(vfio, VFIO_IOMMU_MAP_DMA(), dma_map) };
+    let ret = unsafe { ioctl_with_ref(container, VFIO_IOMMU_MAP_DMA(), dma_map) };
     if ret != 0 {
         Err(VfioIoctlError::IommuDmaMap(SysError::last()))
     } else {
