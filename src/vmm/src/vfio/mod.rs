@@ -41,7 +41,9 @@ use crate::Vm;
 use crate::arch::host_page_size;
 use crate::pci::msix::MsixConfig;
 use crate::pci::{BarReprogrammingParams, DeviceRelocationError, PciDevice};
-use crate::utils::usize_to_u64;
+use crate::utils::{
+    align_down_host_page, align_up_host_page, offset_from_lower_host_page, usize_to_u64,
+};
 use crate::vfio::ioctls::VfioIoctlError;
 use crate::vstate::bus::BusDevice;
 use crate::vstate::memory::{GuestMemoryMmap, GuestRegionType};
@@ -325,7 +327,6 @@ pub enum BarHoleInfoUsage {
 pub struct BarHoleInfo {
     pub gpa: u64,
     pub size: u64,
-    pub offset_in_hole: u64,
     pub usage: BarHoleInfoUsage,
 }
 
@@ -397,56 +398,52 @@ macro_rules! LOG {
         println!("[{}:{:<4}:{:<80}] {}", file!(), line!(), function_name!(), format_args!($($arg)*))
     };
 }
-// This should only serve BARs
-impl BusDevice for VfioDeviceBundle {
-    fn read(&mut self, base: u64, offset: u64, data: &mut [u8]) {
-        let state = self
-            .msix_state
-            .as_ref()
-            .expect("MSI-X state must exist if we intercept BAR accesses");
-        let mut name = "----";
-        let mut handled: bool = false;
-        for hole in state.bar_hole_infos.iter() {
-            if hole.gpa == base {
-                let data_start = offset;
-                let data_end = offset + data.len() as u64;
 
+macro_rules! handle_bar_access {
+    ($state:expr, $device:expr, $base:expr, $offset:expr, $data:expr,
+     $table_fn:ident, $pba_fn:ident, $region_fn:ident) => {{
+        let mut name = "----";
+        let mut handled = false;
+        let data_start = $offset;
+        let data_end = $offset + $data.len() as u64;
+        for hole in $state.bar_hole_infos.iter() {
+            if hole.gpa == $base {
                 match hole.usage {
                     BarHoleInfoUsage::Table => {
-                        let (_, table_size) = state.cap.table_range();
-                        let table_start = hole.offset_in_hole;
-                        let table_end = hole.offset_in_hole + table_size;
+                        let (table_offset, table_size) = $state.cap.table_range();
+                        let table_start = offset_from_lower_host_page(table_offset);
+                        let table_end = table_start + table_size;
                         if table_start <= data_start && data_end <= table_end {
                             name = "MsiTable";
-                            state.config.read_table(offset, data);
+                            $state.config.$table_fn($offset, $data);
                         } else {
                             name = "OutsideTable";
-                            let region_index = state.cap.table_bir();
-                            let _ = vfio_device_region_read(
-                                &self.device.file,
-                                &self.device.region_infos,
+                            let region_index = $state.cap.table_bir();
+                            let _ = $region_fn(
+                                &$device.file,
+                                &$device.region_infos,
                                 region_index,
-                                offset,
-                                data,
+                                $offset,
+                                $data,
                             );
                         }
                     }
                     BarHoleInfoUsage::Pba => {
-                        let (_, table_size) = state.cap.pba_range();
-                        let table_start = hole.offset_in_hole;
-                        let table_end = hole.offset_in_hole + table_size;
+                        let (table_offset, table_size) = $state.cap.pba_range();
+                        let table_start = offset_from_lower_host_page(table_offset);
+                        let table_end = table_start + table_size;
                         if table_start <= data_start && data_end <= table_end {
                             name = "PbaTable";
-                            state.config.read_pba(offset, data);
+                            $state.config.$pba_fn($offset, $data);
                         } else {
                             name = "OutsideTable";
-                            let region_index = state.cap.pba_bir();
-                            let _ = vfio_device_region_read(
-                                &self.device.file,
-                                &self.device.region_infos,
+                            let region_index = $state.cap.pba_bir();
+                            let _ = $region_fn(
+                                &$device.file,
+                                &$device.region_infos,
                                 region_index,
-                                offset,
-                                data,
+                                $offset,
+                                $data,
                             );
                         }
                     }
@@ -454,6 +451,27 @@ impl BusDevice for VfioDeviceBundle {
                 handled = true;
             }
         }
+        (name, handled)
+    }};
+}
+
+// This should only serve BARs
+impl BusDevice for VfioDeviceBundle {
+    fn read(&mut self, base: u64, offset: u64, data: &mut [u8]) {
+        let state = self
+            .msix_state
+            .as_ref()
+            .expect("MSI-X state must exist if we intercept BAR accesses");
+        let (name, handled) = handle_bar_access!(
+            state,
+            self.device,
+            base,
+            offset,
+            data,
+            read_table,
+            read_pba,
+            vfio_device_region_read
+        );
         if !handled {
             for d in data.iter_mut() {
                 *d = 0;
@@ -467,52 +485,25 @@ impl BusDevice for VfioDeviceBundle {
     }
 
     fn write(&mut self, base: u64, offset: u64, data: &[u8]) -> Option<Arc<Barrier>> {
-        let mut name = "----";
-        if let Some(state) = self.msix_state.as_mut() {
-            let mut handled: bool = false;
-            for info in state.bar_hole_infos.iter() {
-                if info.gpa == base {
-                    let hole_start = info.offset_in_hole;
-                    let hole_end = info.offset_in_hole + info.size;
-                    let data_start = offset;
-                    let data_end = offset + data.len() as u64;
-                    if hole_start <= data_start && data_end <= hole_end {
-                        match info.usage {
-                            BarHoleInfoUsage::Table => {
-                                name = "MsiTable";
-                                state.config.write_table(offset, data);
-                            }
-                            BarHoleInfoUsage::Pba => {
-                                name = "PbaTable";
-                                state.config.write_pba(offset, data);
-                            }
-                        }
-                        handled = true;
-                    } else {
-                        let region_index = match info.usage {
-                            BarHoleInfoUsage::Table => state.cap.table_bir(),
-                            BarHoleInfoUsage::Pba => state.cap.pba_bir(),
-                        };
-                        let _ = vfio_device_region_write(
-                            &self.device.file,
-                            &self.device.region_infos,
-                            region_index,
-                            offset,
-                            data,
-                        );
-                        name = "OutsideTable";
-                        handled = true;
-                    }
-                }
-            }
-            assert!(handled);
-            LOG!(
-                "[{}] base: {base:<#10x} offset: {offset:<#5x} data: {data:<4?} table_name: {name}",
-                self.id
-            );
-        } else {
-            panic!("Should never happen");
-        }
+        let state = self
+            .msix_state
+            .as_mut()
+            .expect("MSI-X state must exist if we intercept BAR accesses");
+        let (name, handled) = handle_bar_access!(
+            state,
+            self.device,
+            base,
+            offset,
+            data,
+            write_table,
+            write_pba,
+            vfio_device_region_write
+        );
+        assert!(handled);
+        LOG!(
+            "[{}] base: {base:<#10x} offset: {offset:<#5x} data: {data:<4?} table_name: {name}",
+            self.id
+        );
         None
     }
 }
@@ -1607,32 +1598,26 @@ pub fn mmap_bars(
         let mut msix_pba_offset = 0;
         let mut msix_pba_size = 0;
 
-        fn align_page_size_down(v: u64) -> u64 {
-            v & !(4096 - 1)
-        }
-        fn align_page_size_up(v: u64) -> u64 {
-            align_page_size_down(v + 4096 - 1)
-        }
         if let Some(msix_cap) = msix_cap {
             contain_msix_table = region_info.index == msix_cap.table_bir();
             if contain_msix_table {
                 let (offset, size) = msix_cap.table_range();
-                msix_table_offset = align_page_size_down(offset);
-                msix_table_size = align_page_size_up(size);
-                let offset_in_hole = offset - msix_table_offset;
+                msix_table_offset = align_down_host_page(offset);
+                msix_table_size = align_up_host_page(size);
 
+                let offset_in_hole = offset_from_lower_host_page(offset);
                 LOG!(
                     "BAR{} msix_table hole: [{:#x}..{:#x}] actual table: [{:#x} ..{:#x}]",
                     bar_info.idx,
                     bar_info.gpa + msix_table_offset,
                     bar_info.gpa + msix_table_offset + msix_table_size,
-                    bar_info.gpa + offset,
-                    bar_info.gpa + offset + size,
+                    bar_info.gpa + offset_in_hole,
+                    bar_info.gpa + offset_in_hole + size,
                 );
+
                 let info = BarHoleInfo {
                     gpa: bar_info.gpa + msix_table_offset,
                     size: msix_table_size,
-                    offset_in_hole,
                     usage: BarHoleInfoUsage::Table,
                 };
                 bar_hole_infos.push(info);
@@ -1641,22 +1626,22 @@ pub fn mmap_bars(
             contain_msix_pba = region_info.index == msix_cap.pba_bir();
             if contain_msix_pba {
                 let (offset, size) = msix_cap.pba_range();
-                msix_pba_offset = align_page_size_down(offset);
-                msix_pba_size = align_page_size_up(size);
-                let offset_in_hole = offset - msix_pba_offset;
+                msix_pba_offset = align_down_host_page(offset);
+                msix_pba_size = align_up_host_page(size);
 
+                let offset_in_hole = offset_from_lower_host_page(offset);
                 LOG!(
                     "BAR{} pba_table hole: [{:#x} ..{:#x}] actual table: [{:#x} ..{:#x}]",
                     bar_info.idx,
                     bar_info.gpa + msix_pba_offset,
                     bar_info.gpa + msix_pba_offset + msix_pba_size,
-                    bar_info.gpa + offset,
-                    bar_info.gpa + offset + size,
+                    bar_info.gpa + offset_in_hole,
+                    bar_info.gpa + offset_in_hole + size,
                 );
+
                 let info = BarHoleInfo {
                     gpa: bar_info.gpa + msix_pba_offset,
                     size: msix_pba_size,
-                    offset_in_hole,
                     usage: BarHoleInfoUsage::Pba,
                 };
                 bar_hole_infos.push(info);
@@ -1739,11 +1724,11 @@ pub fn mmap_bars(
 
                 for area in areas.iter() {
                     assert!(
-                        (area.size & (4096 - 1)) == 0,
+                        offset_from_lower_host_page(area.size) == 0,
                         "Aresa size is not page aligned"
                     );
                     assert!(
-                        (area.offset & (4096 - 1)) == 0,
+                        offset_from_lower_host_page(area.offset) == 0,
                         "Aresa offset is not page aligned"
                     );
                     let region_offset = region_info.offset;

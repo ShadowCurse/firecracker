@@ -77,13 +77,20 @@ pub const fn align_down(addr: u64, align: u64) -> u64 {
     addr & !(align - 1)
 }
 
-/// Align address up to the aligment.
+/// Calculate the difference between the current address
+/// and the nearest lower page boundary.
+pub fn offset_from_lower_host_page(addr: u64) -> u64 {
+    let align = usize_to_u64(host_page_size());
+    addr & (align - 1)
+}
+
+/// Align address up to the host page boundary.
 pub fn align_up_host_page(addr: u64) -> u64 {
     let align = usize_to_u64(host_page_size());
     (addr + align - 1) & !(align - 1)
 }
 
-/// Align address down to the aligment.
+/// Align address down to the host page boundary.
 pub fn align_down_host_page(addr: u64) -> u64 {
     let align = usize_to_u64(host_page_size());
     addr & !(align - 1)
