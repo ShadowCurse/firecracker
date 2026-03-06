@@ -226,9 +226,6 @@ pub enum VfioRegionCap {
 #[derive(Debug)]
 pub struct VfioRegionInfo {
     pub flags: u32,
-    // TODO: this index is redundant. These infos are stored in the array where index into
-    // array is same as the index of the region in VFIO.
-    pub index: u32,
     pub size: u64,
     pub offset: u64,
     pub caps: Vec<VfioRegionCap>,
@@ -244,7 +241,7 @@ pub struct RegisterMask {
 
 #[derive(Debug)]
 pub struct BarInfo {
-    pub idx: u8,
+    pub index: u8,
     pub gpa: u64,
     pub size: u64,
     pub is_64_bits: bool,
@@ -360,7 +357,7 @@ macro_rules! handle_bar_access {
                             let _ = $region_fn(
                                 &$device.file,
                                 &$device.region_infos,
-                                region_index,
+                                region_index as u32,
                                 $offset,
                                 $data,
                             );
@@ -379,7 +376,7 @@ macro_rules! handle_bar_access {
                             let _ = $region_fn(
                                 &$device.file,
                                 &$device.region_infos,
-                                region_index,
+                                region_index as u32,
                                 $offset,
                                 $data,
                             );
@@ -469,13 +466,13 @@ impl PciDevice for VfioDeviceBundle {
             }
 
             for bar_info in self.bar_infos.iter_mut() {
-                if bar_idx == bar_info.idx {
+                if bar_idx == bar_info.index {
                     if looks_like_request_to_read {
                         bar_info.about_to_read_size = true;
                     }
                     name = "BAR";
                     handled = true;
-                } else if bar_idx == bar_info.idx + 1 && bar_info.is_64_bits {
+                } else if bar_idx == bar_info.index + 1 && bar_info.is_64_bits {
                     if looks_like_request_to_read {
                         bar_info.about_to_read_size = true;
                     }
@@ -572,7 +569,7 @@ impl PciDevice for VfioDeviceBundle {
         if 4 <= reg_idx && reg_idx < 10 {
             let bar_idx = (reg_idx - 4) as u8;
             for bar_info in self.bar_infos.iter_mut() {
-                if bar_idx == bar_info.idx {
+                if bar_idx == bar_info.index {
                     if bar_info.about_to_read_size {
                         let size = !(bar_info.size - 1);
                         result = (size & 0xFFFF_FFFF) as u32;
@@ -583,7 +580,7 @@ impl PciDevice for VfioDeviceBundle {
                         result = (bar_info.gpa & 0xFFFF_FFFF) as u32 | is_64_bits | is_prefetchable;
                     }
                     name = "BAR";
-                } else if bar_info.is_64_bits && bar_idx == bar_info.idx + 1 {
+                } else if bar_info.is_64_bits && bar_idx == bar_info.index + 1 {
                     if bar_info.about_to_read_size {
                         let size = !(bar_info.size - 1);
                         result = (size >> 32) as u32;
@@ -770,7 +767,6 @@ pub fn vfio_device_get_region_infos(
             LOG!("Region {i} is not available or not implemented. Setting to 0");
             let region_info = VfioRegionInfo {
                 flags: 0,
-                index: region_info.index,
                 size: 0,
                 offset: 0,
                 caps: Vec::new(),
@@ -806,7 +802,7 @@ pub fn vfio_device_get_region_infos(
                 let region_info_with_caps = vfio_region_info_with_caps.vfio_region_info_mut();
                 region_info_with_caps.argsz = region_info.argsz;
                 region_info_with_caps.flags = 0;
-                region_info_with_caps.index = region_info.index;
+                region_info_with_caps.index = i;
                 region_info_with_caps.cap_offset = 0;
                 region_info_with_caps.size = 0;
                 region_info_with_caps.offset = 0;
@@ -885,7 +881,6 @@ pub fn vfio_device_get_region_infos(
             }
             let region_info = VfioRegionInfo {
                 flags: region_info.flags,
-                index: region_info.index,
                 size: region_info.size,
                 offset: region_info.offset,
                 caps,
@@ -893,7 +888,7 @@ pub fn vfio_device_get_region_infos(
             LOG!(
                 "Region {i} info: flags: {:x} index: {} size: {} offset: {}",
                 region_info.flags,
-                region_info.index,
+                i,
                 region_info.size,
                 region_info.offset
             );
@@ -1281,7 +1276,7 @@ pub fn vfio_device_get_bar_infos(
                 gpa + size
             );
             bar_infos.push(BarInfo {
-                idx,
+                index: idx,
                 gpa,
                 size,
                 is_64_bits,
@@ -1520,7 +1515,7 @@ pub fn mmap_bars(
 ) -> Result<Vec<BarHoleInfo>, VfioError> {
     let mut bar_hole_infos = Vec::new();
     for bar_info in bar_infos.iter() {
-        let region_info = &region_infos[bar_info.idx as usize];
+        let region_info = &region_infos[bar_info.index as usize];
         let mut has_msix_mappable = false;
         let mut sparse_mmap_cap = None;
         for cap in region_info.caps.iter() {
@@ -1539,7 +1534,7 @@ pub fn mmap_bars(
         let mut msix_pba_size = 0;
 
         if let Some(msix_cap) = msix_cap {
-            contain_msix_table = region_info.index == msix_cap.table_bir();
+            contain_msix_table = bar_info.index == msix_cap.table_bir();
             if contain_msix_table {
                 let (offset, size) = msix_cap.table_range();
                 msix_table_offset = align_down_host_page(offset);
@@ -1548,7 +1543,7 @@ pub fn mmap_bars(
                 let offset_in_hole = offset_from_lower_host_page(offset);
                 LOG!(
                     "BAR{} msix_table hole: [{:#x}..{:#x}] actual table: [{:#x} ..{:#x}]",
-                    bar_info.idx,
+                    bar_info.index,
                     bar_info.gpa + msix_table_offset,
                     bar_info.gpa + msix_table_offset + msix_table_size,
                     bar_info.gpa + offset_in_hole,
@@ -1563,7 +1558,7 @@ pub fn mmap_bars(
                 bar_hole_infos.push(info);
             }
 
-            contain_msix_pba = region_info.index == msix_cap.pba_bir();
+            contain_msix_pba = bar_info.index == msix_cap.pba_bir();
             if contain_msix_pba {
                 let (offset, size) = msix_cap.pba_range();
                 msix_pba_offset = align_down_host_page(offset);
@@ -1572,7 +1567,7 @@ pub fn mmap_bars(
                 let offset_in_hole = offset_from_lower_host_page(offset);
                 LOG!(
                     "BAR{} pba_table hole: [{:#x} ..{:#x}] actual table: [{:#x} ..{:#x}]",
-                    bar_info.idx,
+                    bar_info.index,
                     bar_info.gpa + msix_pba_offset,
                     bar_info.gpa + msix_pba_offset + msix_pba_size,
                     bar_info.gpa + offset_in_hole,
@@ -1595,7 +1590,7 @@ pub fn mmap_bars(
             LOG!(
                 "BAR{} contains msix_table: {} msix_pba: {}, but mappable is {} and \
                  sparse_mmap_cap is {}",
-                bar_info.idx,
+                bar_info.index,
                 contain_msix_table,
                 contain_msix_pba,
                 has_msix_mappable,
@@ -1701,7 +1696,7 @@ pub fn mmap_bars(
                     };
                     LOG!(
                         "BAR{} kvm gpa: [{:#x} ..{:#x}]",
-                        bar_info.idx,
+                        bar_info.index,
                         iova,
                         iova + size
                     );
