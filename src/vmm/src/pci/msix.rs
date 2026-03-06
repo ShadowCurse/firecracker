@@ -534,13 +534,13 @@ impl MsixCap {
     }
 
     /// Table BAR idx
-    pub fn table_bir(&self) -> u32 {
-        self.table & 0x7
+    pub fn table_bir(&self) -> u8 {
+        (self.table & 0x7) as u8
     }
 
     /// PBA BAR idx
-    pub fn pba_bir(&self) -> u32 {
-        self.pba & 0x7
+    pub fn pba_bir(&self) -> u8 {
+        (self.pba & 0x7) as u8
     }
 
     /// Table size
