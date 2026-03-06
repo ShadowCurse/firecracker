@@ -39,7 +39,7 @@ use zerocopy::IntoBytes;
 
 use crate::Vm;
 use crate::arch::host_page_size;
-use crate::pci::msix::MsixConfig;
+use crate::pci::msix::{MsixCap, MsixConfig};
 use crate::pci::{BarReprogrammingParams, DeviceRelocationError, PciDevice};
 use crate::utils::{
     align_down_host_page, align_up_host_page, offset_from_lower_host_page, usize_to_u64,
@@ -234,69 +234,6 @@ pub struct VfioRegionInfo {
     pub caps: Vec<VfioRegionCap>,
 }
 
-/// 7.7.1.2 Message Control Register for MSI
-// #[derive(Debug)]
-// pub struct MsiCap {
-//     pub register: u8,
-//     pub msg_ctl: u16,
-//     pub low: u32,
-//     pub high: u32,
-//     pub data: u32,
-// }
-
-/// 7.7.2 MSI-X Capability and Table Structure
-#[derive(Debug)]
-pub struct MsixCap {
-    pub register: u8,
-    pub msg_ctl: u16,
-    pub table_offset: u32,
-    pub pba_offset: u32,
-}
-impl MsixCap {
-    const FUNCTION_MASK_BIT: u8 = 14;
-    const MSIX_ENABLE_BIT: u8 = 15;
-
-    pub fn masked(&self) -> bool {
-        (self.msg_ctl >> Self::FUNCTION_MASK_BIT) & 0x1 == 0x1
-    }
-
-    pub fn enabled(&self) -> bool {
-        (self.msg_ctl >> Self::MSIX_ENABLE_BIT) & 0x1 == 0x1
-    }
-
-    pub fn table_offset(&self) -> u32 {
-        self.table_offset & 0xffff_fff8
-    }
-
-    pub fn pba_offset(&self) -> u32 {
-        self.pba_offset & 0xffff_fff8
-    }
-
-    pub fn table_bir(&self) -> u32 {
-        self.table_offset & 0x7
-    }
-
-    pub fn pba_bir(&self) -> u32 {
-        self.pba_offset & 0x7
-    }
-
-    pub fn table_size(&self) -> u16 {
-        (self.msg_ctl & 0x7ff) + 1
-    }
-
-    pub fn table_range(&self) -> (u64, u64) {
-        // The table takes 16 bytes per entry.
-        let size = self.table_size() as u64 * 16;
-        (self.table_offset() as u64, size)
-    }
-
-    pub fn pba_range(&self) -> (u64, u64) {
-        // The table takes 1 bit per entry modulo 8 bytes.
-        let size = ((self.table_size() as u64 + 63) / 64) * 8;
-        (self.pba_offset() as u64, size)
-    }
-}
-
 #[derive(Debug)]
 pub struct RegisterMask {
     register: u16,
@@ -359,6 +296,7 @@ pub struct VfioDevice {
 
 #[derive(Debug)]
 pub struct MsixState {
+    pub register: u8,
     pub cap: MsixCap,
     pub bar_hole_infos: Vec<BarHoleInfo>,
     pub config: MsixConfig,
@@ -600,7 +538,7 @@ impl PciDevice for VfioDeviceBundle {
         //     name = "MSI_CAP";
         //     handled = true;
         } else if let Some(state) = self.msix_state.as_mut() {
-            if reg_idx == state.cap.register as usize {
+            if reg_idx == state.register as usize {
                 if offset == 2 && data.len() == 2 {
                     let data = u16::from_le_bytes(data.try_into().unwrap());
                     state.config.set_msg_ctl(data);
@@ -676,7 +614,7 @@ impl PciDevice for VfioDeviceBundle {
                 result.as_mut_bytes(),
             );
             if let Some(state) = self.msix_state.as_ref() {
-                if reg_idx == state.cap.register as usize {
+                if reg_idx == state.register as usize {
                     result = ((state.config.enabled as u32) << 31)
                         | ((state.config.masked as u32) << 30)
                         | result;
@@ -1056,7 +994,7 @@ pub fn vfio_device_get_pci_capabilities(
     region_infos: &[VfioRegionInfo],
     irq_infos: &[vfio_irq_info],
     // ) -> Result<(Option<MsiCap>, Option<MsixCap>, Vec<RegisterMask>), VfioError> {
-) -> Result<(Option<MsixCap>, Vec<RegisterMask>), VfioError> {
+) -> Result<(Option<(MsixCap, u8)>, Vec<RegisterMask>), VfioError> {
     let mut next_cap_offset: u8 = 0;
     vfio_device_region_read(
         device,
@@ -1070,7 +1008,7 @@ pub fn vfio_device_get_pci_capabilities(
     // let mut has_power_management_cap = false;
 
     // let mut msi_cap = None;
-    let mut msix_cap = None;
+    let mut msix_cap_and_register = None;
     LOG!("PCI CAPS offset: {}", next_cap_offset);
     while next_cap_offset != 0 {
         let mut cap_id_and_next_ptr: u16 = 0;
@@ -1129,8 +1067,8 @@ pub fn vfio_device_get_pci_capabilities(
 
                         // 7.7.2 MSI-X Capability and Table Structure
                         let mut msg_ctl: u16 = 0;
-                        let mut table_offset: u32 = 0;
-                        let mut pba_offset: u32 = 0;
+                        let mut table: u32 = 0;
+                        let mut pba: u32 = 0;
                         vfio_device_region_read(
                             device,
                             region_infos,
@@ -1143,21 +1081,23 @@ pub fn vfio_device_get_pci_capabilities(
                             region_infos,
                             VFIO_PCI_CONFIG_REGION_INDEX,
                             (current_cap_offset as u64) + 4,
-                            table_offset.as_mut_bytes(),
+                            table.as_mut_bytes(),
                         )?;
                         vfio_device_region_read(
                             device,
                             region_infos,
                             VFIO_PCI_CONFIG_REGION_INDEX,
                             (current_cap_offset as u64) + 8,
-                            pba_offset.as_mut_bytes(),
+                            pba.as_mut_bytes(),
                         )?;
-                        msix_cap = Some(MsixCap {
+                        msix_cap_and_register = Some((
+                            MsixCap {
+                                msg_ctl,
+                                table,
+                                pba,
+                            },
                             register,
-                            msg_ctl,
-                            table_offset,
-                            pba_offset,
-                        });
+                        ));
                     } else {
                         LOG!("Found MSI-X cap, but the device does not support MSI-X interrupts.");
                     }
@@ -1219,7 +1159,7 @@ pub fn vfio_device_get_pci_capabilities(
         }
     }
     // Ok((msi_cap, msix_cap, masks))
-    Ok((msix_cap, masks))
+    Ok((msix_cap_and_register, masks))
 }
 
 fn vfio_device_get_single_bar_info(
@@ -1939,14 +1879,14 @@ pub fn init_vfio_device(
         bar_infos
     };
     // let (msi_cap, msix_cap, masks) =
-    let (msix_cap, masks) =
+    let (msix_cap_and_register, masks) =
         vfio_device_get_pci_capabilities(&device.file, &device.region_infos, &device.irq_infos)?;
     let bar_hole_infos = mmap_bars(
         container,
         &device.file,
         &bar_infos,
         &device.region_infos,
-        msix_cap.as_ref(),
+        msix_cap_and_register.as_ref().map(|(v, _)| v),
         vm.as_ref(),
     )?;
     if first_vfio_device {
@@ -1961,7 +1901,7 @@ pub fn init_vfio_device(
     let _config_space_info = vfio_device_get_config_space_info(&device.file, &device.region_infos)?;
 
     let mut msix_state = None;
-    if let Some(msix_cap) = msix_cap {
+    if let Some((msix_cap, msix_register)) = msix_cap_and_register {
         assert!(
             VFIO_PCI_MSIX_IRQ_INDEX < device.irq_infos.len() as u32,
             "Found MSI-X capability, but VFIO does not have irq_info at VFIO_PCI_MSIX_IRQ_INDEX"
@@ -1973,6 +1913,7 @@ pub fn init_vfio_device(
         let msix_config = crate::pci::msix::MsixConfig::new(Arc::new(msix_vectors), bdf.into());
         set_msix_irqs(&device.file, &device.irq_infos, &msix_config)?;
         msix_state = Some(MsixState {
+            register: msix_register,
             cap: msix_cap,
             bar_hole_infos: bar_hole_infos,
             config: msix_config,
