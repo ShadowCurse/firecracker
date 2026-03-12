@@ -232,6 +232,7 @@ pub struct VirtioPciDeviceState {
     pub pci_dev_state: VirtioPciCommonConfigState,
     pub msix_state: MsixConfigState,
     pub bars: Bars,
+    pub msix_config_cap_offset: u16,
 }
 
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
@@ -277,6 +278,8 @@ pub struct VirtioPciDevice {
 
     // BARs region for the device
     pub bars: Bars,
+    pub msix_config_cap_offset: u16,
+    pub msix_config: Arc<Mutex<MsixConfig>>,
 }
 
 impl Debug for VirtioPciDevice {
@@ -316,7 +319,6 @@ impl VirtioPciDevice {
             subclass,
             VIRTIO_PCI_VENDOR_ID,
             pci_device_id,
-            Some(msix_config.clone()),
         )
     }
 
@@ -393,6 +395,8 @@ impl VirtioPciDevice {
             memory,
             cap_pci_cfg_info: VirtioPciCfgCapInfo::default(),
             bars: Bars::default(),
+            msix_config,
+            msix_config_cap_offset: 0,
         };
 
         Ok(virtio_pci_device)
@@ -408,10 +412,7 @@ impl VirtioPciDevice {
         let vectors = msix_config.vectors.clone();
         let msix_config = Arc::new(Mutex::new(msix_config));
 
-        let pci_config = PciConfiguration::type0_from_state(
-            state.pci_configuration_state,
-            Some(msix_config.clone()),
-        );
+        let pci_config = PciConfiguration::type0_from_state(state.pci_configuration_state);
         let virtio_common_config = VirtioPciCommonConfig::new(state.pci_dev_state);
         let cap_pci_cfg_info = VirtioPciCfgCapInfo {
             offset: state.cap_pci_cfg_offset,
@@ -437,6 +438,8 @@ impl VirtioPciDevice {
             memory: vm.guest_memory().clone(),
             cap_pci_cfg_info,
             bars: state.bars,
+            msix_config,
+            msix_config_cap_offset: state.msix_config_cap_offset,
         };
 
         if state.device_activated {
@@ -518,7 +521,10 @@ impl VirtioPciDevice {
                 VIRTIO_BAR_INDEX,
                 MSIX_PBA_BAR_OFFSET,
             );
-            self.configuration.add_capability(&msix_cap);
+            // The whole Configuration region is 4K, so u16 can address it all
+            #[allow(clippy::cast_possible_truncation)]
+            let offset = self.configuration.add_capability(&msix_cap) as u16;
+            self.msix_config_cap_offset = offset;
         }
     }
 
@@ -621,6 +627,7 @@ impl VirtioPciDevice {
                 .expect("Poisoned lock")
                 .state(),
             bars: self.bars,
+            msix_config_cap_offset: self.msix_config_cap_offset,
         }
     }
 }
@@ -731,16 +738,21 @@ impl PciDevice for VirtioPciDevice {
             self.bars.write(bar_idx, offset, data);
             None
         } else {
-            // Handle the special case where the capability VIRTIO_PCI_CAP_PCI_CFG
-            // is accessed. This capability has a special meaning as it allows the
-            // guest to access other capabilities without mapping the PCI BAR.
-            let base = reg_idx as usize * 4;
-            if base + offset as usize >= self.cap_pci_cfg_info.offset as usize
-                && base + offset as usize + data.len()
+            // Handle access to the header of the MsixCapability. The rest of the
+            // capability is handled by the PciConfiguration.
+            let base = reg_idx * 4;
+            if base == self.msix_config_cap_offset {
+                self.msix_config
+                    .lock()
+                    .unwrap()
+                    .write_msg_ctl_register(offset, data);
+            }
+            if base + u16::from(offset) >= self.cap_pci_cfg_info.offset
+                && (base + u16::from(offset)) as usize + data.len()
                     <= self.cap_pci_cfg_info.offset as usize
                         + self.cap_pci_cfg_info.cap.bytes().len()
             {
-                let offset = base + offset as usize - self.cap_pci_cfg_info.offset as usize;
+                let offset = (base + u16::from(offset) - self.cap_pci_cfg_info.offset) as usize;
                 self.write_cap_pci_cfg(offset, data)
             } else {
                 self.configuration
