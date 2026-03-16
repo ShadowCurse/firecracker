@@ -37,6 +37,8 @@ pub enum VfioIoctlError {
     ContainerSetIOMMU(#[source] SysError),
     /// Failed to get vfio device fd: {0}
     GroupGetDeviceFD(#[source] SysError),
+    /// Failed reset the device
+    DeviceReset,
     /// Failed to set vfio device's attribute: {0}
     SetDeviceAttr(#[source] SysError),
     /// Failed to get vfio device's info: {0}
@@ -388,6 +390,7 @@ pub fn device_get_info(
 /// ACTION_TRIGGER specifies kernel->user signaling.
 pub fn device_set_irqs(
     device: &impl AsRawFd,
+    // TODO: maybe move the Fam.. types here and pass those into ioclts to guarantee correctnes?
     irq_set: &vfio_irq_set,
 ) -> Result<(), VfioIoctlError> {
     // SAFETY: we are the owner of self and irq_set which are valid value
@@ -400,9 +403,14 @@ pub fn device_set_irqs(
 }
 
 /// Reset a device.
-pub fn device_reset(device: &impl AsRawFd) -> i32 {
+pub fn device_reset(device: &impl AsRawFd) -> Result<(), VfioIoctlError> {
     // SAFETY: file is vfio device
-    unsafe { ioctl(device, VFIO_DEVICE_RESET()) }
+    let ret = unsafe { ioctl(device, VFIO_DEVICE_RESET()) };
+    if ret < 0 {
+        Err(VfioIoctlError::DeviceReset)
+    } else {
+        Ok(())
+    }
 }
 
 /// Retrieve information about a device IRQ.  Caller provides
