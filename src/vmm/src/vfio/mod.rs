@@ -306,6 +306,8 @@ pub struct VfioDeviceBundle {
     pub masks: Vec<RegisterMask>,
     pub vm: Arc<Vm>,
 }
+// TODO: impl some destruction mechanism for the vfio device. Maybe Drop or a sequence of
+// vfio_unmap_device or smth calls.
 
 #[derive(Debug)]
 pub struct VfioKvmAndContainer {
@@ -1023,7 +1025,7 @@ pub fn vfio_device_get_pci_capabilities(
             let register = current_cap_offset / 4;
             LOG!("Found {pci_cap:?} cap at offset: {current_cap_offset:#x}({register})");
 
-            // TODO: the list of capabilities is hardcoded for now. In the future this
+            // NOTE: the list of capabilities is hardcoded for now. In the future this
             // may be configurable from the user side.
             match pci_cap {
                 PciExpressCapabilityId::AlternativeRoutingIdentificationInterpretation
@@ -1430,6 +1432,9 @@ pub fn mmap_bars(
                             return Err(VfioError::Mmap);
                         }
 
+                        // TODO: if any of the ? checks fail, there should be a
+                        // clean up stage with setting prevous kvm slots to 0 and
+                        // unmapping the memory.
                         let slot = vm.next_kvm_slot(1).ok_or(VfioError::KvmSlot)?;
                         let iova = bar_gpa + area.offset;
                         let size = area.size;
@@ -1446,7 +1451,7 @@ pub fn mmap_bars(
                         vm.set_user_memory_region(kvm_memory_region)
                             .map_err(|e| VfioError::SetUserMemoryRegion(e.to_string()))?;
 
-                        // TODO: if viortio-iommu is attached no dma setup is
+                        // NOTE: if viortio-iommu is attached no dma setup is
                         // needed at this stage
                         let dma_map = vfio_iommu_type1_dma_map {
                             argsz: std::mem::size_of::<vfio_iommu_type1_dma_map>() as u32,
@@ -1482,7 +1487,7 @@ pub fn dma_map_guest_memory(
     container: &impl AsRawFd,
     guest_memory: &GuestMemoryMmap,
 ) -> Result<(), VfioError> {
-    // TODO: if viortio-iommu is attached no dma setup is
+    // NOTE: if viortio-iommu is attached no dma setup is
     // needed at this stage
     for region in guest_memory.iter() {
         if region.region_type == GuestRegionType::Dram {
@@ -1596,7 +1601,11 @@ pub fn init_vfio_device(
     let group_id = group_id_from_device_path(&path)?;
     LOG!("Group id: {}", group_id);
     let group = vfio_group_open(group_id)?;
+
+    // TODO: on failure the group should be removed from the container
     ioctls::group_set_container(&group, container).map_err(VfioError::from)?;
+    // TODO: move this out of here into the caller. The device craetion will
+    // need to be separated from this call anyway because of the API calls.
     kvm_device_vfio_file_add(kvm_device, &group)?;
 
     // only set after getting the first group
@@ -1611,7 +1620,6 @@ pub fn init_vfio_device(
         let resource_allocator = resource_allocator_lock.deref_mut();
         vfio_device_get_bars(&device.file, &device.region_infos, resource_allocator)?
     };
-    // let (msi_cap, msix_cap, masks) =
     let (msix_cap_and_register, masks) =
         vfio_device_get_pci_capabilities(&device.file, &device.region_infos, &device.irq_infos)?;
 
@@ -1651,7 +1659,6 @@ pub fn init_vfio_device(
         msix_state.bar_hole_infos = bar_hole_infos;
     }
 
-    // add to the segment since we will need to configure MSIs
     let vfio_device_bundle = Arc::new(Mutex::new(VfioDeviceBundle {
         id,
         group_id,
