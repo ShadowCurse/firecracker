@@ -1603,8 +1603,16 @@ pub fn init_vfio_device(
     let group = vfio_group_open(group_id)?;
 
     // TODO: on failure the group should be removed from the container
+    // Also the group should be removed if we unplug the device in the future.
+    // The group handling can be simple: when multiple devices with same group
+    // are added to the container, VFIO_GROUP_SET_CONTAINER will succeed for
+    // all of them. When we unplug one of the devices, we will need to call
+    // VFIO_GROUP_UNSET_CONTAINER, but it will return -EBUSY if there are other
+    // device in the same group which still exist. We can simply make -EBUSY as
+    // success return as well. This way we don't need to have complicated mapping
+    // mechanism between devices, groups and the container.
     ioctls::group_set_container(&group, container).map_err(VfioError::from)?;
-    // TODO: move this out of here into the caller. The device craetion will
+    // TODO: move this out of here into the caller. The device creation will
     // need to be separated from this call anyway because of the API calls.
     kvm_device_vfio_file_add(kvm_device, &group)?;
 
