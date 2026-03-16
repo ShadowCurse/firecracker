@@ -1628,63 +1628,6 @@ pub fn init_vfio_device(
     Ok(vfio_device_bundle)
 }
 
-pub fn do_vfio_magic(path: &str) -> Result<(), VfioError> {
-    // vfio part
-    let container = vfio_open()?;
-    vfio_check_api_version(&container)?;
-    vfio_check_extension(&container)?;
-
-    // open device and vfio group
-    // let path = "/sys/bus/mdev/devices/c9abdcb5-5279-413a-9057-c81d2605ce9c/".to_string();
-    LOG!("Openning device at path: {}", path);
-    let group_id = group_id_from_device_path(&(path.to_string()))?;
-    LOG!("Group id: {}", group_id);
-    let group = vfio_group_open(group_id)?;
-    ioctls::group_set_container(&group, &container)?;
-
-    // only set after getting the first group
-    vfio_container_set_iommu(&container, VFIO_TYPE1v2_IOMMU)?;
-
-    LOG!("Getting device with info");
-    let device = get_device(&group, path)?;
-    let mut resource_allocator = ResourceAllocator::new();
-    LOG!("Getting BAR infos");
-    let bar_infos =
-        vfio_device_get_bars(&device.file, &device.region_infos, &mut resource_allocator)?;
-    LOG!("Getting PCI caps");
-    // let (msi_cap, msix_cap, masks) =
-    let (msix_cap, masks) =
-        vfio_device_get_pci_capabilities(&device.file, &device.region_infos, &device.irq_infos)?;
-    // if let Some(msi_cap) = &msi_cap {
-    //     LOG!("MSI cap: {msi_cap:#?}");
-    // }
-    if let Some(msix_cap) = &msix_cap {
-        LOG!("MSIX cap: {msix_cap:#?}");
-    }
-    // if let Some(masks) = &masks {
-    LOG!("MASKS: {masks:#?}");
-    // }
-    // mmap_bars(
-    //     &container,
-    //     &device.file,
-    //     &bar_infos,
-    //     &device.region_infos,
-    //     msix_cap.as_ref().unwrap(),
-    //     _,
-    // );
-    // dma_map_guest_memory(&container, _);
-
-    // KVM part
-    // let kvm_vfio_fd = create_kvm_vfio_device(vm_fd);
-    // kvm_vfio_device_file_add(&kvm_vfio_fd, &group, KVM_DEV_VFIO_FILE_ADD);
-    // panic!("THE END");
-
-    // for path in paths.iter() {
-    //     LOG!("vfio path: {}", path);
-    // }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
