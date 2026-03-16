@@ -43,10 +43,12 @@ use crate::pci::configuration::{BAR0_REG, Bars, NUM_BAR_REGS};
 use crate::pci::msix::{MsixCap, MsixConfig};
 use crate::pci::{BarReprogrammingParams, DeviceRelocationError, PciDevice};
 use crate::utils::{
-    align_down_host_page, align_up_host_page, offset_from_lower_host_page, usize_to_u64,
+    align_down_host_page, align_up, align_up_host_page, offset_from_lower_host_page, u64_to_usize,
+    usize_to_u64,
 };
 use crate::vfio::ioctls::VfioIoctlError;
 use crate::vstate::bus::BusDevice;
+use crate::vstate::interrupts::InterruptError;
 use crate::vstate::memory::{GuestMemoryMmap, GuestRegionType};
 use crate::vstate::resources::ResourceAllocator;
 
@@ -88,8 +90,25 @@ pub enum VfioError {
     CopyRom(String),
     /// Vfio ioctl failure: {0}
     Ioctl(#[from] VfioIoctlError),
+    /// Cannot create Msix vector group: {0}
+    MsixConfig(#[from] InterruptError),
     /// KVM failed to create KVM_DEV_TYPE_VFIO device: {0}
     KVMCreateVfioDevice(kvm_ioctls::Error),
+    /// KVM failed to add vfio file: {0}
+    KVMVfioDeviceFileAdd(kvm_ioctls::Error),
+}
+
+fn allocate_8byte_aligned_byte_array(n: u64) -> Vec<u8> {
+    // Need 8 byte alignment, but Rust is making it hard
+    // There can be some left overs after rounding up, but
+    // this is not an issue.
+    let total_bytes = align_up(n, 8);
+    let bytes = vec![0_u64; u64_to_usize(total_bytes)];
+    let ptr = bytes.as_ptr();
+    let len = bytes.len();
+    let cap = bytes.capacity();
+    std::mem::forget(bytes);
+    unsafe { Vec::from_raw_parts(ptr as *mut u8, len * 8, cap * 8) }
 }
 
 struct VfioRegionInfoWithCap {
@@ -98,17 +117,7 @@ struct VfioRegionInfoWithCap {
 impl VfioRegionInfoWithCap {
     pub fn new_with_argsz(n: u32) -> Self {
         assert!(std::mem::size_of::<vfio_region_info>() <= n as usize);
-
-        // Need 8 byte alignment, but Rust is making it hard
-        // There can be some left overs after rounding up, but
-        // this is not an issue.
-        let total_bytes_u64 = (n + 7) / 8;
-        let bytes = vec![0_u64; total_bytes_u64 as usize];
-        let ptr = bytes.as_ptr();
-        let len = bytes.len();
-        let cap = bytes.capacity();
-        std::mem::forget(bytes);
-        let bytes: Vec<u8> = unsafe { Vec::from_raw_parts(ptr as *mut u8, len * 8, cap * 8) };
+        let bytes = allocate_8byte_aligned_byte_array(u64::from(n));
         Self { bytes }
     }
     pub fn vfio_region_info_mut(&mut self) -> &mut vfio_region_info {
@@ -121,39 +130,35 @@ impl VfioRegionInfoWithCap {
         } else {
             let next_cap_offset = offset as usize;
             let next_cap_header_end = next_cap_offset + std::mem::size_of::<vfio_info_cap_header>();
-            assert!(next_cap_offset < self.bytes.len());
-            assert!(next_cap_header_end <= self.bytes.len());
-            let cap_header = unsafe {
-                &*(self.bytes.as_ptr().add(next_cap_offset) as *const vfio_info_cap_header)
-            };
-            Some(cap_header)
+            if self.bytes.len() < next_cap_offset || self.bytes.len() <= next_cap_header_end {
+                // This data comes from the kernel, so it should be valid and this path should
+                // never be taken, but just in case do these checks.
+                None
+            } else {
+                let cap_header = unsafe {
+                    &*(self.bytes.as_ptr().add(next_cap_offset) as *const vfio_info_cap_header)
+                };
+                Some(cap_header)
+            }
         }
     }
 }
 
 struct VfioIrqSet<T: Sized> {
     pub bytes: Vec<u8>,
+    pub entries: u64,
     _pd: PhantomData<T>,
 }
 
 impl<T: Sized> VfioIrqSet<T> {
-    pub fn new_with_entries(n: usize) -> Self {
+    pub fn new_with_entries(entries: u64) -> Self {
         let vfio_irq_set_bytes = std::mem::size_of::<vfio_irq_set>();
-        let entries_bytes = std::mem::size_of::<T>() * n;
+        let entries_bytes = std::mem::size_of::<T>() * u64_to_usize(entries);
         let total_bytes = vfio_irq_set_bytes + entries_bytes;
-
-        // Need 8 byte alignment, but Rust is making it hard
-        // There can be some left overs after rounding up, but
-        // this is not an issue.
-        let total_bytes_u64 = (total_bytes + 7) / 8;
-        let bytes = vec![0_u64; total_bytes_u64];
-        let ptr = bytes.as_ptr();
-        let len = bytes.len();
-        let cap = bytes.capacity();
-        std::mem::forget(bytes);
-        let bytes: Vec<u8> = unsafe { Vec::from_raw_parts(ptr as *mut u8, len * 8, cap * 8) };
+        let bytes = allocate_8byte_aligned_byte_array(usize_to_u64(total_bytes));
         Self {
             bytes,
+            entries,
             _pd: PhantomData,
         }
     }
@@ -163,10 +168,9 @@ impl<T: Sized> VfioIrqSet<T> {
     pub fn entries_mut(&mut self) -> &mut [T] {
         let vfio_irq_set_bytes = std::mem::size_of::<vfio_irq_set>();
         let entries_start = unsafe { self.bytes.as_mut_ptr().add(vfio_irq_set_bytes) };
-
-        let entry_bytes = std::mem::size_of::<T>();
-        let entries_size = (self.bytes.len() - vfio_irq_set_bytes) / entry_bytes;
-        unsafe { std::slice::from_raw_parts_mut(entries_start as *mut T, entries_size) }
+        unsafe {
+            std::slice::from_raw_parts_mut(entries_start as *mut T, u64_to_usize(self.entries))
+        }
     }
 }
 
@@ -265,6 +269,14 @@ pub struct BarHoleInfo {
     pub usage: BarHoleInfoUsage,
 }
 
+#[derive(Debug, Copy, Clone)]
+pub struct BarMapping {
+    pub slot: u32,
+    pub iova: u64,
+    pub size: u64,
+    pub host_addr: u64,
+}
+
 #[derive(Debug)]
 pub struct VfioDevice {
     pub file: File,
@@ -289,6 +301,7 @@ pub struct VfioDeviceBundle {
     pub group: File,
     pub device: VfioDevice,
     pub bars: Bars,
+    pub bar_mappings: Vec<BarMapping>,
     pub msix_state: Option<MsixState>,
     pub masks: Vec<RegisterMask>,
     pub vm: Arc<Vm>,
@@ -416,7 +429,8 @@ impl BusDevice for VfioDeviceBundle {
         );
         assert!(handled);
         LOG!(
-            "[{}] base: {base:<#10x} offset: {offset:<#5x} data: {data:<4?} table_name: {name}",
+            "[{}] base: {base:<#10x} offset: {offset:<#5x} data: {data:<4?} table_name: {name}, \
+             handled: {handled}",
             self.id
         );
         None
@@ -451,6 +465,9 @@ impl PciDevice for VfioDeviceBundle {
                 let offset = offset as u8;
                 state.config.write_msg_ctl_register(offset, data);
                 name = "MSIX_CAP";
+                // Don't set `handled` since we need to passthrough write
+                // to the msg_ctl register to the device, so it will enable Msix
+                // interrupts
             }
         }
         let config_offset = reg_idx as u64 * 4 + offset;
@@ -489,9 +506,9 @@ impl PciDevice for VfioDeviceBundle {
             );
             if let Some(state) = self.msix_state.as_ref() {
                 if reg_idx == state.register as usize {
-                    result = ((state.config.enabled as u32) << 31)
-                        | ((state.config.masked as u32) << 30)
-                        | result;
+                    result = (result & !(1 << 31 | 1 << 30))
+                        | ((state.config.enabled as u32) << 31)
+                        | ((state.config.masked as u32) << 30);
                     name = "MSIX_CAP";
                 }
             }
@@ -548,7 +565,7 @@ pub fn vfio_check_api_version(container: &impl AsRawFd) -> Result<(), VfioError>
 
 pub fn vfio_check_extension(container: &impl AsRawFd) -> Result<(), VfioError> {
     let ret = ioctls::check_extension(container, VFIO_TYPE1v2_IOMMU)?;
-    if ret != 1 {
+    if ret < 1 {
         return Err(VfioError::CheckExtension);
     }
     Ok(())
@@ -575,7 +592,7 @@ pub fn vfio_group_open(id: u32) -> Result<File, VfioError> {
         flags: 0,
     };
     ioctls::group_get_status(&group, &mut group_status)?;
-    if group_status.flags != VFIO_GROUP_FLAGS_VIABLE {
+    if group_status.flags & VFIO_GROUP_FLAGS_VIABLE == 0 {
         return Err(VfioError::GroupNotViable(id));
     }
     Ok(group)
@@ -616,10 +633,14 @@ pub fn vfio_device_get_info(device: &impl AsRawFd) -> Result<vfio_device_info, V
     Ok(dev_info)
 }
 
-pub fn vfio_device_reset(device: &impl AsRawFd, device_info: &vfio_device_info) {
+pub fn vfio_device_reset(
+    device: &impl AsRawFd,
+    device_info: &vfio_device_info,
+) -> Result<(), VfioError> {
     if device_info.flags & VFIO_DEVICE_FLAGS_RESET != 0 {
-        ioctls::device_reset(device);
+        ioctls::device_reset(device)?;
     }
+    Ok(())
 }
 
 pub fn vfio_device_get_region_infos(
@@ -809,10 +830,15 @@ pub fn vfio_device_get_irq_infos(
                     "VFIO_IRQ_INFO_NORESIZE  :{}",
                     irq_info.flags & VFIO_IRQ_INFO_NORESIZE != 0
                 );
-                irqs.push(irq_info);
             }
-            Err(e) => LOG!("Irq info: got error: {:?}", e),
+            Err(e) => {
+                // reset count to 0 just in case.
+                // TODO: is this really needed?
+                irq_info.count = 0;
+                LOG!("Irq info: got error: {:?}", e);
+            }
         }
+        irqs.push(irq_info);
     }
     irqs
 }
@@ -827,7 +853,7 @@ pub fn vfio_device_region_read(
     let region_info = &region_infos[index as usize];
     let end = offset + buf.len() as u64;
     assert!(
-        end <= region_info.size + 1,
+        end <= region_info.size,
         "Invalid device region read of [{:x}..{:x}], but region is [0..{:x}]",
         offset,
         end,
@@ -849,7 +875,7 @@ pub fn vfio_device_region_write(
     let region_info = &region_infos[index as usize];
     let end = offset + buf.len() as u64;
     assert!(
-        end <= region_info.size + 1,
+        end <= region_info.size,
         "Invalid device region write of [{:x}..{:x}], but region is [0..{:x}]",
         offset,
         end,
@@ -880,7 +906,12 @@ pub fn vfio_device_get_pci_capabilities(
     // let mut msi_cap = None;
     let mut msix_cap_and_register = None;
     LOG!("PCI CAPS offset: {}", next_cap_offset);
-    while next_cap_offset != 0 {
+    // The PCIe region is 4K in size split into 4 byte registers
+    const LOOP_UPPER_BOUND: u32 = 4096 / 4;
+    let mut loop_bound: u32 = 0;
+    while next_cap_offset != 0 && loop_bound < LOOP_UPPER_BOUND {
+        loop_bound += 1;
+
         let mut cap_id_and_next_ptr: u16 = 0;
         vfio_device_region_read(
             device,
@@ -1153,7 +1184,7 @@ pub fn get_device(group: &impl AsRawFd, path: &str) -> Result<VfioDevice, VfioEr
     let device_file = vfio_group_get_device(group, &path)?;
     let device_info = vfio_device_get_info(&device_file)?;
     LOG!("Device info: {device_info:#?}");
-    vfio_device_reset(&device_file, &device_info);
+    vfio_device_reset(&device_file, &device_info)?;
 
     let device_region_infos = vfio_device_get_region_infos(&device_file, &device_info)?;
 
@@ -1222,8 +1253,9 @@ pub fn mmap_bars(
     region_infos: &[VfioRegionInfo],
     msix_cap: Option<&MsixCap>,
     vm: &Vm,
-) -> Result<Vec<BarHoleInfo>, VfioError> {
+) -> Result<(Vec<BarMapping>, Vec<BarHoleInfo>), VfioError> {
     let mut bar_hole_infos = Vec::new();
+    let mut bar_mappings = Vec::new();
     let mut bar_idx: u8 = 0;
     while bar_idx < NUM_BAR_REGS {
         let bar_gpa = bars.get_bar_addr(bar_idx);
@@ -1375,11 +1407,11 @@ pub fn mmap_bars(
                     for area in areas.iter() {
                         assert!(
                             offset_from_lower_host_page(area.size) == 0,
-                            "Aresa size is not page aligned"
+                            "Area size is not page aligned"
                         );
                         assert!(
                             offset_from_lower_host_page(area.offset) == 0,
-                            "Aresa offset is not page aligned"
+                            "Area offset is not page aligned"
                         );
                         let region_offset = region_info.offset;
                         // SAFETY: FFI call with correct arguments
@@ -1398,12 +1430,13 @@ pub fn mmap_bars(
                             return Err(VfioError::Mmap);
                         }
 
+                        let slot = vm.next_kvm_slot(1).ok_or(VfioError::KvmSlot)?;
                         let iova = bar_gpa + area.offset;
                         let size = area.size;
                         let host_addr = host_addr as u64;
 
                         let kvm_memory_region = kvm_userspace_memory_region {
-                            slot: vm.next_kvm_slot(1).ok_or(VfioError::KvmSlot)?,
+                            slot,
                             flags: 0,
                             guest_phys_addr: iova,
                             memory_size: size,
@@ -1425,6 +1458,14 @@ pub fn mmap_bars(
                             size: size,
                         };
                         ioctls::iommu_map_dma(container, &dma_map)?;
+
+                        let mmaped_bar = BarMapping {
+                            slot,
+                            iova,
+                            size,
+                            host_addr,
+                        };
+                        bar_mappings.push(mmaped_bar);
                     }
                 }
             }
@@ -1434,7 +1475,7 @@ pub fn mmap_bars(
         }
         bar_idx += 1;
     }
-    Ok(bar_hole_infos)
+    Ok((bar_mappings, bar_hole_infos))
 }
 
 pub fn dma_map_guest_memory(
@@ -1485,7 +1526,7 @@ pub fn set_msix_irqs(
         return Ok(());
     }
 
-    let mut vfio_irq_set = VfioIrqSet::new_with_entries(msix_irq_info.count as usize);
+    let mut vfio_irq_set = VfioIrqSet::new_with_entries(u64::from(msix_irq_info.count));
     let vfio_irq_set_bytes = vfio_irq_set.bytes.len();
     {
         let irq_set = vfio_irq_set.irq_set_mut();
@@ -1518,7 +1559,7 @@ pub fn init_kvm_device_vfio(vm: &Vm) -> Result<DeviceFd, VfioError> {
 }
 // The `file` in this case shoud be a group `File` descriptor.
 // flags: KVM_DEV_VFIO_FILE_ADD or KVM_DEV_VFIO_FILE_DEL;
-pub fn kvm_device_vfio_file_add(device: &DeviceFd, file: &impl AsRawFd) {
+pub fn kvm_device_vfio_file_add(device: &DeviceFd, file: &impl AsRawFd) -> Result<(), VfioError> {
     let file_fd = file.as_raw_fd();
     let dev_attr = kvm_device_attr {
         flags: 0,
@@ -1526,7 +1567,9 @@ pub fn kvm_device_vfio_file_add(device: &DeviceFd, file: &impl AsRawFd) {
         attr: KVM_DEV_VFIO_FILE_ADD as u64,
         addr: (&file_fd as *const i32) as u64,
     };
-    device.set_device_attr(&dev_attr).unwrap();
+    device
+        .set_device_attr(&dev_attr)
+        .map_err(VfioError::KVMVfioDeviceFileAdd)
 }
 
 /// Init VFIO container
@@ -1534,7 +1577,7 @@ pub fn init_vfio_container() -> Result<File, VfioError> {
     let container = vfio_open()?;
     vfio_check_api_version(&container)?;
     vfio_check_extension(&container)?;
-    return Ok(container);
+    Ok(container)
 }
 
 /// Init VFIO device
@@ -1554,7 +1597,7 @@ pub fn init_vfio_device(
     LOG!("Group id: {}", group_id);
     let group = vfio_group_open(group_id)?;
     ioctls::group_set_container(&group, container).map_err(VfioError::from)?;
-    kvm_device_vfio_file_add(kvm_device, &group);
+    kvm_device_vfio_file_add(kvm_device, &group)?;
 
     // only set after getting the first group
     if first_vfio_device {
@@ -1571,17 +1614,6 @@ pub fn init_vfio_device(
     // let (msi_cap, msix_cap, masks) =
     let (msix_cap_and_register, masks) =
         vfio_device_get_pci_capabilities(&device.file, &device.region_infos, &device.irq_infos)?;
-    let bar_hole_infos = mmap_bars(
-        container,
-        &device.file,
-        &bars,
-        &device.region_infos,
-        msix_cap_and_register.as_ref().map(|(v, _)| v),
-        vm.as_ref(),
-    )?;
-    if first_vfio_device {
-        dma_map_guest_memory(container, vm.guest_memory())?;
-    }
 
     let mut msix_state = None;
     if let Some((msix_cap, msix_register)) = msix_cap_and_register {
@@ -1592,15 +1624,31 @@ pub fn init_vfio_device(
         let msix_irq_info = &device.irq_infos[VFIO_PCI_MSIX_IRQ_INDEX as usize];
         let msix_num = msix_irq_info.count as u16;
         println!("VFIO msix_num: {msix_num}");
-        let msix_vectors = Vm::create_msix_group(vm.clone(), msix_num).unwrap();
+        let msix_vectors =
+            Vm::create_msix_group(vm.clone(), msix_num).map_err(VfioError::MsixConfig)?;
         let msix_config = crate::pci::msix::MsixConfig::new(Arc::new(msix_vectors), bdf.into());
         set_msix_irqs(&device.file, &device.irq_infos, &msix_config)?;
         msix_state = Some(MsixState {
             register: msix_register,
             cap: msix_cap,
-            bar_hole_infos: bar_hole_infos,
+            bar_hole_infos: Vec::new(),
             config: msix_config,
         });
+    }
+
+    if first_vfio_device {
+        dma_map_guest_memory(container, vm.guest_memory())?;
+    }
+    let (bar_mappings, bar_hole_infos) = mmap_bars(
+        container,
+        &device.file,
+        &bars,
+        &device.region_infos,
+        msix_cap_and_register.as_ref().map(|(v, _)| v),
+        vm.as_ref(),
+    )?;
+    if let Some(msix_state) = msix_state.as_mut() {
+        msix_state.bar_hole_infos = bar_hole_infos;
     }
 
     // add to the segment since we will need to configure MSIs
@@ -1610,6 +1658,7 @@ pub fn init_vfio_device(
         group,
         device,
         bars,
+        bar_mappings,
         msix_state,
         masks,
         vm: vm.clone(),
@@ -1641,11 +1690,14 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
     fn test_vfio_region_info_with_caps_panic_caps_at_offset() {
         let vfio_region_info_bytes = std::mem::size_of::<vfio_region_info>();
         let mut vriwc = VfioRegionInfoWithCap::new_with_argsz(vfio_region_info_bytes as u32);
-        vriwc.vfio_info_cap_header_at_offset((vfio_region_info_bytes + 1) as u32);
+        assert!(
+            vriwc
+                .vfio_info_cap_header_at_offset((vfio_region_info_bytes + 1) as u32)
+                .is_none()
+        );
     }
 
     #[test]
