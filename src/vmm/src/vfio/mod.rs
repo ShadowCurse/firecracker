@@ -26,6 +26,7 @@ use std::os::unix::fs::FileExt;
 use std::path::Path;
 use std::sync::{Arc, Barrier, Mutex};
 
+use arrayvec::ArrayVec;
 use kvm_bindings::{
     KVM_DEV_VFIO_FILE, KVM_DEV_VFIO_FILE_ADD, kvm_create_device, kvm_device_attr,
     kvm_device_type_KVM_DEV_TYPE_VFIO, kvm_userspace_memory_region,
@@ -289,7 +290,7 @@ pub struct VfioDevice {
 pub struct MsixState {
     pub register: u8,
     pub cap: MsixCap,
-    pub bar_hole_infos: Vec<BarHoleInfo>,
+    pub bar_hole_infos: ArrayVec<BarHoleInfo, 2>,
     pub config: MsixConfig,
 }
 
@@ -301,7 +302,7 @@ pub struct VfioDeviceBundle {
     pub group: File,
     pub device: VfioDevice,
     pub bars: Bars,
-    pub bar_mappings: Vec<BarMapping>,
+    pub bar_mappings: ArrayVec<BarMapping, 6>,
     pub msix_state: Option<MsixState>,
     pub masks: Vec<RegisterMask>,
     pub vm: Arc<Vm>,
@@ -801,6 +802,9 @@ pub fn vfio_device_get_region_infos(
     Ok(regions)
 }
 
+// TODO: we only care about MSI-X interrupt which has index of 2. Maybe
+// instead of this generic function, it is better to have vfio_device_get_irq_info
+// which queries one specific interrupt type.
 pub fn vfio_device_get_irq_infos(
     device: &impl AsRawFd,
     device_info: &vfio_device_info,
@@ -1255,9 +1259,9 @@ pub fn mmap_bars(
     region_infos: &[VfioRegionInfo],
     msix_cap: Option<&MsixCap>,
     vm: &Vm,
-) -> Result<(Vec<BarMapping>, Vec<BarHoleInfo>), VfioError> {
-    let mut bar_hole_infos = Vec::new();
-    let mut bar_mappings = Vec::new();
+) -> Result<(ArrayVec<BarMapping, 6>, ArrayVec<BarHoleInfo, 2>), VfioError> {
+    let mut bar_hole_infos = ArrayVec::<BarHoleInfo, 2>::new();
+    let mut bar_mappings = ArrayVec::<BarMapping, 6>::new();
     let mut bar_idx: u8 = 0;
     while bar_idx < NUM_BAR_REGS {
         let bar_gpa = bars.get_bar_addr(bar_idx);
@@ -1357,6 +1361,8 @@ pub fn mmap_bars(
                     }
                     let region_size = region_info.size;
 
+                    // There are a maximum of 2 holes in a BAR, so maximum of 3
+                    // mmapable areas.
                     let mut tmp_areas = [VfioRegionSparseMmapArea::default(); 3];
                     let mut tmp_areas_count = 0;
 
@@ -1647,7 +1653,7 @@ pub fn init_vfio_device(
         msix_state = Some(MsixState {
             register: msix_register,
             cap: msix_cap,
-            bar_hole_infos: Vec::new(),
+            bar_hole_infos: ArrayVec::new(),
             config: msix_config,
         });
     }
