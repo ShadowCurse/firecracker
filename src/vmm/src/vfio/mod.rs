@@ -28,8 +28,8 @@ use std::sync::{Arc, Barrier, Mutex};
 
 use arrayvec::ArrayVec;
 use kvm_bindings::{
-    KVM_DEV_VFIO_FILE, KVM_DEV_VFIO_FILE_ADD, kvm_create_device, kvm_device_attr,
-    kvm_device_type_KVM_DEV_TYPE_VFIO, kvm_userspace_memory_region,
+    KVM_DEV_VFIO_FILE, KVM_DEV_VFIO_FILE_ADD, KVM_DEV_VFIO_FILE_DEL, kvm_create_device,
+    kvm_device_attr, kvm_device_type_KVM_DEV_TYPE_VFIO, kvm_userspace_memory_region,
 };
 use kvm_ioctls::DeviceFd;
 use pci::{PciBdf, PciCapabilityId, PciExpressCapabilityId};
@@ -48,6 +48,7 @@ use crate::utils::{
     usize_to_u64,
 };
 use crate::vfio::ioctls::VfioIoctlError;
+use crate::vmm_config::vfio::VfioConfig;
 use crate::vstate::bus::BusDevice;
 use crate::vstate::interrupts::InterruptError;
 use crate::vstate::memory::{GuestMemoryMmap, GuestRegionType};
@@ -297,7 +298,8 @@ pub struct MsixState {
 /// The VFIO device bundle
 #[derive(Debug)]
 pub struct VfioDeviceBundle {
-    pub id: String,
+    pub config: VfioConfig,
+    pub bdf: PciBdf,
     pub group_id: u32,
     pub group: File,
     pub device: VfioDevice,
@@ -411,7 +413,7 @@ impl BusDevice for VfioDeviceBundle {
         LOG!(
             "[{}] base: {base:<#10x} offset: {offset:<#5x} data: {data:<4?} name: {name} handled: \
              {handled}",
-            self.id,
+            self.config.id,
         );
     }
 
@@ -434,7 +436,7 @@ impl BusDevice for VfioDeviceBundle {
         LOG!(
             "[{}] base: {base:<#10x} offset: {offset:<#5x} data: {data:<4?} table_name: {name}, \
              handled: {handled}",
-            self.id
+            self.config.id
         );
         None
     }
@@ -485,7 +487,7 @@ impl PciDevice for VfioDeviceBundle {
         }
         LOG!(
             "[{}] reg: {reg_idx:>3}({config_offset:>#6x}) data: {data:<4?} name: {name}",
-            self.id
+            self.config.id
         );
         None
     }
@@ -525,7 +527,7 @@ impl PciDevice for VfioDeviceBundle {
         }
         LOG!(
             "[{}] reg: {reg_idx:>3}({config_offset:>#6x}) data: {:<4?} name: {name}",
-            self.id,
+            self.config.id,
             result.as_bytes()
         );
         result
@@ -1569,18 +1571,37 @@ pub fn init_kvm_device_vfio(vm: &Vm) -> Result<DeviceFd, VfioError> {
         .map_err(VfioError::KVMCreateVfioDevice)
 }
 // The `file` in this case shoud be a group `File` descriptor.
-// flags: KVM_DEV_VFIO_FILE_ADD or KVM_DEV_VFIO_FILE_DEL;
-pub fn kvm_device_vfio_file_add(device: &DeviceFd, file: &impl AsRawFd) -> Result<(), VfioError> {
-    let file_fd = file.as_raw_fd();
+// flag must be either KVM_DEV_VFIO_FILE_ADD or KVM_DEV_VFIO_FILE_DEL
+fn kvm_device_vfio_file_add_del(
+    device: &DeviceFd,
+    vfio_group: &impl AsRawFd,
+    flag: u32,
+) -> Result<(), VfioError> {
+    assert!(flag == KVM_DEV_VFIO_FILE_ADD || flag == KVM_DEV_VFIO_FILE_DEL);
+    let file_fd = vfio_group.as_raw_fd();
     let dev_attr = kvm_device_attr {
         flags: 0,
         group: KVM_DEV_VFIO_FILE,
-        attr: KVM_DEV_VFIO_FILE_ADD as u64,
+        attr: flag as u64,
         addr: (&file_fd as *const i32) as u64,
     };
     device
         .set_device_attr(&dev_attr)
         .map_err(VfioError::KVMVfioDeviceFileAdd)
+}
+// The `file` in this case shoud be a group `File` descriptor.
+pub fn kvm_device_vfio_file_add(
+    device: &DeviceFd,
+    vfio_group: &impl AsRawFd,
+) -> Result<(), VfioError> {
+    kvm_device_vfio_file_add_del(device, vfio_group, KVM_DEV_VFIO_FILE_ADD)
+}
+// The `file` in this case shoud be a group `File` descriptor.
+pub fn kvm_device_vfio_file_del(
+    device: &DeviceFd,
+    vfio_group: &impl AsRawFd,
+) -> Result<(), VfioError> {
+    kvm_device_vfio_file_add_del(device, vfio_group, KVM_DEV_VFIO_FILE_DEL)
 }
 
 /// Init VFIO container
@@ -1595,16 +1616,15 @@ pub fn init_vfio_container() -> Result<File, VfioError> {
 pub fn init_vfio_device(
     vfio_kvm_and_container: &VfioKvmAndContainer,
     vm: &Arc<Vm>,
-    id: String,
-    path: &str,
+    config: VfioConfig,
     bdf: PciBdf,
     first_vfio_device: bool,
 ) -> Result<Arc<Mutex<VfioDeviceBundle>>, VfioError> {
     let container = &vfio_kvm_and_container.container;
     let kvm_device = &vfio_kvm_and_container.kvm_device;
 
-    LOG!("Openning device at path: {}", path);
-    let group_id = group_id_from_device_path(&path)?;
+    LOG!("Openning device at path: {}", config.path);
+    let group_id = group_id_from_device_path(&config.path)?;
     LOG!("Group id: {}", group_id);
     let group = vfio_group_open(group_id)?;
 
@@ -1627,7 +1647,7 @@ pub fn init_vfio_device(
         vfio_container_set_iommu(container, VFIO_TYPE1v2_IOMMU)?;
     }
 
-    let device = get_device(&group, path)?;
+    let device = get_device(&group, &config.path)?;
 
     let bars = {
         let mut resource_allocator_lock = vm.resource_allocator();
@@ -1674,7 +1694,8 @@ pub fn init_vfio_device(
     }
 
     let vfio_device_bundle = Arc::new(Mutex::new(VfioDeviceBundle {
-        id,
+        config,
+        bdf,
         group_id,
         group,
         device,
