@@ -40,6 +40,7 @@ use crate::snapshot::Persist;
 use crate::vfio::{VfioDeviceBundle, VfioError, VfioKvmAndContainer};
 use crate::vmm_config::memory_hotplug::MemoryHotplugConfig;
 use crate::vmm_config::mmds::MmdsConfigError;
+use crate::vmm_config::vfio::VfioConfig;
 use crate::vstate::bus::BusError;
 use crate::vstate::interrupts::InterruptError;
 use crate::vstate::memory::GuestMemoryMmap;
@@ -54,7 +55,7 @@ pub struct PciDevices {
 
     pub vfio_kvm_and_container: Option<VfioKvmAndContainer>,
     // All Vfio PCI devices
-    pub vfio_devices: HashMap<String, Arc<Mutex<VfioDeviceBundle>>>,
+    pub vfio_devices: Vec<Arc<Mutex<VfioDeviceBundle>>>,
 }
 
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
@@ -73,8 +74,6 @@ pub enum PciManagerError {
     Kvm(#[from] vmm_sys_util::errno::Error),
     /// MMDS error: {0}
     Mmds(#[from] MmdsConfigError),
-    /// Trying to add duplicate device with id: {0}
-    VfioDuplicateDevice(String),
     /// Vfio error: {0}
     Vfio(#[from] VfioError),
 }
@@ -202,8 +201,7 @@ impl PciDevices {
     pub fn attach_vfio_device(
         &mut self,
         vm: &Arc<Vm>,
-        id: String,
-        path: &str,
+        config: VfioConfig,
     ) -> Result<(), PciManagerError> {
         let first_vfio_device = self.vfio_devices.is_empty();
 
@@ -232,12 +230,6 @@ impl PciDevices {
             });
         }
 
-        for existing_id in self.vfio_devices.keys() {
-            if id == *existing_id {
-                return Err(PciManagerError::VfioDuplicateDevice(id));
-            }
-        }
-
         let pci_segment = self.pci_segment.as_ref().unwrap();
         let pci_device_bdf = pci_segment.next_device_bdf()?;
         debug!("VFIO: Allocating BDF: {pci_device_bdf:?} for device");
@@ -247,8 +239,7 @@ impl PciDevices {
         let vfio_device_bundle = crate::vfio::init_vfio_device(
             &vfio_kvm_and_container,
             vm,
-            id.clone(),
-            path,
+            config,
             pci_device_bdf,
             first_vfio_device,
         )?;
@@ -260,7 +251,7 @@ impl PciDevices {
             .expect("Poisoned lock")
             .add_device(pci_device_bdf.device() as u32, vfio_device_bundle.clone());
 
-        self.vfio_devices.insert(id, vfio_device_bundle);
+        self.vfio_devices.push(vfio_device_bundle);
 
         Ok(())
     }

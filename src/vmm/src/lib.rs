@@ -377,6 +377,7 @@ impl Vmm {
         let mut memory_hotplug = None;
         let mut mmds_ipv4_address = None;
         let mut mmds_ref = None;
+        let mut vfio = Vec::new();
 
         self.device_manager
             .for_each_virtio_device(|device_type, device| match device_type {
@@ -424,6 +425,12 @@ impl Vmm {
                 }
             });
 
+        if self.device_manager.is_pci_enabled() {
+            for device in self.device_manager.pci_devices.vfio_devices.iter() {
+                vfio.push(device.lock().unwrap().config.clone());
+            }
+        }
+
         let mmds_config = mmds_ref.map(|mmds| {
             let mmds = mmds.lock().expect("Poisoned lock");
             MmdsConfig {
@@ -453,7 +460,7 @@ impl Vmm {
             // serial_config is marked serde(skip) so that it doesnt end up in snapshots
             serial_config: None,
             memory_hotplug,
-            vfio: None,
+            vfio,
         }
     }
 

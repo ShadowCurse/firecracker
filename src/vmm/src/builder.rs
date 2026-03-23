@@ -279,14 +279,13 @@ pub fn build_microvm_for_boot(
         )?;
     }
 
-    if let Some(vfio) = &vm_resources.vfio {
-        for path in vfio.paths.iter() {
-            device_manager
-                .pci_devices
-                .attach_vfio_device(&vm, path.clone(), &path)?;
-        }
+    for config in vm_resources.vfio.configs.iter() {
+        device_manager
+            .pci_devices
+            // NOTE: technically, there is no reason to clone,
+            // but unfortunatelly vm_resources are not mutable.
+            .attach_vfio_device(&vm, config.clone())?;
     }
-    // panic!("STOP");
 
     #[cfg(target_arch = "aarch64")]
     device_manager.attach_legacy_devices_aarch64(
