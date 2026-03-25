@@ -10,7 +10,7 @@ use vm_memory::GuestAddress;
 
 use crate::cpu_config::templates::CustomCpuTemplate;
 use crate::devices::virtio::device::VirtioDevice;
-use crate::logger::{LoggerConfig, info};
+use crate::log::{LoggerConfig, info};
 use crate::mmds;
 use crate::mmds::data_store::{Mmds, MmdsVersion};
 use crate::mmds::ns::MmdsNetworkStack;
@@ -48,7 +48,7 @@ pub enum ResourcesError {
     /// Invalid JSON: {0}
     InvalidJson(#[from] serde_json::Error),
     /// Logger error: {0}
-    Logger(#[from] crate::logger::LoggerUpdateError),
+    Logger(#[from] crate::log::LoggerUpdateError),
     /// Metrics error: {0}
     Metrics(#[from] MetricsConfigError),
     /// MMDS error: {0}
@@ -148,7 +148,7 @@ impl VmResources {
         let vmm_config = serde_json::from_str::<VmmConfig>(config_json)?;
 
         if let Some(logger_config) = vmm_config.logger {
-            crate::logger::LOGGER.update(logger_config)?;
+            crate::log::LOGGER.update(logger_config)?;
         }
 
         if let Some(metrics) = vmm_config.metrics {
@@ -874,7 +874,7 @@ mod tests {
         assert!(
             matches!(
                 error,
-                ResourcesError::Logger(crate::logger::LoggerUpdateError(_))
+                ResourcesError::Logger(crate::log::LoggerUpdateError(_))
             ),
             "{:?}",
             error

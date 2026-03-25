@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use micro_http::Body;
-use vmm::logger::{IncMetric, METRICS};
+use vmm::log::{IncMetric, METRICS};
 use vmm::rpc_interface::VmmAction;
 use vmm::vmm_config::serial::SerialConfig;
 

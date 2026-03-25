@@ -4,10 +4,10 @@
 use libc::{
     SIGBUS, SIGHUP, SIGILL, SIGPIPE, SIGSEGV, SIGSYS, SIGXCPU, SIGXFSZ, c_int, c_void, siginfo_t,
 };
-use log::error;
+use crate::log::error;
 
 use crate::FcExitCode;
-use crate::logger::{IncMetric, METRICS, StoreMetric};
+use crate::log::{IncMetric, METRICS, StoreMetric};
 use crate::utils::signal::register_signal_handler;
 
 // The offset of `si_syscall` (offending syscall identifier) within the siginfo structure

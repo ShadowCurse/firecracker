@@ -48,7 +48,7 @@ use linux_loader::loader::elf::start_info::{
     hvm_memmap_table_entry, hvm_modlist_entry, hvm_start_info,
 };
 use linux_loader::loader::{Cmdline, KernelLoader, PvhBootCapability, load_cmdline};
-use log::debug;
+use crate::log::debug;
 
 use super::EntryPoint;
 use crate::acpi::create_acpi_tables;
@@ -63,7 +63,7 @@ use crate::vstate::memory::{
     Address, GuestAddress, GuestMemory, GuestMemoryMmap, GuestMemoryRegion, GuestRegionType,
 };
 use crate::vstate::vcpu::KvmVcpuConfigureError;
-use crate::{Vcpu, VcpuConfig, Vm, logger};
+use crate::{Vcpu, VcpuConfig, Vm, log};
 
 // Value taken from https://elixir.bootlin.com/linux/v5.10.68/source/arch/x86/include/uapi/asm/e820.h#L31
 // Usable normal RAM
@@ -117,7 +117,7 @@ pub fn arch_memory_regions(size: usize) -> Vec<(GuestAddress, usize)> {
     );
 
     if dram_size != size {
-        logger::warn!(
+        log::warn!(
             "Requested memory size {} exceeds architectural maximum (1022GiB). Size has been \
              truncated to {}",
             size,

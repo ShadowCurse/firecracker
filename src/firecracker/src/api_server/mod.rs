@@ -16,7 +16,7 @@ pub use micro_http::{Body, HttpServer, Request, Response, ServerError, StatusCod
 use parsed_request::{ParsedRequest, RequestAction};
 use serde_json::json;
 use utils::time::{ClockType, get_time_us};
-use vmm::logger::{
+use vmm::log::{
     METRICS, ProcessTimeReporter, debug, error, info, update_metric_with_elapsed_time, warn,
 };
 use vmm::rpc_interface::{ApiRequest, ApiResponse, VmmAction};
@@ -207,7 +207,7 @@ mod tests {
     use micro_http::HttpConnection;
     use utils::time::ClockType;
     use vmm::builder::StartMicrovmError;
-    use vmm::logger::StoreMetric;
+    use vmm::log::StoreMetric;
     use vmm::rpc_interface::{VmmActionError, VmmData};
     use vmm::seccomp::get_empty_filters;
     use vmm::vmm_config::instance_info::InstanceInfo;

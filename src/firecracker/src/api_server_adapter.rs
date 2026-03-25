@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use event_manager::{EventOps, Events, MutEventSubscriber, SubscriberOps};
-use vmm::logger::{ProcessTimeReporter, error, info, warn};
+use vmm::log::{ProcessTimeReporter, error, info, warn};
 use vmm::rpc_interface::{
     ApiRequest, ApiResponse, BuildMicrovmFromRequestsError, PrebootApiController,
     RuntimeApiController, VmmAction,

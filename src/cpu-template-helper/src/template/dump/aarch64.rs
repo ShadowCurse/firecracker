@@ -4,7 +4,7 @@
 use vmm::arch::aarch64::regs::{PC, RegSize, SYS_CNTPCT_EL0, SYS_CNTV_CVAL_EL0};
 use vmm::cpu_config::aarch64::custom_cpu_template::RegisterModifier;
 use vmm::cpu_config::templates::{CpuConfiguration, CustomCpuTemplate, RegisterValueFilter};
-use vmm::logger::warn;
+use vmm::log::warn;
 
 use crate::utils::aarch64::reg_modifier;
 

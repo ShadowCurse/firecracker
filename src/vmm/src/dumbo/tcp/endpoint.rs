@@ -22,7 +22,7 @@ use crate::dumbo::pdu::bytes::NetworkBytes;
 use crate::dumbo::pdu::tcp::TcpSegment;
 use crate::dumbo::tcp::connection::{Connection, PassiveOpenError, RecvStatusFlags};
 use crate::dumbo::tcp::{MAX_WINDOW_SIZE, NextSegmentStatus, seq_after};
-use crate::logger::{IncMetric, METRICS};
+use crate::log::{IncMetric, METRICS};
 
 // TODO: These are currently expressed in cycles. Normally, they would be the equivalent of a
 // certain duration, depending on the frequency of the CPU, but we still have a bit to go until

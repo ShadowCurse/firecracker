@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 
 #[cfg(target_arch = "x86_64")]
 use acpi_tables::{Aml, aml};
-use log::info;
+use crate::log::info;
 use pci::PciBdf;
 #[cfg(target_arch = "x86_64")]
 use uuid::Uuid;

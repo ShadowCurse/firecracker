@@ -5,7 +5,7 @@ use std::sync::{Arc, Barrier};
 
 use utils::time::TimestampUs;
 
-use crate::logger::info;
+use crate::log::info;
 use crate::vstate::bus::BusDevice;
 
 const MAGIC_VALUE_SIGNAL_GUEST_BOOT_COMPLETE: u8 = 123;

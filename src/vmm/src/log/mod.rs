@@ -7,7 +7,7 @@
 mod logging;
 mod metrics;
 
-pub use log::{Level, debug, error, info, log_enabled, trace, warn};
+pub use log_crate::{Level, debug, error, info, log_enabled, trace, warn};
 pub use logging::{
     DEFAULT_INSTANCE_ID, DEFAULT_LEVEL, INSTANCE_ID, LOGGER, LevelFilter, LevelFilterFromStrError,
     LoggerConfig, LoggerInitError, LoggerUpdateError,

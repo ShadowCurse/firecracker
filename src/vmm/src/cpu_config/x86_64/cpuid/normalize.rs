@@ -4,7 +4,7 @@
 use crate::cpu_config::x86_64::cpuid::{
     CpuidEntry, CpuidKey, CpuidRegisters, CpuidTrait, KvmCpuidFlags, cpuid,
 };
-use crate::logger::warn;
+use crate::log::warn;
 use crate::vmm_config::machine_config::MAX_SUPPORTED_VCPUS;
 
 /// Error type for [`super::Cpuid::normalize`].

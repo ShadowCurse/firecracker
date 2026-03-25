@@ -7,7 +7,7 @@ use vmm_sys_util::epoll::EventSet;
 use super::{DEFLATE_INDEX, INFLATE_INDEX, STATS_INDEX, report_balloon_event_fail};
 use crate::devices::virtio::balloon::device::Balloon;
 use crate::devices::virtio::device::VirtioDevice;
-use crate::logger::{error, warn};
+use crate::log::{error, warn};
 
 impl Balloon {
     const PROCESS_ACTIVATE: u32 = 0;

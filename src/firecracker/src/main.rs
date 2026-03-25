@@ -21,7 +21,7 @@ use utils::arg_parser::{ArgParser, Argument};
 use utils::validators::validate_instance_id;
 use vmm::arch::host_page_size;
 use vmm::builder::StartMicrovmError;
-use vmm::logger::{
+use vmm::log::{
     LOGGER, LoggerConfig, METRICS, ProcessTimeReporter, StoreMetric, debug, error, info,
 };
 use vmm::persist::SNAPSHOT_VERSION;
@@ -46,7 +46,7 @@ const MMDS_CONTENT_ARG: &str = "metadata";
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
 enum MainError {
     /// Failed to set the logger: {0}
-    SetLogger(vmm::logger::LoggerInitError),
+    SetLogger(vmm::log::LoggerInitError),
     /// Failed to register signal handlers: {0}
     RegisterSignalHandlers(#[source] vmm_sys_util::errno::Error),
     /// Arguments parsing error: {0} \n\nFor more information try --help.
@@ -54,9 +54,9 @@ enum MainError {
     /// When printing Snapshot Data format: {0}
     PrintSnapshotDataFormat(#[from] SnapshotVersionError),
     /// Invalid value for logger level: {0}.Possible values: [Error, Warning, Info, Debug]
-    InvalidLogLevel(vmm::logger::LevelFilterFromStrError),
+    InvalidLogLevel(vmm::log::LevelFilterFromStrError),
     /// Could not initialize logger: {0}
-    LoggerInitialization(vmm::logger::LoggerUpdateError),
+    LoggerInitialization(vmm::log::LoggerUpdateError),
     /// Could not initialize metrics: {0}
     MetricsInitialization(MetricsConfigError),
     /// Seccomp error: {0}
@@ -152,7 +152,7 @@ fn main_exec() -> Result<(), MainError> {
             .arg(
                 Argument::new("id")
                     .takes_value(true)
-                    .default_value(vmm::logger::DEFAULT_INSTANCE_ID)
+                    .default_value(vmm::log::DEFAULT_INSTANCE_ID)
                     .help("MicroVM unique identifier."),
             )
             .arg(
@@ -296,13 +296,13 @@ fn main_exec() -> Result<(), MainError> {
     validate_instance_id(instance_id.as_str()).expect("Invalid instance ID");
 
     // Apply the logger configuration.
-    vmm::logger::INSTANCE_ID
+    vmm::log::INSTANCE_ID
         .set(String::from(instance_id))
         .unwrap();
     let log_path = arguments.single_value("log-path").map(PathBuf::from);
     let level = arguments
         .single_value("level")
-        .map(|s| vmm::logger::LevelFilter::from_str(s))
+        .map(|s| vmm::log::LevelFilter::from_str(s))
         .transpose()
         .map_err(MainError::InvalidLogLevel)?;
     let show_level = arguments.flag_present("show-level").then_some(true);

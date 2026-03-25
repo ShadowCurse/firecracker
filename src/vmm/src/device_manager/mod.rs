@@ -15,7 +15,7 @@ use event_manager::{MutEventSubscriber, SubscriberOps};
 #[cfg(target_arch = "x86_64")]
 use legacy::{LegacyDeviceError, PortIODeviceManager};
 use linux_loader::loader::Cmdline;
-use log::{error, info};
+use crate::log::{error, info};
 use mmio::{MMIODeviceManager, MmioError};
 use pci_mngr::{PciDevices, PciDevicesConstructorArgs, PciManagerError};
 use persist::MMIODevManagerConstructorArgs;

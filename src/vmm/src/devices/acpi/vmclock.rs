@@ -6,7 +6,7 @@ use std::mem::offset_of;
 use std::sync::atomic::{Ordering, fence};
 
 use acpi_tables::{Aml, aml};
-use log::{debug, error};
+use crate::log::{debug, error};
 use serde::{Deserialize, Serialize};
 use vm_allocator::AllocPolicy;
 use vm_memory::{Address, ByteValued, Bytes, GuestAddress, GuestMemoryError};

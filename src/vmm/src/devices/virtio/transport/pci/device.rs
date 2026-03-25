@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicUsize, Ordering}
 use std::sync::{Arc, Barrier, Mutex};
 
 use kvm_ioctls::{IoEventAddress, NoDatamatch};
-use log::warn;
+use crate::log::warn;
 use pci::{
     PciBdf, PciCapabilityId, PciClassCode, PciMassStorageSubclass, PciNetworkControllerSubclass,
     PciSubclass,
@@ -35,7 +35,7 @@ use crate::devices::virtio::transport::pci::common_config::{
     VirtioPciCommonConfig, VirtioPciCommonConfigState,
 };
 use crate::devices::virtio::transport::{VirtioInterrupt, VirtioInterruptType};
-use crate::logger::{debug, error};
+use crate::log::{debug, error};
 use crate::pci::configuration::{PciCapability, PciConfiguration, PciConfigurationState};
 use crate::pci::msix::{MsixCap, MsixConfig, MsixConfigState};
 use crate::pci::{BarReprogrammingParams, DeviceRelocationError, PciDevice};

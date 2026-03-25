@@ -11,7 +11,7 @@ use super::RateLimiterConfig;
 use crate::VmmError;
 use crate::devices::virtio::device::VirtioDevice;
 use crate::devices::virtio::net::{Net, TapError};
-use crate::logger::warn;
+use crate::log::warn;
 use crate::utils::net::mac::MacAddr;
 
 /// This struct represents the strongly typed equivalent of the json body from net iface

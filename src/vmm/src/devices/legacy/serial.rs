@@ -14,7 +14,7 @@ use std::sync::{Arc, Barrier};
 
 use event_manager::{EventOps, Events, MutEventSubscriber};
 use libc::EFD_NONBLOCK;
-use log::{error, warn};
+use crate::log::{error, warn};
 use serde::Serialize;
 use vm_superio::serial::{Error as SerialError, SerialEvents};
 use vm_superio::{Serial, Trigger};
@@ -22,7 +22,7 @@ use vmm_sys_util::epoll::EventSet;
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::devices::legacy::EventFdTrigger;
-use crate::logger::{IncMetric, SharedIncMetric};
+use crate::log::{IncMetric, SharedIncMetric};
 use crate::vstate::bus::BusDevice;
 
 /// Received Data Available interrupt - for letting the driver know that
@@ -397,7 +397,7 @@ mod tests {
     use vmm_sys_util::eventfd::EventFd;
 
     use super::*;
-    use crate::logger::IncMetric;
+    use crate::log::IncMetric;
 
     #[test]
     fn test_serial_bus_read() {

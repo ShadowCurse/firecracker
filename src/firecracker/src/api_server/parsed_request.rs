@@ -6,7 +6,7 @@ use std::fmt::Debug;
 use micro_http::{Body, Method, Request, Response, StatusCode, Version};
 use serde::ser::Serialize;
 use serde_json::Value;
-use vmm::logger::{Level, error, info, log_enabled};
+use vmm::log::{Level, error, info, log_enabled};
 use vmm::rpc_interface::{VmmAction, VmmActionError, VmmData};
 
 use super::ApiServer;

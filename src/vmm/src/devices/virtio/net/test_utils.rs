@@ -302,7 +302,7 @@ pub mod test {
     use crate::devices::virtio::queue::{VIRTQ_DESC_F_NEXT, VIRTQ_DESC_F_WRITE};
     use crate::devices::virtio::test_utils::{VirtQueue, VirtqDesc, default_interrupt};
     use crate::devices::virtio::transport::VirtioInterruptType;
-    use crate::logger::IncMetric;
+    use crate::log::IncMetric;
     use crate::vstate::memory::{Address, Bytes, GuestAddress, GuestMemoryMmap};
 
     pub struct TestHelper<'a> {

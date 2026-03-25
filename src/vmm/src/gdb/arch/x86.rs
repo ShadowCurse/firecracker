@@ -8,7 +8,7 @@ use vm_memory::GuestAddress;
 
 use crate::Vmm;
 use crate::gdb::target::GdbTargetError;
-use crate::logger::error;
+use crate::log::error;
 
 /// Sets the 9th (Global Exact Breakpoint enable) and the 10th (always 1) bits for the DR7 debug
 /// control register

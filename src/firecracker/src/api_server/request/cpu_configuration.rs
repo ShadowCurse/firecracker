@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use vmm::cpu_config::templates::CustomCpuTemplate;
-use vmm::logger::{IncMetric, METRICS};
+use vmm::log::{IncMetric, METRICS};
 use vmm::rpc_interface::VmmAction;
 
 use super::super::parsed_request::{ParsedRequest, RequestError};
@@ -24,7 +24,7 @@ pub(crate) fn parse_put_cpu_config(body: &Body) -> Result<ParsedRequest, Request
 mod tests {
     use micro_http::Body;
     use vmm::cpu_config::templates::test_utils::{TEST_INVALID_TEMPLATE_JSON, build_test_template};
-    use vmm::logger::{IncMetric, METRICS};
+    use vmm::log::{IncMetric, METRICS};
     use vmm::rpc_interface::VmmAction;
 
     use super::*;

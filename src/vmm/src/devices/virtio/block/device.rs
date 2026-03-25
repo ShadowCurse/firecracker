@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use event_manager::{EventOps, Events, MutEventSubscriber};
-use log::info;
+use crate::log::info;
 use vmm_sys_util::eventfd::EventFd;
 
 use super::BlockError;

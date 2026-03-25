@@ -7,7 +7,7 @@ use vmm_sys_util::epoll::EventSet;
 use crate::devices::virtio::device::VirtioDevice;
 use crate::devices::virtio::mem::MEM_QUEUE;
 use crate::devices::virtio::mem::device::VirtioMem;
-use crate::logger::{error, warn};
+use crate::log::{error, warn};
 
 impl VirtioMem {
     const PROCESS_ACTIVATE: u32 = 0;

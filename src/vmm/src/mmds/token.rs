@@ -208,7 +208,7 @@ impl TokenAuthority {
             self.cipher = TokenAuthority::create_cipher()?;
             // Reset encrypted tokens count.
             self.num_encrypted_tokens = 0;
-            crate::logger::warn!(
+            crate::log::warn!(
                 "The limit of tokens generated under current MMDS token authority
                 has been reached. MMDS's token authority entity has been reseeded
                 and all previously created tokens are now invalid."

@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use super::BarReprogrammingParams;
 use super::msix::MsixConfig;
-use crate::logger::{info, warn};
+use crate::log::{info, warn};
 use crate::utils::u64_to_usize;
 
 // The number of 32bit registers in the config space, 4096 bytes.

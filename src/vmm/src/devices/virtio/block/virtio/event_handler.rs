@@ -6,7 +6,7 @@ use vmm_sys_util::epoll::EventSet;
 use super::io::FileEngine;
 use crate::devices::virtio::block::virtio::device::VirtioBlock;
 use crate::devices::virtio::device::VirtioDevice;
-use crate::logger::{error, warn};
+use crate::log::{error, warn};
 
 impl VirtioBlock {
     const PROCESS_ACTIVATE: u32 = 0;

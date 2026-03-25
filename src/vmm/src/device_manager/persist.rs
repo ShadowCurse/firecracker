@@ -6,7 +6,7 @@
 use std::fmt::{self, Debug};
 use std::sync::{Arc, Mutex};
 
-use log::warn;
+use crate::log::warn;
 use serde::{Deserialize, Serialize};
 
 use super::acpi::ACPIDeviceManager;

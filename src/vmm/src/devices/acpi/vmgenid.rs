@@ -6,7 +6,7 @@ use std::convert::Infallible;
 use acpi_tables::{Aml, aml};
 use aws_lc_rs::error::Unspecified as RandError;
 use aws_lc_rs::rand;
-use log::{debug, error};
+use crate::log::{debug, error};
 use serde::{Deserialize, Serialize};
 use vm_memory::{GuestAddress, GuestMemoryError};
 use vm_superio::Trigger;

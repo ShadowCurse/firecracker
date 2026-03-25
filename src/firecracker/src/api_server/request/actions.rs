@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use serde::{Deserialize, Serialize};
-use vmm::logger::{IncMetric, METRICS};
+use vmm::log::{IncMetric, METRICS};
 use vmm::rpc_interface::VmmAction;
 
 use super::super::parsed_request::{ParsedRequest, RequestError};

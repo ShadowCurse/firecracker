@@ -18,7 +18,7 @@ use super::transport::VirtioInterrupt;
 use crate::MutEventSubscriber;
 use crate::devices::virtio::AsAny;
 use crate::devices::virtio::generated::virtio_ids;
-use crate::logger::{error, info, warn};
+use crate::log::{error, info, warn};
 use crate::vstate::memory::GuestMemoryMmap;
 
 /// State of an active VirtIO device

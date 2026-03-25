@@ -16,7 +16,7 @@ use crate::builder::StartMicrovmError;
 use crate::cpu_config::templates::{CustomCpuTemplate, GuestConfigError};
 use crate::devices::virtio::balloon::device::{HintingStatus, StartHintingCmd};
 use crate::devices::virtio::mem::VirtioMemStatus;
-use crate::logger::{LoggerConfig, info, warn, *};
+use crate::log::{LoggerConfig, info, warn, *};
 use crate::mmds::data_store::{self, Mmds, MmdsDatastoreError};
 use crate::persist::{CreateSnapshotError, RestoreFromSnapshotError, VmInfo};
 use crate::resources::VmmConfig;
@@ -176,7 +176,7 @@ pub enum VmmActionError {
     /// Load snapshot error: {0}
     LoadSnapshot(#[from] LoadSnapshotError),
     /// Logger error: {0}
-    Logger(#[from] crate::logger::LoggerUpdateError),
+    Logger(#[from] crate::log::LoggerUpdateError),
     /// Machine config error: {0}
     MachineConfig(#[from] MachineConfigError),
     /// Metrics error: {0}
@@ -423,7 +423,7 @@ impl<'a> PrebootApiController<'a> {
         match request {
             // Supported operations allowed pre-boot.
             ConfigureBootSource(config) => self.set_boot_source(config),
-            ConfigureLogger(logger_cfg) => crate::logger::LOGGER
+            ConfigureLogger(logger_cfg) => crate::log::LOGGER
                 .update(logger_cfg)
                 .map(|()| VmmData::Empty)
                 .map_err(VmmActionError::Logger),
@@ -1213,7 +1213,7 @@ mod tests {
         )));
         check_unsupported(runtime_request(VmmAction::ConfigureLogger(LoggerConfig {
             log_path: Some(PathBuf::new()),
-            level: Some(crate::logger::LevelFilter::Debug),
+            level: Some(crate::log::LevelFilter::Debug),
             show_level: Some(false),
             show_log_origin: Some(false),
             module: None,

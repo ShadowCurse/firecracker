@@ -30,14 +30,14 @@ use crate::cpu_config::templates::CustomCpuTemplate;
 use crate::initrd::InitrdConfig;
 use zerocopy::IntoBytes;
 
-use crate::logger::warn;
+use crate::log::warn;
 use crate::utils::{align_up, u64_to_usize, usize_to_u64};
 use crate::vmm_config::machine_config::MachineConfig;
 use crate::vstate::memory::{
     Address, Bytes, GuestAddress, GuestMemory, GuestMemoryMmap, GuestRegionType,
 };
 use crate::vstate::vcpu::KvmVcpuError;
-use crate::{DeviceManager, Kvm, Vcpu, VcpuConfig, Vm, logger};
+use crate::{DeviceManager, Kvm, Vcpu, VcpuConfig, Vm, log};
 
 /// Errors thrown while configuring aarch64 system.
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
@@ -66,7 +66,7 @@ pub fn arch_memory_regions(size: usize) -> Vec<(GuestAddress, usize)> {
     let dram_size = min(size, layout::DRAM_MEM_MAX_SIZE);
 
     if dram_size != size {
-        logger::warn!(
+        log::warn!(
             "Requested memory size {} exceeds architectural maximum (1022GiB). Size has been \
              truncated to {}",
             size,

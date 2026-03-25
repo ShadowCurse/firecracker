@@ -6,7 +6,7 @@ use vmm_sys_util::epoll::EventSet;
 
 use super::{Entropy, RNG_QUEUE};
 use crate::devices::virtio::device::VirtioDevice;
-use crate::logger::{error, warn};
+use crate::log::{error, warn};
 
 impl Entropy {
     const PROCESS_ACTIVATE: u32 = 0;

@@ -39,7 +39,7 @@
 use serde::ser::SerializeMap;
 use serde::{Serialize, Serializer};
 
-use crate::logger::SharedIncMetric;
+use crate::log::SharedIncMetric;
 
 /// Stores aggregate metrics of all Vsock connections/actions
 pub(super) static METRICS: VsockDeviceMetrics = VsockDeviceMetrics::new();
@@ -128,7 +128,7 @@ impl VsockDeviceMetrics {
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use crate::logger::IncMetric;
+    use crate::log::IncMetric;
 
     #[test]
     fn test_vsock_dev_metrics() {

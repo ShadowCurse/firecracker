@@ -9,11 +9,11 @@ use std::io;
 use std::num::Wrapping;
 use std::sync::{Arc, Barrier};
 
-use log::warn;
+use crate::log::warn;
 use serde::Serialize;
 use vmm_sys_util::eventfd::EventFd;
 
-use crate::logger::{IncMetric, SharedIncMetric, error};
+use crate::log::{IncMetric, SharedIncMetric, error};
 use crate::vstate::bus::BusDevice;
 
 /// Errors thrown by the i8042 device.

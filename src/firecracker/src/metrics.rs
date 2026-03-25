@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use event_manager::{EventOps, Events, MutEventSubscriber};
 use utils::time::TimerFd;
-use vmm::logger::{IncMetric, METRICS, error, warn};
+use vmm::log::{IncMetric, METRICS, error, warn};
 use vmm_sys_util::epoll::EventSet;
 
 /// Metrics reporting period.

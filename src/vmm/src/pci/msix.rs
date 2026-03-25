@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use vm_memory::ByteValued;
 
 use crate::Vm;
-use crate::logger::{debug, error, warn};
+use crate::log::{debug, error, warn};
 use crate::pci::configuration::PciCapability;
 use crate::snapshot::Persist;
 use crate::vstate::interrupts::{InterruptError, MsixVectorConfig, MsixVectorGroup};
@@ -502,7 +502,7 @@ impl MsixCap {
 mod tests {
     use super::*;
     use crate::builder::tests::default_vmm;
-    use crate::logger::{IncMetric, METRICS};
+    use crate::log::{IncMetric, METRICS};
     use crate::{Vm, check_metric_after_block};
 
     fn msix_vector_group(nr_vectors: u16) -> Arc<MsixVectorGroup> {

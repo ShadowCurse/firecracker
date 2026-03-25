@@ -10,7 +10,7 @@ use std::fmt::Debug;
 use std::mem::{self, size_of};
 
 use libc::c_char;
-use log::debug;
+use crate::log::debug;
 use vm_allocator::AllocPolicy;
 
 use crate::arch::GSI_LEGACY_END;

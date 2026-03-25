@@ -8,7 +8,7 @@
 use std::num::Wrapping;
 use std::sync::atomic::{Ordering, fence};
 
-use crate::logger::error;
+use crate::log::error;
 use crate::utils::u64_to_usize;
 use crate::vstate::memory::{Bitmap, ByteValued, GuestAddress, GuestMemory};
 

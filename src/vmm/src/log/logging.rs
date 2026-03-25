@@ -8,7 +8,7 @@ use std::str::FromStr;
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 
-use log::{Log, Metadata, Record};
+use log_crate::{Log, Metadata, Record};
 use serde::{Deserialize, Deserializer, Serialize};
 use utils::time::LocalTime;
 
@@ -17,7 +17,7 @@ use crate::utils::open_file_nonblock;
 
 /// Default level filter for logger matching the swagger specification
 /// (`src/firecracker/swagger/firecracker.yaml`).
-pub const DEFAULT_LEVEL: log::LevelFilter = log::LevelFilter::Info;
+pub const DEFAULT_LEVEL: log_crate::LevelFilter = log_crate::LevelFilter::Info;
 /// Default instance id.
 pub const DEFAULT_INSTANCE_ID: &str = "anonymous-instance";
 /// Instance id.
@@ -36,7 +36,7 @@ pub static LOGGER: Logger = Logger(Mutex::new(LoggerConfiguration {
 }));
 
 /// Error type for [`Logger::init`].
-pub type LoggerInitError = log::SetLoggerError;
+pub type LoggerInitError = log_crate::SetLoggerError;
 
 /// Error type for [`Logger::update`].
 #[derive(Debug, thiserror::Error)]
@@ -46,18 +46,18 @@ pub struct LoggerUpdateError(pub std::io::Error);
 impl Logger {
     /// Initialize the logger.
     pub fn init(&'static self) -> Result<(), LoggerInitError> {
-        log::set_logger(self)?;
-        log::set_max_level(DEFAULT_LEVEL);
+        log_crate::set_logger(self)?;
+        log_crate::set_max_level(DEFAULT_LEVEL);
         Ok(())
     }
 
     /// Applies the given logger configuration the logger.
     pub fn update(&self, config: LoggerConfig) -> Result<(), LoggerUpdateError> {
         let mut guard = self.0.lock().unwrap();
-        log::set_max_level(
+        log_crate::set_max_level(
             config
                 .level
-                .map(log::LevelFilter::from)
+                .map(log_crate::LevelFilter::from)
                 .unwrap_or(DEFAULT_LEVEL),
         );
 
@@ -193,32 +193,32 @@ pub struct LoggerConfig {
 
 /// This is required since we originally supported `Warning` and uppercase variants being used as
 /// the log level filter. It would be a breaking change to no longer support this. In the next
-/// breaking release this should be removed (replaced with `log::LevelFilter` and only supporting
+/// breaking release this should be removed (replaced with `log_crate::LevelFilter` and only supporting
 /// its default deserialization).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum LevelFilter {
-    /// [`log::LevelFilter::Off`]
+    /// [`log_crate::LevelFilter::Off`]
     Off,
-    /// [`log::LevelFilter::Trace`]
+    /// [`log_crate::LevelFilter::Trace`]
     Trace,
-    /// [`log::LevelFilter::Debug`]
+    /// [`log_crate::LevelFilter::Debug`]
     Debug,
-    /// [`log::LevelFilter::Info`]
+    /// [`log_crate::LevelFilter::Info`]
     Info,
-    /// [`log::LevelFilter::Warn`]
+    /// [`log_crate::LevelFilter::Warn`]
     Warn,
-    /// [`log::LevelFilter::Error`]
+    /// [`log_crate::LevelFilter::Error`]
     Error,
 }
-impl From<LevelFilter> for log::LevelFilter {
-    fn from(filter: LevelFilter) -> log::LevelFilter {
+impl From<LevelFilter> for log_crate::LevelFilter {
+    fn from(filter: LevelFilter) -> log_crate::LevelFilter {
         match filter {
-            LevelFilter::Off => log::LevelFilter::Off,
-            LevelFilter::Trace => log::LevelFilter::Trace,
-            LevelFilter::Debug => log::LevelFilter::Debug,
-            LevelFilter::Info => log::LevelFilter::Info,
-            LevelFilter::Warn => log::LevelFilter::Warn,
-            LevelFilter::Error => log::LevelFilter::Error,
+            LevelFilter::Off => log_crate::LevelFilter::Off,
+            LevelFilter::Trace => log_crate::LevelFilter::Trace,
+            LevelFilter::Debug => log_crate::LevelFilter::Debug,
+            LevelFilter::Info => log_crate::LevelFilter::Info,
+            LevelFilter::Warn => log_crate::LevelFilter::Warn,
+            LevelFilter::Error => log_crate::LevelFilter::Error,
         }
     }
 }
@@ -264,35 +264,35 @@ impl FromStr for LevelFilter {
 
 #[cfg(test)]
 mod tests {
-    use log::Level;
+    use log_crate::Level;
 
     use super::*;
 
     #[test]
     fn levelfilter_from_levelfilter() {
         assert_eq!(
-            log::LevelFilter::from(LevelFilter::Off),
-            log::LevelFilter::Off
+            log_crate::LevelFilter::from(LevelFilter::Off),
+            log_crate::LevelFilter::Off
         );
         assert_eq!(
-            log::LevelFilter::from(LevelFilter::Trace),
-            log::LevelFilter::Trace
+            log_crate::LevelFilter::from(LevelFilter::Trace),
+            log_crate::LevelFilter::Trace
         );
         assert_eq!(
-            log::LevelFilter::from(LevelFilter::Debug),
-            log::LevelFilter::Debug
+            log_crate::LevelFilter::from(LevelFilter::Debug),
+            log_crate::LevelFilter::Debug
         );
         assert_eq!(
-            log::LevelFilter::from(LevelFilter::Info),
-            log::LevelFilter::Info
+            log_crate::LevelFilter::from(LevelFilter::Info),
+            log_crate::LevelFilter::Info
         );
         assert_eq!(
-            log::LevelFilter::from(LevelFilter::Warn),
-            log::LevelFilter::Warn
+            log_crate::LevelFilter::from(LevelFilter::Warn),
+            log_crate::LevelFilter::Warn
         );
         assert_eq!(
-            log::LevelFilter::from(LevelFilter::Error),
-            log::LevelFilter::Error
+            log_crate::LevelFilter::from(LevelFilter::Error),
+            log_crate::LevelFilter::Error
         );
     }
 

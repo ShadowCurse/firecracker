@@ -17,7 +17,7 @@ use vm_memory::GuestAddress;
 use crate::devices::virtio::device::VirtioDevice;
 use crate::devices::virtio::queue::Queue;
 use crate::devices::virtio::transport::pci::device::VIRTQ_MSI_NO_VECTOR;
-use crate::logger::warn;
+use crate::log::warn;
 
 pub const VIRTIO_PCI_COMMON_CONFIG_ID: &str = "virtio_pci_common_config";
 

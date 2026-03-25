@@ -15,7 +15,7 @@ use vm_memory::GuestAddress;
 
 use super::target::{FirecrackerTarget, GdbTargetError, vcpuid_to_tid};
 use crate::Vmm;
-use crate::logger::{error, trace};
+use crate::log::{error, trace};
 
 /// Starts the GDB event loop which acts as a proxy between the Vcpus and GDB
 pub fn event_loop(

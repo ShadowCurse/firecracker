@@ -79,7 +79,7 @@ use std::sync::{Arc, RwLock};
 use serde::ser::SerializeMap;
 use serde::{Serialize, Serializer};
 
-use crate::logger::{SharedIncMetric, SharedStoreMetric};
+use crate::log::{SharedIncMetric, SharedStoreMetric};
 
 /// map of vhost_user drive id and metrics
 /// this should be protected by a lock before accessing.
@@ -147,7 +147,7 @@ pub mod tests {
     use utils::time::{ClockType, get_time_us};
 
     use super::*;
-    use crate::logger::{IncMetric, StoreMetric};
+    use crate::log::{IncMetric, StoreMetric};
 
     // vhost-user metrics has both SharedIncMetrics and SharedStoreMetrics
     // In this test we try to test one field for each type by creating a

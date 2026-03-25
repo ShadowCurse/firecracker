@@ -13,7 +13,7 @@ use std::sync::{Arc, Barrier, Mutex};
 use byteorder::{ByteOrder, LittleEndian};
 use pci::{PciBridgeSubclass, PciClassCode};
 
-use crate::logger::error;
+use crate::log::error;
 use crate::pci::configuration::PciConfiguration;
 use crate::pci::{DeviceRelocation, PciDevice};
 use crate::utils::u64_to_usize;

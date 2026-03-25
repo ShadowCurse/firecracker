@@ -6,7 +6,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use aws_lc_rs::rand;
-use log::info;
+use crate::log::info;
 use vm_memory::GuestMemoryError;
 use vmm_sys_util::eventfd::EventFd;
 
@@ -21,7 +21,7 @@ use crate::devices::virtio::iovec::IoVecBufferMut;
 use crate::devices::virtio::queue::{FIRECRACKER_MAX_QUEUE_SIZE, InvalidAvailIdx, Queue};
 use crate::devices::virtio::transport::{VirtioInterrupt, VirtioInterruptType};
 use crate::impl_device_type;
-use crate::logger::{IncMetric, debug, error};
+use crate::log::{IncMetric, debug, error};
 use crate::rate_limiter::{RateLimiter, TokenType};
 use crate::vstate::memory::GuestMemoryMmap;
 

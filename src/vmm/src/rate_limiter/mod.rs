@@ -196,7 +196,7 @@ impl TokenBucket {
 
             // This operation requests a bandwidth higher than the bucket size
             if tokens > self.size {
-                crate::logger::error!(
+                crate::log::error!(
                     "Consumed {} tokens from bucket of size {}",
                     tokens,
                     self.size

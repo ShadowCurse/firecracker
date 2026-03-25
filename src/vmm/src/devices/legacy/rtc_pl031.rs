@@ -7,7 +7,7 @@ use serde::Serialize;
 use vm_superio::Rtc;
 use vm_superio::rtc_pl031::RtcEvents;
 
-use crate::logger::{IncMetric, SharedIncMetric, warn};
+use crate::log::{IncMetric, SharedIncMetric, warn};
 
 /// Metrics specific to the RTC device.
 #[derive(Debug, Serialize, Default)]
@@ -143,7 +143,7 @@ mod tests {
     use vm_superio::Rtc;
 
     use super::*;
-    use crate::logger::IncMetric;
+    use crate::log::IncMetric;
 
     #[test]
     fn test_rtc_device() {

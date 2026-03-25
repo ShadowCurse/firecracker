@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use bitvec::vec::BitVec;
 use kvm_bindings::{KVM_MEM_LOG_DIRTY_PAGES, kvm_userspace_memory_region};
-use log::error;
+use crate::log::error;
 use serde::{Deserialize, Serialize};
 pub use vm_memory::bitmap::{AtomicBitmap, BS, Bitmap, BitmapSlice};
 pub use vm_memory::mmap::MmapRegionBuilder;

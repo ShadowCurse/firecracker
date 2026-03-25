@@ -25,7 +25,7 @@
 use serde::ser::SerializeMap;
 use serde::{Serialize, Serializer};
 
-use crate::logger::{LatencyAggregateMetrics, SharedIncMetric};
+use crate::log::{LatencyAggregateMetrics, SharedIncMetric};
 
 /// Stores aggregated virtio-mem metrics
 pub(super) static METRICS: VirtioMemDeviceMetrics = VirtioMemDeviceMetrics::new();
@@ -106,7 +106,7 @@ impl VirtioMemDeviceMetrics {
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use crate::logger::IncMetric;
+    use crate::log::IncMetric;
 
     #[test]
     fn test_memory_hotplug_metrics() {

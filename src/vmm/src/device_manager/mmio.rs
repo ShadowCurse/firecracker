@@ -15,7 +15,7 @@ use event_manager::SubscriberOps;
 use kvm_ioctls::IoEventAddress;
 use linux_loader::cmdline as kernel_cmdline;
 #[cfg(target_arch = "x86_64")]
-use log::debug;
+use crate::log::debug;
 use serde::{Deserialize, Serialize};
 use vm_allocator::AllocPolicy;
 

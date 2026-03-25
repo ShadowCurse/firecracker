@@ -7,7 +7,7 @@ use std::ops::DerefMut;
 use std::sync::{Arc, Mutex};
 
 use event_manager::{MutEventSubscriber, SubscriberOps};
-use log::{debug, warn};
+use crate::log::{debug, warn};
 use serde::{Deserialize, Serialize};
 
 use super::persist::MmdsState;

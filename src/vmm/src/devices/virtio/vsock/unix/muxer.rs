@@ -36,7 +36,7 @@ use std::io::Read;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::{UnixListener, UnixStream};
 
-use log::{debug, error, info, warn};
+use crate::log::{debug, error, info, warn};
 use vmm_sys_util::epoll::{ControlOperation, Epoll, EpollEvent, EventSet};
 
 use super::super::csm::ConnState;
@@ -47,7 +47,7 @@ use super::muxer_rxq::MuxerRxQ;
 use super::{MuxerConnection, VsockUnixBackendError, defs};
 use crate::devices::virtio::vsock::metrics::METRICS;
 use crate::devices::virtio::vsock::packet::{VsockPacketRx, VsockPacketTx};
-use crate::logger::IncMetric;
+use crate::log::IncMetric;
 
 /// A unique identifier of a `MuxerConnection` object. Connections are stored in a hash map,
 /// keyed by a `ConnMapKey` object.

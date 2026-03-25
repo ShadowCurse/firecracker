@@ -24,7 +24,7 @@ use std::fmt::Debug;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use log::{error, info, warn};
+use crate::log::{error, info, warn};
 use vmm_sys_util::eventfd::EventFd;
 
 use super::super::super::DeviceError;
@@ -39,7 +39,7 @@ use crate::devices::virtio::transport::{VirtioInterrupt, VirtioInterruptType};
 use crate::devices::virtio::vsock::VsockError;
 use crate::devices::virtio::vsock::metrics::METRICS;
 use crate::impl_device_type;
-use crate::logger::IncMetric;
+use crate::log::IncMetric;
 use crate::utils::byte_order;
 use crate::vstate::memory::{Bytes, GuestMemoryMmap};
 

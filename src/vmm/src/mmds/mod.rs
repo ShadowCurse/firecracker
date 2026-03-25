@@ -18,7 +18,7 @@ use micro_http::{
 };
 use serde_json::{Map, Value};
 
-use crate::logger::{IncMetric, METRICS};
+use crate::log::{IncMetric, METRICS};
 use crate::mmds::data_store::{Mmds, MmdsDatastoreError as MmdsError, MmdsVersion, OutputFormat};
 use crate::mmds::token::PATH_TO_TOKEN;
 use crate::mmds::token_headers::{

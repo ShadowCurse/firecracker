@@ -4,7 +4,7 @@
 use std::fmt;
 use std::sync::LazyLock;
 
-use log::warn;
+use crate::log::warn;
 use serde::{Deserialize, Serialize};
 use vm_memory::GuestAddress;
 

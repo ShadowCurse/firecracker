@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::logger::{FcLineWriter, METRICS};
+use crate::log::{FcLineWriter, METRICS};
 use crate::utils::open_file_nonblock;
 
 /// Strongly typed structure used to describe the metrics system.

@@ -36,7 +36,7 @@
 use serde::ser::SerializeMap;
 use serde::{Serialize, Serializer};
 
-use crate::logger::SharedIncMetric;
+use crate::log::SharedIncMetric;
 
 /// Stores aggregated balloon metrics
 pub(super) static METRICS: BalloonDeviceMetrics = BalloonDeviceMetrics::new();
@@ -99,7 +99,7 @@ impl BalloonDeviceMetrics {
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use crate::logger::IncMetric;
+    use crate::log::IncMetric;
 
     #[test]
     fn test_balloon_dev_metrics() {

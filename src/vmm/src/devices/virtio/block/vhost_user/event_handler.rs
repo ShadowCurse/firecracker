@@ -5,7 +5,7 @@ use vmm_sys_util::epoll::EventSet;
 
 use super::VhostUserBlock;
 use crate::devices::virtio::device::VirtioDevice;
-use crate::logger::{error, warn};
+use crate::log::{error, warn};
 
 impl VhostUserBlock {
     const PROCESS_ACTIVATE: u32 = 0;

@@ -13,7 +13,7 @@ use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 
 use libc::{EAGAIN, iovec};
-use log::{error, info};
+use crate::log::{error, info};
 use vmm_sys_util::eventfd::EventFd;
 
 use super::NET_QUEUE_MAX_SIZE;
@@ -40,7 +40,7 @@ use crate::devices::{DeviceError, report_net_event_fail};
 use crate::dumbo::pdu::arp::ETH_IPV4_FRAME_LEN;
 use crate::dumbo::pdu::ethernet::{EthernetFrame, PAYLOAD_OFFSET};
 use crate::impl_device_type;
-use crate::logger::{IncMetric, METRICS};
+use crate::log::{IncMetric, METRICS};
 use crate::mmds::data_store::Mmds;
 use crate::mmds::ns::MmdsNetworkStack;
 use crate::rate_limiter::{BucketUpdate, RateLimiter, TokenType};
@@ -1088,7 +1088,7 @@ pub mod tests {
     use crate::dumbo::EthernetFrame;
     use crate::dumbo::pdu::arp::{ETH_IPV4_FRAME_LEN, EthIPv4ArpFrame};
     use crate::dumbo::pdu::ethernet::ETHERTYPE_ARP;
-    use crate::logger::IncMetric;
+    use crate::log::IncMetric;
     use crate::rate_limiter::{BucketUpdate, RateLimiter, TokenBucket, TokenType};
     use crate::test_utils::single_region_mem;
     use crate::utils::net::mac::{MAC_ADDR_LEN, MacAddr};

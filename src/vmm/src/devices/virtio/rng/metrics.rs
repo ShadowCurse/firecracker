@@ -36,7 +36,7 @@
 use serde::ser::SerializeMap;
 use serde::{Serialize, Serializer};
 
-use crate::logger::SharedIncMetric;
+use crate::log::SharedIncMetric;
 
 /// Stores aggregated entropy metrics
 pub(super) static METRICS: EntropyDeviceMetrics = EntropyDeviceMetrics::new();
@@ -83,7 +83,7 @@ impl EntropyDeviceMetrics {
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use crate::logger::IncMetric;
+    use crate::log::IncMetric;
 
     #[test]
     fn test_entropy_dev_metrics() {

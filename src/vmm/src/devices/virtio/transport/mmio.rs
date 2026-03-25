@@ -15,7 +15,7 @@ use super::{VirtioInterrupt, VirtioInterruptType};
 use crate::devices::virtio::device::VirtioDevice;
 use crate::devices::virtio::device_status;
 use crate::devices::virtio::queue::Queue;
-use crate::logger::{IncMetric, METRICS, error, warn};
+use crate::log::{IncMetric, METRICS, error, warn};
 use crate::utils::byte_order;
 use crate::vstate::bus::BusDevice;
 use crate::vstate::interrupts::InterruptError;

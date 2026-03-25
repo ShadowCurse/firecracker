@@ -27,7 +27,7 @@ use std::fmt::Debug;
 ///   - again, attempt to fetch any incoming packets queued by the backend into virtio RX
 ///     buffers.
 use event_manager::{EventOps, Events, MutEventSubscriber};
-use log::{error, warn};
+use crate::log::{error, warn};
 use vmm_sys_util::epoll::EventSet;
 
 use super::VsockBackend;
@@ -36,7 +36,7 @@ use crate::devices::virtio::device::VirtioDevice;
 use crate::devices::virtio::queue::InvalidAvailIdx;
 use crate::devices::virtio::vsock::defs::VSOCK_NUM_QUEUES;
 use crate::devices::virtio::vsock::metrics::METRICS;
-use crate::logger::IncMetric;
+use crate::log::IncMetric;
 
 impl<B> Vsock<B>
 where
