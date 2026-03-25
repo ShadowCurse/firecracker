@@ -28,7 +28,7 @@ use crate::devices::virtio::device::{VirtioDevice, VirtioDeviceId, VirtioDeviceT
 use crate::devices::virtio::transport::mmio::MmioTransport;
 #[cfg(target_arch = "x86_64")]
 use crate::logger::debug;
-use crate::vstate::bus::{Bus, BusError};
+use crate::vstate::bus::Bus;
 #[cfg(target_arch = "x86_64")]
 use crate::vstate::memory::GuestAddress;
 use crate::vstate::resources::ResourceAllocator;
@@ -39,8 +39,6 @@ use crate::vstate::vm::KvmVm;
 pub enum MmioError {
     /// Failed to allocate requested resource: {0}
     Allocator(#[from] vm_allocator::Error),
-    /// Failed to insert device on the bus: {0}
-    BusInsert(#[from] BusError),
     /// Failed to allocate requested resourc: {0}
     Cmdline(#[from] linux_loader::cmdline::Error),
     /// Could not create IRQ for MMIO device: {0}
@@ -205,7 +203,7 @@ impl MMIODeviceManager {
             device.inner.clone(),
             device.resources.addr,
             device.resources.len,
-        )?;
+        );
 
         let sub_id =
             event_manager.add_subscriber(device.inner.lock().expect("Poisoned lock").device());
@@ -307,7 +305,7 @@ impl MMIODeviceManager {
             device.inner.clone(),
             device.resources.addr,
             device.resources.len,
-        )?;
+        );
 
         self.serial = Some(device);
         Ok(())
@@ -361,7 +359,7 @@ impl MMIODeviceManager {
             device.inner.clone(),
             device.resources.addr,
             device.resources.len,
-        )?;
+        );
         self.rtc = Some(device);
         Ok(())
     }
@@ -389,7 +387,7 @@ impl MMIODeviceManager {
             device.inner.clone(),
             device.resources.addr,
             device.resources.len,
-        )?;
+        );
         self.boot_timer = Some(device);
 
         Ok(())
