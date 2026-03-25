@@ -45,7 +45,6 @@ use crate::resources::VmResources;
 use crate::snapshot::Persist;
 use crate::utils::open_file_nonblock;
 use crate::vmm_config::mmds::MmdsConfigError;
-use crate::vstate::bus::BusError;
 use crate::vstate::memory::GuestMemoryMmap;
 use crate::{EmulateSerialInitError, EventManager, Vm};
 
@@ -77,8 +76,6 @@ pub enum DeviceManagerCreateError {
 pub enum AttachDeviceError {
     /// MMIO transport error: {0}
     MmioTransport(#[from] MmioError),
-    /// Error inserting device in bus: {0}
-    Bus(#[from] BusError),
     /// Error while registering ACPI with KVM: {0}
     AttachAcpiDevice(#[from] ACPIDeviceError),
     #[cfg(target_arch = "aarch64")]
@@ -434,8 +431,6 @@ pub enum DevicePersistError {
     MmioTransport,
     /// PCI Device manager: {0}
     PciDeviceManager(#[from] PciManagerError),
-    /// Bus error: {0}
-    Bus(#[from] BusError),
     #[cfg(target_arch = "aarch64")]
     /// Legacy: {0}
     Legacy(#[from] std::io::Error),
@@ -468,8 +463,6 @@ pub enum DeviceManagerPersistError {
     PciRestore(DevicePersistError),
     /// Error resetting serial console: {0}
     SerialRestore(#[from] EmulateSerialInitError),
-    /// Error inserting device in bus: {0}
-    Bus(#[from] BusError),
     /// Error creating DeviceManager: {0}
     DeviceManager(#[from] DeviceManagerCreateError),
 }
