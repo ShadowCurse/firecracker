@@ -50,6 +50,17 @@ pub struct SetupFpuError(vmm_sys_util::errno::Error);
 
 /// Configure Floating-Point Unit (FPU) registers for a given CPU.
 ///
+/// KVM does not initialize the FPU state for vCPUs, so we must set it up explicitly before the
+/// guest boots. The values used here match the x86 hardware reset state:
+///
+/// - `fcw = 0x37f`: FPU Control Word — all exceptions masked, double precision, round-to-nearest.
+/// - `mxcsr = 0x1f80`: SSE Control/Status Register — all SSE exceptions masked, round-to-nearest,
+///   denormals-are-zeros and flush-to-zero disabled.
+///
+/// This mirrors the approach taken in QEMU's KVM initialization, originally introduced by
+/// Sheng Yang in 2010 (QEMU commit `b104e3bb` / KVM mailing list patch
+/// "[PATCH 2/2] KVM: Set initial FPU state with KVM_SET_FPU").
+///
 /// # Arguments
 ///
 /// * `vcpu` - Structure for the VCPU that holds the VCPU's fd.
