@@ -234,19 +234,15 @@ impl SharedStoreMetric {
 }
 
 impl IncMetric for SharedIncMetric {
-    // While the order specified for this operation is still Relaxed, the actual instruction will
-    // be an asm "LOCK; something" and thus atomic across multiple threads, simply because of the
-    // fetch_and_add (as opposed to "store(load() + 1)") implementation for atomics.
-    // TODO: would a stronger ordering make a difference here?
     fn add(&self, value: u64) {
-        self.0.fetch_add(value, Ordering::Relaxed);
+        self.0.fetch_add(value, Ordering::AcqRel);
     }
 
     fn count(&self) -> u64 {
-        self.0.load(Ordering::Relaxed)
+        self.0.load(Ordering::Acquire)
     }
     fn fetch_diff(&self) -> u64 {
-        self.0.load(Ordering::Relaxed) - self.1.load(Ordering::Relaxed)
+        self.0.load(Ordering::Acquire) - self.1.load(Ordering::Acquire)
     }
 }
 
@@ -265,11 +261,11 @@ impl Serialize for SharedIncMetric {
     /// flushing of metrics.
     /// !!! Any print of the metrics will also reset them. Use with caution !!!
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let snapshot = self.0.load(Ordering::Relaxed);
-        let res = serializer.serialize_u64(snapshot - self.1.load(Ordering::Relaxed));
+        let snapshot = self.0.load(Ordering::Acquire);
+        let res = serializer.serialize_u64(snapshot - self.1.load(Ordering::Acquire));
 
         if res.is_ok() {
-            self.1.store(snapshot, Ordering::Relaxed);
+            self.1.store(snapshot, Ordering::Release);
         }
         res
     }
