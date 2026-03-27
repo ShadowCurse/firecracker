@@ -234,19 +234,15 @@ impl SharedStoreMetric {
 }
 
 impl IncMetric for SharedIncMetric {
-    // While the order specified for this operation is still Relaxed, the actual instruction will
-    // be an asm "LOCK; something" and thus atomic across multiple threads, simply because of the
-    // fetch_and_add (as opposed to "store(load() + 1)") implementation for atomics.
-    // TODO: would a stronger ordering make a difference here?
     fn add(&self, value: u64) {
-        self.0.fetch_add(value, Ordering::Relaxed);
+        self.0.fetch_add(value, Ordering::AcqRel);
     }
 
     fn count(&self) -> u64 {
-        self.0.load(Ordering::Relaxed)
+        self.0.load(Ordering::Acquire)
     }
     fn fetch_diff(&self) -> u64 {
-        self.0.load(Ordering::Relaxed) - self.1.load(Ordering::Relaxed)
+        self.0.load(Ordering::Acquire) - self.1.load(Ordering::Acquire)
     }
 }
 
@@ -490,10 +486,6 @@ pub struct PatchRequestsMetrics {
     pub hotplug_memory_count: SharedIncMetric,
     /// Number of failed PATCHes to /hotplug/memory
     pub hotplug_memory_fails: SharedIncMetric,
-    /// Number of tries to PATCH a pmem device.
-    pub pmem_count: SharedIncMetric,
-    /// Number of failures in PATCHing a pmem device.
-    pub pmem_fails: SharedIncMetric,
 }
 impl PatchRequestsMetrics {
     /// Const default construction.
@@ -509,8 +501,6 @@ impl PatchRequestsMetrics {
             mmds_fails: SharedIncMetric::new(),
             hotplug_memory_count: SharedIncMetric::new(),
             hotplug_memory_fails: SharedIncMetric::new(),
-            pmem_count: SharedIncMetric::new(),
-            pmem_fails: SharedIncMetric::new(),
         }
     }
 }

@@ -38,7 +38,7 @@ use crate::vmm_config::mmds::{MmdsConfig, MmdsConfigError};
 use crate::vmm_config::net::{
     NetworkInterfaceConfig, NetworkInterfaceError, NetworkInterfaceUpdateConfig,
 };
-use crate::vmm_config::pmem::{PmemConfig, PmemConfigError};
+use crate::vmm_config::pmem::{PmemConfig, PmemConfigError, PmemDeviceUpdateConfig};
 use crate::vmm_config::serial::SerialConfig;
 use crate::vmm_config::snapshot::{CreateSnapshotParams, LoadSnapshotParams, SnapshotType};
 use crate::vmm_config::vsock::{VsockConfigError, VsockDeviceConfig};
@@ -83,6 +83,8 @@ pub enum VmmAction {
     InsertBlockDevice(BlockDeviceConfig),
     /// Add a virtio-pmem device.
     InsertPmemDevice(PmemConfig),
+    /// Update an existing pmem device's rate limiter.
+    UpdatePmemDevice(PmemDeviceUpdateConfig),
     /// Add a new network interface config or update one that already exists using the
     /// `NetworkInterfaceConfig` as input. This action can only be called before the microVM has
     /// booted.
@@ -493,6 +495,7 @@ impl<'a> PrebootApiController<'a> {
             | UpdateBlockDevice(_)
             | UpdateMemoryHotplugSize(_)
             | UpdateNetworkInterface(_)
+            | UpdatePmemDevice(_)
             | StartFreePageHinting(_)
             | GetFreePageHintingStatus
             | StopFreePageHinting => Err(VmmActionError::OperationNotSupportedPreBoot),
@@ -788,6 +791,7 @@ impl RuntimeApiController {
                 .map_err(VmmActionError::BalloonUpdate),
             UpdateBlockDevice(new_cfg) => self.update_block_device(new_cfg),
             UpdateNetworkInterface(netif_update) => self.update_net_rate_limiters(netif_update),
+            UpdatePmemDevice(new_cfg) => self.update_pmem_device(new_cfg),
             UpdateMemoryHotplugSize(cfg) => self
                 .vmm
                 .lock()
@@ -939,6 +943,20 @@ impl RuntimeApiController {
             )
             .map_err(DriveError::DeviceUpdate)?;
         }
+        Ok(VmmData::Empty)
+    }
+
+    /// Updates the rate limiter for a pmem device.
+    fn update_pmem_device(
+        &mut self,
+        new_cfg: PmemDeviceUpdateConfig,
+    ) -> Result<VmmData, VmmActionError> {
+        let update = RateLimiterUpdate::from(Some(new_cfg.rate_limiter));
+        self.vmm
+            .lock()
+            .expect("Poisoned lock")
+            .update_pmem_rate_limiter(&new_cfg.id, update.bandwidth, update.ops)
+            .map_err(PmemConfigError::DeviceUpdate)?;
         Ok(VmmData::Empty)
     }
 
@@ -1161,6 +1179,9 @@ mod tests {
         check_unsupported(preboot_request(VmmAction::UpdateBlockDevice(
             BlockDeviceUpdateConfig::default(),
         )));
+        check_unsupported(preboot_request(VmmAction::UpdatePmemDevice(
+            PmemDeviceUpdateConfig::default(),
+        )));
         check_unsupported(preboot_request(VmmAction::UpdateNetworkInterface(
             NetworkInterfaceUpdateConfig {
                 iface_id: String::new(),
@@ -1296,6 +1317,7 @@ mod tests {
             path_on_host: String::new(),
             root_device: false,
             read_only: false,
+            ..Default::default()
         })));
         check_unsupported(runtime_request(VmmAction::SetMemoryHotplugDevice(
             MemoryHotplugConfig::default(),
