@@ -3,7 +3,7 @@
 
 use vmm::logger::{IncMetric, METRICS};
 use vmm::rpc_interface::VmmAction;
-use vmm::vmm_config::pmem::PmemConfig;
+use vmm::vmm_config::pmem::{PmemConfig, PmemDeviceUpdateConfig};
 
 use super::super::parsed_request::{ParsedRequest, RequestError, checked_id};
 use super::{Body, StatusCode};
@@ -34,6 +34,36 @@ pub(crate) fn parse_put_pmem(
         Ok(ParsedRequest::new_sync(VmmAction::InsertPmemDevice(
             device_cfg,
         )))
+    }
+}
+
+pub(crate) fn parse_patch_pmem(
+    body: &Body,
+    id_from_path: Option<&str>,
+) -> Result<ParsedRequest, RequestError> {
+    METRICS.patch_api_requests.pmem_count.inc();
+    let id = if let Some(id) = id_from_path {
+        checked_id(id)?
+    } else {
+        METRICS.patch_api_requests.pmem_fails.inc();
+        return Err(RequestError::EmptyID);
+    };
+
+    let update_cfg =
+        serde_json::from_slice::<PmemDeviceUpdateConfig>(body.raw()).inspect_err(|_| {
+            METRICS.patch_api_requests.pmem_fails.inc();
+        })?;
+
+    if id == update_cfg.id {
+        Ok(ParsedRequest::new_sync(VmmAction::UpdatePmemDevice(
+            update_cfg,
+        )))
+    } else {
+        METRICS.patch_api_requests.pmem_fails.inc();
+        Err(RequestError::Generic(
+            StatusCode::BadRequest,
+            "The id from the path does not match the id from the body!".to_string(),
+        ))
     }
 }
 
@@ -69,6 +99,7 @@ mod tests {
             path_on_host: "dummy".to_string(),
             root_device: true,
             read_only: true,
+            ..Default::default()
         };
         assert_eq!(r, VmmAction::InsertPmemDevice(expected_config));
     }
