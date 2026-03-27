@@ -9,11 +9,11 @@ pub const PCI_CONFIG_CAPABILITY_OFFSET: u32 = 0x34;
 // Extended capabilities register offset in the PCI config space.
 pub const PCI_CONFIG_EXTENDED_CAPABILITY_OFFSET: u32 = 0x100;
 // IO BAR when first BAR bit is 1.
-pub const PCI_CONFIG_IO_BAR: u32 = 1 << 0; //0x1;
+pub const PCI_CONFIG_IO_BAR: u32 = 1 << 0; // 0x1;
 // 64-bit memory bar flag.
 pub const PCI_CONFIG_MEMORY_BAR_64BIT: u32 = 1 << 2; // 0x4;
 // Prefetchable BAR bit
-pub const PCI_CONFIG_BAR_PREFETCHABLE: u32 = 1 << 3; //0x8;
+pub const PCI_CONFIG_BAR_PREFETCHABLE: u32 = 1 << 3; // 0x8;
 // Number of BARs for a PCI device
 pub const BAR_NUMS: u8 = 6;
 
@@ -40,6 +40,7 @@ use zerocopy::IntoBytes;
 
 use crate::Vm;
 use crate::arch::host_page_size;
+use crate::logger::error;
 use crate::pci::configuration::{BAR0_REG, Bars, NUM_BAR_REGS};
 use crate::pci::msix::{MsixCap, MsixConfig};
 use crate::pci::{BarReprogrammingParams, DeviceRelocationError, PciDevice};
@@ -104,13 +105,14 @@ fn allocate_8byte_aligned_byte_array(n: u64) -> Vec<u8> {
     // Need 8 byte alignment, but Rust is making it hard
     // There can be some left overs after rounding up, but
     // this is not an issue.
-    let total_bytes = align_up(n, 8);
-    let bytes = vec![0_u64; u64_to_usize(total_bytes)];
-    let ptr = bytes.as_ptr();
-    let len = bytes.len();
-    let cap = bytes.capacity();
-    std::mem::forget(bytes);
-    unsafe { Vec::from_raw_parts(ptr as *mut u8, len * 8, cap * 8) }
+    let total_u64_bytes = align_up(n, 8);
+    let total_u64s = total_u64_bytes / 8;
+    let u64s = vec![0_u64; u64_to_usize(total_u64s)];
+    let ptr = u64s.as_ptr();
+    let len = u64s.len() * 8;
+    let cap = u64s.capacity() * 8;
+    std::mem::forget(u64s);
+    unsafe { Vec::from_raw_parts(ptr as *mut u8, len, cap) }
 }
 
 struct VfioRegionInfoWithCap {
@@ -304,13 +306,12 @@ pub struct VfioDeviceBundle {
     pub group: File,
     pub device: VfioDevice,
     pub bars: Bars,
-    pub bar_mappings: ArrayVec<BarMapping, 6>,
+    // There are 6 bars, but one of them can be split in 3 by MSI-X table/pba
+    pub bar_mappings: ArrayVec<BarMapping, 8>,
     pub msix_state: Option<MsixState>,
     pub masks: Vec<RegisterMask>,
     pub vm: Arc<Vm>,
 }
-// TODO: impl some destruction mechanism for the vfio device. Maybe Drop or a sequence of
-// vfio_unmap_device or smth calls.
 
 #[derive(Debug)]
 pub struct VfioKvmAndContainer {
@@ -860,6 +861,7 @@ pub fn vfio_device_region_read(
 ) -> Result<(), VfioError> {
     let region_info = &region_infos[index as usize];
     let end = offset + buf.len() as u64;
+    // TODO: maybe error out instead since function is kinda called with guest provided args.
     assert!(
         end <= region_info.size,
         "Invalid device region read of [{:x}..{:x}], but region is [0..{:x}]",
@@ -882,6 +884,7 @@ pub fn vfio_device_region_write(
 ) -> Result<(), VfioError> {
     let region_info = &region_infos[index as usize];
     let end = offset + buf.len() as u64;
+    // TODO: maybe error out instead since function is kinda called with guest provided args.
     assert!(
         end <= region_info.size,
         "Invalid device region write of [{:x}..{:x}], but region is [0..{:x}]",
@@ -914,8 +917,9 @@ pub fn vfio_device_get_pci_capabilities(
     // let mut msi_cap = None;
     let mut msix_cap_and_register = None;
     LOG!("PCI CAPS offset: {}", next_cap_offset);
-    // The PCIe region is 4K in size split into 4 byte registers
-    const LOOP_UPPER_BOUND: u32 = 4096 / 4;
+    // The legacy region with PCI capis is 256 bytes long and
+    // split into 4 byte registers.
+    const LOOP_UPPER_BOUND: u32 = 256 / 4;
     let mut loop_bound: u32 = 0;
     while next_cap_offset != 0 && loop_bound < LOOP_UPPER_BOUND {
         loop_bound += 1;
@@ -1010,7 +1014,13 @@ pub fn vfio_device_get_pci_capabilities(
     let mut masks = Vec::new();
     if has_pci_express_cap {
         let mut next_cap_offset: u16 = PCI_CONFIG_EXTENDED_CAPABILITY_OFFSET as u16;
-        while next_cap_offset != 0 {
+
+        // The PCIe region is 4K in size and split into 4 byte registers
+        const LOOP_UPPER_BOUND: u32 = 4096 / 4;
+        let mut loop_bound: u32 = 0;
+        while next_cap_offset != 0 && loop_bound < LOOP_UPPER_BOUND {
+            loop_bound += 1;
+
             let mut cap_id_and_next_ptr: u32 = 0;
             vfio_device_region_read(
                 device,
@@ -1254,16 +1264,28 @@ pub fn get_device(group: &impl AsRawFd, path: &str) -> Result<VfioDevice, VfioEr
     })
 }
 
-pub fn mmap_bars(
-    container: &impl AsRawFd,
-    device: &impl AsRawFd,
+/// Intermediate type to store areas needed to be mmaped for the device
+struct BarArea {
+    /// offset
+    bar_gpa: u64,
+    /// offset
+    region_offset: u64,
+    /// offset
+    offset: u64,
+    /// size
+    size: u64,
+    /// prot
+    prot: i32,
+}
+/// Calculate areas needed to be mmaped for the devic BARs including any BAR holes caused
+/// by MSI-X table/pba
+pub fn calculate_bar_areas(
     bars: &Bars,
     region_infos: &[VfioRegionInfo],
     msix_cap: Option<&MsixCap>,
-    vm: &Vm,
-) -> Result<(ArrayVec<BarMapping, 6>, ArrayVec<BarHoleInfo, 2>), VfioError> {
+) -> (ArrayVec<BarArea, 8>, ArrayVec<BarHoleInfo, 2>) {
+    let mut areas = ArrayVec::<BarArea, 8>::new();
     let mut bar_hole_infos = ArrayVec::<BarHoleInfo, 2>::new();
-    let mut bar_mappings = ArrayVec::<BarMapping, 6>::new();
     let mut bar_idx: u8 = 0;
     while bar_idx < NUM_BAR_REGS {
         let bar_gpa = bars.get_bar_addr(bar_idx);
@@ -1287,15 +1309,14 @@ pub fn mmap_bars(
             let mut msix_pba_size = 0;
 
             if let Some(msix_cap) = msix_cap {
-                // TODO: if holes are right after each other, or overlap because
-                // of alignment, we can merge this into a single hole
                 contain_msix_table = bar_idx == msix_cap.table_bir();
                 if contain_msix_table {
                     let (offset, size) = msix_cap.table_range();
-                    msix_table_offset = align_down_host_page(offset);
-                    msix_table_size = align_up_host_page(size);
-
                     let offset_in_hole = offset_from_lower_host_page(offset);
+
+                    msix_table_offset = align_down_host_page(offset);
+                    msix_table_size = align_up_host_page(offset_in_hole + size);
+
                     LOG!(
                         "BAR{} msix_table hole: [{:#x}..{:#x}] actual table: [{:#x} ..{:#x}]",
                         bar_idx,
@@ -1316,10 +1337,11 @@ pub fn mmap_bars(
                 contain_msix_pba = bar_idx == msix_cap.pba_bir();
                 if contain_msix_pba {
                     let (offset, size) = msix_cap.pba_range();
-                    msix_pba_offset = align_down_host_page(offset);
-                    msix_pba_size = align_up_host_page(size);
-
                     let offset_in_hole = offset_from_lower_host_page(offset);
+
+                    msix_pba_offset = align_down_host_page(offset);
+                    msix_pba_size = align_up_host_page(offset_in_hole + size);
+
                     LOG!(
                         "BAR{} pba_table hole: [{:#x} ..{:#x}] actual table: [{:#x} ..{:#x}]",
                         bar_idx,
@@ -1344,7 +1366,7 @@ pub fn mmap_bars(
             {
                 LOG!(
                     "BAR{} contains msix_table: {} msix_pba: {}, but mappable is {} and \
-                     sparse_mmap_cap is {}",
+                     sparse_mmap_cap is {}. Skipping",
                     bar_idx,
                     contain_msix_table,
                     contain_msix_pba,
@@ -1363,13 +1385,16 @@ pub fn mmap_bars(
                     }
                     let region_size = region_info.size;
 
-                    // There are a maximum of 2 holes in a BAR, so maximum of 3
-                    // mmapable areas.
-                    let mut tmp_areas = [VfioRegionSparseMmapArea::default(); 3];
-                    let mut tmp_areas_count = 0;
-
-                    let areas: &[VfioRegionSparseMmapArea] = if let Some(cap) = sparse_mmap_cap {
-                        &cap.areas
+                    if let Some(cap) = sparse_mmap_cap {
+                        for area in cap.areas.iter() {
+                            areas.push(BarArea {
+                                bar_gpa,
+                                region_offset: region_info.offset,
+                                offset: area.offset,
+                                size: area.size,
+                                prot,
+                            });
+                        }
                     } else if has_msix_mappable {
                         let mut first_gap_offset = msix_table_offset;
                         let mut first_gap_size = msix_table_size;
@@ -1385,100 +1410,47 @@ pub fn mmap_bars(
                         if first_gap_size != 0 {
                             let area_size = first_gap_offset - offset;
                             if area_size != 0 {
-                                tmp_areas[tmp_areas_count].offset = offset;
-                                tmp_areas[tmp_areas_count].size = area_size;
-                                tmp_areas_count += 1;
+                                areas.push(BarArea {
+                                    bar_gpa,
+                                    region_offset: region_info.offset,
+                                    offset: offset,
+                                    size: area_size,
+                                    prot,
+                                });
                             }
                             offset = first_gap_offset + first_gap_size;
                         }
                         if second_gap_size != 0 {
                             let area_size = second_gap_offset - offset;
                             if area_size != 0 {
-                                tmp_areas[tmp_areas_count].offset = offset;
-                                tmp_areas[tmp_areas_count].size = area_size;
-                                tmp_areas_count += 1;
+                                areas.push(BarArea {
+                                    bar_gpa,
+                                    region_offset: region_info.offset,
+                                    offset: offset,
+                                    size: area_size,
+                                    prot,
+                                });
                             }
                             offset = second_gap_offset + second_gap_size;
                         }
                         let area_size = region_size - offset;
                         if area_size != 0 {
-                            tmp_areas[tmp_areas_count].offset = offset;
-                            tmp_areas[tmp_areas_count].size = area_size;
-                            tmp_areas_count += 1;
+                            areas.push(BarArea {
+                                bar_gpa,
+                                region_offset: region_info.offset,
+                                offset: offset,
+                                size: area_size,
+                                prot,
+                            });
                         }
-                        &tmp_areas[0..tmp_areas_count]
                     } else {
-                        &[VfioRegionSparseMmapArea {
+                        areas.push(BarArea {
+                            bar_gpa,
+                            region_offset: region_info.offset,
                             offset: 0,
                             size: region_size,
-                        }]
-                    };
-
-                    for area in areas.iter() {
-                        assert!(
-                            offset_from_lower_host_page(area.size) == 0,
-                            "Area size is not page aligned"
-                        );
-                        assert!(
-                            offset_from_lower_host_page(area.offset) == 0,
-                            "Area offset is not page aligned"
-                        );
-                        let region_offset = region_info.offset;
-                        // SAFETY: FFI call with correct arguments
-                        let host_addr = unsafe {
-                            libc::mmap(
-                                std::ptr::null_mut(),
-                                area.size as usize,
-                                prot,
-                                libc::MAP_SHARED,
-                                device.as_raw_fd(),
-                                (region_offset + area.offset) as i64,
-                            )
-                        };
-
-                        if host_addr == libc::MAP_FAILED {
-                            return Err(VfioError::Mmap);
-                        }
-
-                        // TODO: if any of the ? checks fail, there should be a
-                        // clean up stage with setting prevous kvm slots to 0 and
-                        // unmapping the memory.
-                        let slot = vm.next_kvm_slot(1).ok_or(VfioError::KvmSlot)?;
-                        let iova = bar_gpa + area.offset;
-                        let size = area.size;
-                        let host_addr = host_addr as u64;
-
-                        let kvm_memory_region = kvm_userspace_memory_region {
-                            slot,
-                            flags: 0,
-                            guest_phys_addr: iova,
-                            memory_size: size,
-                            userspace_addr: host_addr,
-                        };
-                        LOG!("BAR{} kvm gpa: [{:#x} ..{:#x}]", bar_idx, iova, iova + size);
-                        vm.set_user_memory_region(kvm_memory_region)
-                            .map_err(|e| VfioError::SetUserMemoryRegion(e.to_string()))?;
-
-                        // NOTE: if viortio-iommu is attached no dma setup is
-                        // needed at this stage
-                        let dma_map = vfio_iommu_type1_dma_map {
-                            argsz: std::mem::size_of::<vfio_iommu_type1_dma_map>() as u32,
-                            // NOTE: VFIO_DMA_MAP_FLAG_READ and VFIO_DMA_MAP_FLAG_WRITE flags are
-                            // same as PROT_READ and PROT_WRITE
-                            flags: prot as u32,
-                            vaddr: host_addr,
-                            iova: iova,
-                            size: size,
-                        };
-                        ioctls::iommu_map_dma(container, &dma_map)?;
-
-                        let mmaped_bar = BarMapping {
-                            slot,
-                            iova,
-                            size,
-                            host_addr,
-                        };
-                        bar_mappings.push(mmaped_bar);
+                            prot,
+                        });
                     }
                 }
             }
@@ -1488,8 +1460,271 @@ pub fn mmap_bars(
         }
         bar_idx += 1;
     }
-    Ok((bar_mappings, bar_hole_infos))
+    (areas, bar_hole_infos)
 }
+
+// pub fn mmap_bars(
+//     container: &impl AsRawFd,
+//     device: &impl AsRawFd,
+//     bars: &Bars,
+//     region_infos: &[VfioRegionInfo],
+//     msix_cap: Option<&MsixCap>,
+//     vm: &Vm,
+//     bar_mappings: &mut ArrayVec<BarMapping, 8>,
+//     bar_hole_infos: &mut ArrayVec<BarHoleInfo, 2>,
+// ) -> Result<(), VfioError> {
+//     let mut bar_idx: u8 = 0;
+//     while bar_idx < NUM_BAR_REGS {
+//         let bar_gpa = bars.get_bar_addr(bar_idx);
+//         if bar_gpa != 0 {
+//             let region_info = &region_infos[bar_idx as usize];
+//             let mut has_msix_mappable = false;
+//             let mut sparse_mmap_cap = None;
+//             for cap in region_info.caps.iter() {
+//                 match cap {
+//                     VfioRegionCap::SparseMmap(cap) => sparse_mmap_cap = Some(cap),
+//                     VfioRegionCap::MsixMappable => has_msix_mappable = true,
+//                     _ => {}
+//                 }
+//             }
+//             let mut contain_msix_table: bool = false;
+//             let mut msix_table_offset = 0;
+//             let mut msix_table_size = 0;
+//
+//             let mut contain_msix_pba: bool = false;
+//             let mut msix_pba_offset = 0;
+//             let mut msix_pba_size = 0;
+//
+//             if let Some(msix_cap) = msix_cap {
+//                 contain_msix_table = bar_idx == msix_cap.table_bir();
+//                 if contain_msix_table {
+//                     let (offset, size) = msix_cap.table_range();
+//                     msix_table_offset = align_down_host_page(offset);
+//                     msix_table_size = align_up_host_page(size);
+//
+//                     let offset_in_hole = offset_from_lower_host_page(offset);
+//                     LOG!(
+//                         "BAR{} msix_table hole: [{:#x}..{:#x}] actual table: [{:#x} ..{:#x}]",
+//                         bar_idx,
+//                         bar_gpa + msix_table_offset,
+//                         bar_gpa + msix_table_offset + msix_table_size,
+//                         bar_gpa + offset_in_hole,
+//                         bar_gpa + offset_in_hole + size,
+//                     );
+//
+//                     let info = BarHoleInfo {
+//                         gpa: bar_gpa + msix_table_offset,
+//                         size: msix_table_size,
+//                         usage: BarHoleInfoUsage::Table,
+//                     };
+//                     bar_hole_infos.push(info);
+//                 }
+//
+//                 contain_msix_pba = bar_idx == msix_cap.pba_bir();
+//                 if contain_msix_pba {
+//                     let (offset, size) = msix_cap.pba_range();
+//                     msix_pba_offset = align_down_host_page(offset);
+//                     msix_pba_size = align_up_host_page(size);
+//
+//                     let offset_in_hole = offset_from_lower_host_page(offset);
+//                     LOG!(
+//                         "BAR{} pba_table hole: [{:#x} ..{:#x}] actual table: [{:#x} ..{:#x}]",
+//                         bar_idx,
+//                         bar_gpa + msix_pba_offset,
+//                         bar_gpa + msix_pba_offset + msix_pba_size,
+//                         bar_gpa + offset_in_hole,
+//                         bar_gpa + offset_in_hole + size,
+//                     );
+//
+//                     let info = BarHoleInfo {
+//                         gpa: bar_gpa + msix_pba_offset,
+//                         size: msix_pba_size,
+//                         usage: BarHoleInfoUsage::Pba,
+//                     };
+//                     bar_hole_infos.push(info);
+//                 }
+//             }
+//
+//             if (contain_msix_table || contain_msix_pba)
+//                 && !has_msix_mappable
+//                 && sparse_mmap_cap.is_none()
+//             {
+//                 LOG!(
+//                     "BAR{} contains msix_table: {} msix_pba: {}, but mappable is {} and \
+//                      sparse_mmap_cap is {}",
+//                     bar_idx,
+//                     contain_msix_table,
+//                     contain_msix_pba,
+//                     has_msix_mappable,
+//                     sparse_mmap_cap.is_some()
+//                 );
+//             } else {
+//                 let can_mmap = region_info.flags & VFIO_REGION_INFO_FLAG_MMAP != 0;
+//                 if can_mmap || sparse_mmap_cap.is_some() {
+//                     let mut prot = 0;
+//                     if region_info.flags & VFIO_REGION_INFO_FLAG_READ != 0 {
+//                         prot |= libc::PROT_READ;
+//                     }
+//                     if region_info.flags & VFIO_REGION_INFO_FLAG_WRITE != 0 {
+//                         prot |= libc::PROT_WRITE;
+//                     }
+//                     let region_size = region_info.size;
+//
+//                     // There are a maximum of 2 holes in a BAR, so maximum of 3
+//                     // mmapable areas.
+//                     let mut tmp_areas = [VfioRegionSparseMmapArea::default(); 3];
+//                     let mut tmp_areas_count = 0;
+//
+//                     let areas: &[VfioRegionSparseMmapArea] = if let Some(cap) = sparse_mmap_cap {
+//                         &cap.areas
+//                     } else if has_msix_mappable {
+//                         let mut first_gap_offset = msix_table_offset;
+//                         let mut first_gap_size = msix_table_size;
+//                         let mut second_gap_offset = msix_pba_offset;
+//                         let mut second_gap_size = msix_pba_size;
+//                         if second_gap_offset < first_gap_offset {
+//                             second_gap_offset = msix_table_offset;
+//                             second_gap_size = msix_table_size;
+//                             first_gap_offset = msix_pba_offset;
+//                             first_gap_size = msix_pba_size;
+//                         }
+//                         let mut offset = 0;
+//                         if first_gap_size != 0 {
+//                             let area_size = first_gap_offset - offset;
+//                             if area_size != 0 {
+//                                 tmp_areas[tmp_areas_count].offset = offset;
+//                                 tmp_areas[tmp_areas_count].size = area_size;
+//                                 tmp_areas_count += 1;
+//                             }
+//                             offset = first_gap_offset + first_gap_size;
+//                         }
+//                         if second_gap_size != 0 {
+//                             let area_size = second_gap_offset - offset;
+//                             if area_size != 0 {
+//                                 tmp_areas[tmp_areas_count].offset = offset;
+//                                 tmp_areas[tmp_areas_count].size = area_size;
+//                                 tmp_areas_count += 1;
+//                             }
+//                             offset = second_gap_offset + second_gap_size;
+//                         }
+//                         let area_size = region_size - offset;
+//                         if area_size != 0 {
+//                             tmp_areas[tmp_areas_count].offset = offset;
+//                             tmp_areas[tmp_areas_count].size = area_size;
+//                             tmp_areas_count += 1;
+//                         }
+//                         &tmp_areas[0..tmp_areas_count]
+//                     } else {
+//                         &[VfioRegionSparseMmapArea {
+//                             offset: 0,
+//                             size: region_size,
+//                         }]
+//                     };
+//
+//                     for area in areas.iter() {
+//                         assert!(
+//                             offset_from_lower_host_page(area.size) == 0,
+//                             "Area size is not page aligned"
+//                         );
+//                         assert!(
+//                             offset_from_lower_host_page(area.offset) == 0,
+//                             "Area offset is not page aligned"
+//                         );
+//
+//                         let region_offset = region_info.offset;
+//                         // SAFETY: FFI call with correct arguments
+//                         let host_addr = unsafe {
+//                             libc::mmap(
+//                                 std::ptr::null_mut(),
+//                                 area.size as usize,
+//                                 prot,
+//                                 libc::MAP_SHARED,
+//                                 device.as_raw_fd(),
+//                                 (region_offset + area.offset) as i64,
+//                             )
+//                         };
+//
+//                         if host_addr == libc::MAP_FAILED {
+//                             return Err(VfioError::Mmap);
+//                         }
+//
+//                         // TODO: if any of the ? checks fail, there should be a
+//                         // clean up stage with setting prevous kvm slots to 0 and
+//                         // unmapping the memory.
+//                         let slot = vm.next_kvm_slot(1).ok_or(VfioError::KvmSlot)?;
+//                         let iova = bar_gpa + area.offset;
+//                         let size = area.size;
+//                         let host_addr = host_addr as u64;
+//
+//                         let kvm_memory_region = kvm_userspace_memory_region {
+//                             slot,
+//                             flags: 0,
+//                             guest_phys_addr: iova,
+//                             memory_size: size,
+//                             userspace_addr: host_addr,
+//                         };
+//                         LOG!("BAR{} kvm gpa: [{:#x} ..{:#x}]", bar_idx, iova, iova + size);
+//                         vm.set_user_memory_region(kvm_memory_region)
+//                             .map_err(|e| VfioError::SetUserMemoryRegion(e.to_string()))?;
+//
+//                         // NOTE: if viortio-iommu is attached no dma setup is
+//                         // needed at this stage
+//                         let dma_map = vfio_iommu_type1_dma_map {
+//                             argsz: std::mem::size_of::<vfio_iommu_type1_dma_map>() as u32,
+//                             // NOTE: VFIO_DMA_MAP_FLAG_READ and VFIO_DMA_MAP_FLAG_WRITE flags are
+//                             // same as PROT_READ and PROT_WRITE
+//                             flags: prot as u32,
+//                             vaddr: host_addr,
+//                             iova: iova,
+//                             size: size,
+//                         };
+//                         if let Err(e) = ioctls::iommu_map_dma(container, &dma_map) {
+//                             let kvm_memory_region = kvm_userspace_memory_region {
+//                                 slot: slot,
+//                                 flags: 0,
+//                                 guest_phys_addr: iova,
+//                                 memory_size: 0,
+//                                 userspace_addr: host_addr,
+//                             };
+//                             if let Err(ee) = vm.set_user_memory_region(kvm_memory_region) {
+//                                 crate::logger::error!(
+//                                     "Error on removing KVM region on VFIO device BAR \
+//                                      mappingfailure: {ee:?}. Continuing with other regions \
+//                                      removal."
+//                                 );
+//                             }
+//
+//                             let r = unsafe {
+//                                 libc::munmap(host_addr as *mut libc::c_void, u64_to_usize(size))
+//                             };
+//                             if r < 0 {
+//                                 crate::logger::error!(
+//                                     "Error on unmapping host memory on VFIO device BAR mapping \
+//                                      failure: {r:?}. Continuing with other regions removal."
+//                                 );
+//                             }
+//
+//                             return Err(e.into());
+//                         }
+//
+//                         let mmaped_bar = BarMapping {
+//                             slot,
+//                             iova,
+//                             size,
+//                             host_addr,
+//                         };
+//                         bar_mappings.push(mmaped_bar);
+//                     }
+//                 }
+//             }
+//         }
+//         if bars.bars[bar_idx as usize].is_64bit() {
+//             bar_idx += 1;
+//         }
+//         bar_idx += 1;
+//     }
+//     Ok(())
+// }
 
 pub fn dma_map_guest_memory(
     container: &impl AsRawFd,
@@ -1520,8 +1755,37 @@ pub fn dma_map_guest_memory(
                 iova,
                 size,
             };
-            LOG!("DMA guest memory: [{:#x}..{:#x}]", iova, iova + size);
+            LOG!("DMA map guest memory: [{:#x}..{:#x}]", iova, iova + size);
             ioctls::iommu_map_dma(container, &dma_map)?;
+        }
+    }
+    Ok(())
+}
+
+pub fn dma_unmap_guest_memory(
+    container: &impl AsRawFd,
+    guest_memory: &GuestMemoryMmap,
+) -> Result<(), VfioError> {
+    // NOTE: if viortio-iommu is attached no dma setup is
+    // needed at this stage
+    for region in guest_memory.iter() {
+        if region.region_type == GuestRegionType::Dram {
+            let region = &region.inner;
+
+            let iova = region.start_addr().0 as u64;
+            let size = region.size() as u64;
+
+            let mut dma_unmap = vfio_iommu_type1_dma_unmap {
+                argsz: std::mem::size_of::<vfio_iommu_type1_dma_unmap>() as u32,
+                flags: 0,
+                iova,
+                size,
+                data: Default::default(),
+            };
+            LOG!("DMA unmap guest memory: [{:#x}..{:#x}]", iova, iova + size);
+            ioctls::iommu_unmap_dma(container, &mut dma_unmap)?;
+            // TODO what to do with partial unmaps?
+            assert!(dma_unmap.size == size);
         }
     }
     Ok(())
@@ -1612,43 +1876,173 @@ pub fn init_vfio_container() -> Result<File, VfioError> {
     Ok(container)
 }
 
-/// Init VFIO device
-pub fn init_vfio_device(
-    vfio_kvm_and_container: &VfioKvmAndContainer,
+fn map_bar_mapping(
+    container: &impl AsRawFd,
+    device: &impl AsRawFd,
+    vm: &Vm,
+    area: &BarArea,
+    slot: u32,
+) -> Result<BarMapping, VfioError> {
+    // let mut mapping: BarMapping;
+    // SAFETY: FFI call with correct arguments
+    let host_addr = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            area.size as usize,
+            area.prot,
+            libc::MAP_SHARED,
+            device.as_raw_fd(),
+            (area.region_offset + area.offset) as i64,
+        )
+    };
+
+    if host_addr == libc::MAP_FAILED {
+        return Err(VfioError::Mmap);
+    }
+
+    let slot = slot;
+    let iova = area.bar_gpa + area.offset;
+    let size = area.size;
+    let host_addr = host_addr as u64;
+
+    let kvm_memory_region = kvm_userspace_memory_region {
+        slot,
+        flags: 0,
+        guest_phys_addr: iova,
+        memory_size: size,
+        userspace_addr: host_addr,
+    };
+    if let Err(e) = vm.set_user_memory_region(kvm_memory_region) {
+        let r = unsafe { libc::munmap(host_addr as *mut libc::c_void, u64_to_usize(size)) };
+        if r < 0 {
+            error!(
+                "Error on unmapping host memory on VFIO device creation failure: {r:?}. \
+                 Continuing with other regions removal."
+            );
+        }
+        return Err(VfioError::SetUserMemoryRegion(e.to_string()));
+    }
+
+    // NOTE: if viortio-iommu is attached no dma setup is
+    // needed at this stage
+    let dma_map = vfio_iommu_type1_dma_map {
+        argsz: std::mem::size_of::<vfio_iommu_type1_dma_map>() as u32,
+        // NOTE: VFIO_DMA_MAP_FLAG_READ and VFIO_DMA_MAP_FLAG_WRITE flags are
+        // same as PROT_READ and PROT_WRITE
+        flags: area.prot as u32,
+        vaddr: host_addr,
+        iova: iova,
+        size: size,
+    };
+    if let Err(e) = ioctls::iommu_map_dma(container, &dma_map) {
+        let kvm_memory_region = kvm_userspace_memory_region {
+            slot: slot,
+            flags: 0,
+            guest_phys_addr: iova,
+            memory_size: 0,
+            userspace_addr: host_addr,
+        };
+        if let Err(ee) = vm.set_user_memory_region(kvm_memory_region) {
+            error!(
+                "Error on removing KVM region on VFIO device creation failure: {ee:?}. Continuing \
+                 with other regions removal."
+            );
+        }
+        let r = unsafe { libc::munmap(host_addr as *mut libc::c_void, u64_to_usize(size)) };
+        if r < 0 {
+            error!(
+                "Error on unmapping host memory on VFIO device creation failure: {r:?}. \
+                 Continuing with other regions removal."
+            );
+        }
+        return Err(e.into());
+    }
+    let mapping = BarMapping {
+        slot,
+        iova,
+        size,
+        host_addr,
+    };
+    Ok(mapping)
+}
+
+fn unmap_bar_mapping(container: &impl AsRawFd, vm: &Vm, mapping: &BarMapping) {
+    let kvm_memory_region = kvm_userspace_memory_region {
+        slot: mapping.slot,
+        flags: 0,
+        guest_phys_addr: mapping.iova,
+        memory_size: 0,
+        userspace_addr: mapping.host_addr,
+    };
+    // TODO: what should happen if this fails as well?
+    if let Err(ee) = vm.set_user_memory_region(kvm_memory_region) {
+        error!(
+            "Error on removing KVM region on VFIO device creation failure: {ee:?}. Continuing \
+             with other regions removal."
+        );
+    }
+
+    let mut dma_unmap = vfio_iommu_type1_dma_unmap {
+        argsz: std::mem::size_of::<vfio_iommu_type1_dma_unmap>() as u32,
+        flags: 0,
+        iova: mapping.iova,
+        size: mapping.size,
+        data: Default::default(),
+    };
+    if let Err(ee) = ioctls::iommu_unmap_dma(container, &mut dma_unmap) {
+        error!(
+            "Error on unmapping DMA region on VFIO device creation failure: {ee:?}. Continuing \
+             with other regions removal."
+        );
+    }
+    // TODO what to do with partial unmaps?
+    assert!(dma_unmap.size == mapping.size);
+
+    let r = unsafe {
+        libc::munmap(
+            mapping.host_addr as *mut libc::c_void,
+            u64_to_usize(mapping.size),
+        )
+    };
+    if r < 0 {
+        error!(
+            "Error on unmapping host memory on VFIO device creation failure: {r:?}. Continuing \
+             with other regions removal."
+        );
+    }
+}
+
+/// The reason this is a separte functions is to ease the error handling of VFIO device creation.
+/// This function does all the preparation steps with the VFIO device like gathering
+/// information about regions, irqs and setting up the DMA/KVM regions and MSI-X vectors.
+/// But if any error occurs inside this function, all DMA/KVM regions are destroyed.
+/// Outer caller will need to deal with the rest of the init process.
+pub fn prepare_vfio_device(
+    container: &impl AsRawFd,
+    group: &impl AsRawFd,
     vm: &Arc<Vm>,
-    config: VfioConfig,
+    device_path: &str,
     bdf: PciBdf,
     first_vfio_device: bool,
-) -> Result<Arc<Mutex<VfioDeviceBundle>>, VfioError> {
-    let container = &vfio_kvm_and_container.container;
-    let kvm_device = &vfio_kvm_and_container.kvm_device;
-
-    LOG!("Openning device at path: {}", config.path);
-    let group_id = group_id_from_device_path(&config.path)?;
-    LOG!("Group id: {}", group_id);
-    let group = vfio_group_open(group_id)?;
-
-    // TODO: on failure the group should be removed from the container
-    // Also the group should be removed if we unplug the device in the future.
-    // The group handling can be simple: when multiple devices with same group
-    // are added to the container, VFIO_GROUP_SET_CONTAINER will succeed for
-    // all of them. When we unplug one of the devices, we will need to call
-    // VFIO_GROUP_UNSET_CONTAINER, but it will return -EBUSY if there are other
-    // device in the same group which still exist. We can simply make -EBUSY as
-    // success return as well. This way we don't need to have complicated mapping
-    // mechanism between devices, groups and the container.
-    ioctls::group_set_container(&group, container).map_err(VfioError::from)?;
-    // TODO: move this out of here into the caller. The device creation will
-    // need to be separated from this call anyway because of the API calls.
-    kvm_device_vfio_file_add(kvm_device, &group)?;
-
-    // only set after getting the first group
+) -> Result<
+    (
+        VfioDevice,
+        Bars,
+        ArrayVec<BarMapping, 8>,
+        Option<MsixState>,
+        Vec<RegisterMask>,
+    ),
+    VfioError,
+> {
     if first_vfio_device {
+        // If anything after this call, we don't need to do anything here.
+        // The error handling in the caller should remove the device group from
+        // the container which will trigger reset of iommu if that group was the
+        // last one.
         vfio_container_set_iommu(container, VFIO_TYPE1v2_IOMMU)?;
     }
 
-    let device = get_device(&group, &config.path)?;
-
+    let device = get_device(group, device_path)?;
     let bars = {
         let mut resource_allocator_lock = vm.resource_allocator();
         let resource_allocator = resource_allocator_lock.deref_mut();
@@ -1665,7 +2059,6 @@ pub fn init_vfio_device(
         );
         let msix_irq_info = &device.irq_infos[VFIO_PCI_MSIX_IRQ_INDEX as usize];
         let msix_num = msix_irq_info.count as u16;
-        println!("VFIO msix_num: {msix_num}");
         let msix_vectors =
             Vm::create_msix_group(vm.clone(), msix_num).map_err(VfioError::MsixConfig)?;
         let msix_config = crate::pci::msix::MsixConfig::new(Arc::new(msix_vectors), bdf.into());
@@ -1678,45 +2071,139 @@ pub fn init_vfio_device(
         });
     }
 
-    if first_vfio_device {
-        dma_map_guest_memory(container, vm.guest_memory())?;
-    }
-    let (bar_mappings, bar_hole_infos) = mmap_bars(
-        container,
-        &device.file,
+    let (areas, bar_hole_infos) = calculate_bar_areas(
         &bars,
         &device.region_infos,
         msix_cap_and_register.as_ref().map(|(v, _)| v),
-        vm.as_ref(),
-    )?;
-    if let Some(msix_state) = msix_state.as_mut() {
-        msix_state.bar_hole_infos = bar_hole_infos;
-    }
+    );
+    let first_area_slot = vm
+        .next_kvm_slot(areas.len() as u32)
+        .ok_or(VfioError::KvmSlot)?;
 
-    let vfio_device_bundle = Arc::new(Mutex::new(VfioDeviceBundle {
-        config,
-        bdf,
-        group_id,
-        group,
-        device,
-        bars,
-        bar_mappings,
-        msix_state,
-        masks,
-        vm: vm.clone(),
-    }));
-
-    if let Some(msix_state) = vfio_device_bundle.lock().unwrap().msix_state.as_ref() {
-        // This is for bars (or the poked holes in them where MSIx and PBA tables live)
-        for hole in msix_state.bar_hole_infos.iter() {
-            vm.common
-                .mmio_bus
-                .insert(vfio_device_bundle.clone(), hole.gpa, hole.size)
-                .expect("Failed to register VFIO device mmio region");
+    let mut bar_mappings = ArrayVec::<BarMapping, 8>::new();
+    for (i, area) in areas.iter().enumerate() {
+        match map_bar_mapping(
+            container,
+            &device.file,
+            vm.as_ref(),
+            area,
+            first_area_slot + i as u32,
+        ) {
+            Ok(mapping) => {
+                LOG!(
+                    "BAR area{} kvm gpa: [{:#x} ..{:#x}]",
+                    i,
+                    mapping.iova,
+                    mapping.iova + mapping.size
+                );
+                bar_mappings.push(mapping);
+            }
+            Err(e) => {
+                for mapping in bar_mappings.iter() {
+                    unmap_bar_mapping(container, vm.as_ref(), mapping);
+                }
+                return Err(e);
+            }
         }
     }
 
-    Ok(vfio_device_bundle)
+    if first_vfio_device {
+        if let Err(e) = dma_map_guest_memory(container, vm.guest_memory()) {
+            for mapping in bar_mappings.iter() {
+                unmap_bar_mapping(container, vm.as_ref(), mapping);
+            }
+            return Err(e);
+        }
+    }
+
+    if let Some(msix_state) = msix_state.as_mut() {
+        msix_state.bar_hole_infos = bar_hole_infos;
+    }
+    return Ok((device, bars, bar_mappings, msix_state, masks));
+}
+
+/// Init VFIO device
+pub fn init_vfio_device(
+    vfio_kvm_and_container: &VfioKvmAndContainer,
+    vm: &Arc<Vm>,
+    config: VfioConfig,
+    bdf: PciBdf,
+    first_vfio_device: bool,
+) -> Result<Arc<Mutex<VfioDeviceBundle>>, VfioError> {
+    let container = &vfio_kvm_and_container.container;
+    let kvm_device = &vfio_kvm_and_container.kvm_device;
+
+    LOG!("Openning device at path: {}", config.path);
+    let group_id = group_id_from_device_path(&config.path)?;
+    LOG!("Group id: {}", group_id);
+    let group = vfio_group_open(group_id)?;
+
+    // If anything after this call, we need to call kvm_device_vfio_file_del
+    // if this device is the last one in the group
+    kvm_device_vfio_file_add(kvm_device, &group)?;
+
+    // If anything after this call, we need to call group_unset_container
+    // The return value of group_unset_container can be used to detirmine if the device
+    // is the last one in the group
+    if let Err(e) = ioctls::group_set_container(&group, container) {
+        // Best-effort cleanup: undo the file_add we just did.
+        // This is safe because group_set_container failed, so no device
+        // from this group was attached via this path.
+        kvm_device_vfio_file_del(kvm_device, &group)?;
+        return Err(e).map_err(VfioError::from);
+    }
+
+    match prepare_vfio_device(container, &group, vm, &config.path, bdf, first_vfio_device) {
+        Ok((device, bars, bar_mappings, msix_state, masks)) => {
+            let vfio_device_bundle = Arc::new(Mutex::new(VfioDeviceBundle {
+                config,
+                bdf,
+                group_id,
+                group,
+                device,
+                bars,
+                bar_mappings,
+                msix_state,
+                masks,
+                vm: vm.clone(),
+            }));
+
+            if let Some(msix_state) = vfio_device_bundle.lock().unwrap().msix_state.as_ref() {
+                // This is for bars (or the poked holes in them where MSIx and PBA tables live)
+                for hole in msix_state.bar_hole_infos.iter() {
+                    vm.common
+                        .mmio_bus
+                        .insert(vfio_device_bundle.clone(), hole.gpa, hole.size)
+                        .expect("Failed to register VFIO device mmio region");
+                }
+            }
+            Ok(vfio_device_bundle)
+        }
+        Err(e) => {
+            match ioctls::group_unset_container(&group, container) {
+                Ok(()) => {
+                    // If group_unset_container return successfully, it means this device was the
+                    // last one in the group and so we can remove it from the KVM device as well.
+                    // In other case group_unset_container will return EBUSY error and we don't
+                    // need to do anything with KVM device
+                    if let Err(ee) = kvm_device_vfio_file_del(kvm_device, &group) {
+                        error!(
+                            "Failed to remove VFIO group from KVM device during cleanup: {ee:?}"
+                        );
+                    }
+                }
+                Err(VfioIoctlError::GroupUnsetContainer(ee)) => {
+                    if ee.errno() == libc::EBUSY {
+                        // Other devices still using this group — nothing to clean up
+                    } else {
+                        error!("Failed to unset VFIO container during cleanup: {ee:?}");
+                    }
+                }
+                _ => unreachable!(),
+            }
+            Err(e).map_err(VfioError::from)
+        }
+    }
 }
 
 #[cfg(test)]

@@ -29,34 +29,34 @@ pub enum VfioIoctlError {
     VfioType1V2,
     /// Failed to add vfio group into vfio container
     GroupSetContainer,
-    /// Failed to unset vfio container
-    UnsetContainer,
+    /// Failed to unset vfio container: {0}
+    GroupUnsetContainer(SysError),
     /// Failed get VFIO IOMMU info: {0}
-    IommuGetInfo(#[source] SysError),
+    IommuGetInfo(SysError),
     /// Failed to set container's IOMMU driver type as VfioType1V2: {0}
-    ContainerSetIOMMU(#[source] SysError),
+    ContainerSetIOMMU(SysError),
     /// Failed to get vfio device fd: {0}
-    GroupGetDeviceFD(#[source] SysError),
+    GroupGetDeviceFD(SysError),
     /// Failed reset the device
     DeviceReset,
     /// Failed to set vfio device's attribute: {0}
-    SetDeviceAttr(#[source] SysError),
+    SetDeviceAttr(SysError),
     /// Failed to get vfio device's info: {0}
-    VfioDeviceGetInfo(#[source] SysError),
+    VfioDeviceGetInfo(SysError),
     /// Vfio PCI device info doesn't match
     VfioDeviceGetInfoPCI,
     /// Unsupported vfio device type
     VfioDeviceGetInfoOther,
     /// Failed to get vfio device's region info: {0}
-    VfioDeviceGetRegionInfo(#[source] SysError),
+    VfioDeviceGetRegionInfo(SysError),
     /// Failed to get vfio device's irq info: {0}
-    VfioDeviceGetIrqInfo(#[source] SysError),
+    VfioDeviceGetIrqInfo(SysError),
     /// Invalid file path
     InvalidPath,
     /// Failed to add guest memory map into iommu table: {0}
-    IommuDmaMap(#[source] SysError),
+    IommuDmaMap(SysError),
     /// Failed to remove guest memory map from iommu table: {0}
-    IommuDmaUnmap(#[source] SysError),
+    IommuDmaUnmap(SysError),
     /// Failed to set vfio device irq
     VfioDeviceSetIrq,
     /// Failed to enable vfio device irq
@@ -81,24 +81,24 @@ pub enum VfioIoctlError {
     DowncastVfioOps,
     // #[cfg(feature = "vfio_cdev")]
     // /// failed to bind the vfio device to the specified iommufd: {0}
-    // VfioDeviceBindIommufd(#[source] SysError),
+    // VfioDeviceBindIommufd(SysError),
     // #[cfg(feature = "vfio_cdev")]
     // /// failed to associate the vfio device with an IOAS within the bound iommufd: {0}
-    // VfioDeviceAttachIommufdPt(#[source] SysError),
+    // VfioDeviceAttachIommufdPt(SysError),
     // #[cfg(feature = "vfio_cdev")]
     // #[error(
     //     "failed to remove the association of the vfio device and its current associated IOAS:
     // {0}" )]
-    // VfioDeviceDetachIommufdPt(#[source] SysError),
+    // VfioDeviceDetachIommufdPt(SysError),
     // #[cfg(feature = "vfio_cdev")]
     // /// failed to new VfioIommufd
-    // NewVfioIommufd(#[source] IommufdError),
+    // NewVfioIommufd(IommufdError),
     // #[cfg(feature = "vfio_cdev")]
     // /// invalid 'vfio_dev' folder
     // InvalidVfioDev,
     // #[cfg(feature = "vfio_cdev")]
     // /// failed to open device cdev
-    // OpenDeviceCdev(#[source] io::Error),
+    // OpenDeviceCdev(io::Error),
     // #[cfg(feature = "vfio_cdev")]
     // /// failed iommufd ioctl
     // IommufdIoctlError(#[source] IommufdError),
@@ -332,7 +332,7 @@ pub fn group_unset_container(
     // SAFETY: we are the owner of self and container_raw_fd which are valid value.
     let ret = unsafe { ioctl_with_ref(group, VFIO_GROUP_UNSET_CONTAINER(), container) };
     if ret < 0 {
-        Err(VfioIoctlError::GroupSetContainer)
+        Err(VfioIoctlError::GroupUnsetContainer(SysError::last()))
     } else {
         Ok(())
     }
