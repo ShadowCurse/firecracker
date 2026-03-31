@@ -134,7 +134,7 @@ impl VfioRegionInfoWithCap {
         } else {
             let next_cap_offset = offset as usize;
             let next_cap_header_end = next_cap_offset + std::mem::size_of::<vfio_info_cap_header>();
-            if self.bytes.len() < next_cap_offset || self.bytes.len() <= next_cap_header_end {
+            if self.bytes.len() < next_cap_offset || self.bytes.len() < next_cap_header_end {
                 // This data comes from the kernel, so it should be valid and this path should
                 // never be taken, but just in case do these checks.
                 None
