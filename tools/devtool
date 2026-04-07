@@ -448,6 +448,10 @@ cmd_help() {
     echo "        --no-archive                 Skip archiving of 'test_result' after the test is done."
     echo "        --no-kvm-check               Skip checking for '/dev/kvm' presence."
     echo "        --no-artifacts-check         Skip checking existing artifacts."
+    echo "        --vfio-device DEVICE         Prepare a PCI device for VFIO passthrough and pass it to tests."
+    echo "                                     DEVICE can be a block device path (e.g. /dev/nvme1n1) or a PCI SBDF"
+    echo "                                     (e.g. 0003:16:00.0). Binds the device to vfio-pci and sets"
+    echo "                                     FC_VFIO_PCI_SBDF and FC_VFIO_PCI_SYSFS_PATH env vars in the container."
     echo ""
     echo "    build_ci_artifacts [all|rootfs|kernels]"
     echo "        Builds the rootfs and guest kernel artifacts we use for our CI."
@@ -902,6 +906,7 @@ cmd_test() {
     do_kvm_check=1
     do_build_dir_check=1
     do_artifacts_check=1
+    local vfio_device=""
     # Parse any command line args.
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -938,6 +943,10 @@ cmd_test() {
                 ;;
             "--no-artifacts-check")
                 do_artifacts_check=0
+                ;;
+            "--vfio-device")
+                shift
+                vfio_device="$1"
                 ;;
             "--")               { shift; break;     } ;;
             *)
@@ -1003,6 +1012,48 @@ cmd_test() {
       test_script="./tools/ab_test.py"
     fi
 
+    # Prepare VFIO device if requested
+    local vfio_env_args=()
+    if [ -n "$vfio_device" ]; then
+      local sbdf=""
+      local pci_path=""
+
+      # Check if it looks like a PCI SBDF (e.g. 0003:16:00.0)
+      if [[ "$vfio_device" =~ ^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9a-fA-F]$ ]]; then
+        sbdf="$vfio_device"
+        pci_path="/sys/bus/pci/devices/$sbdf"
+      elif [[ "$vfio_device" == /dev/* ]]; then
+        # Resolve block device to PCI SBDF
+        local block_name=$(basename "$vfio_device")
+        # For NVMe namespaces (nvmeXnY), the PCI device is on the controller (nvmeX)
+        local ctrl_name=$(echo "$block_name" | sed 's/n[0-9]*$//')
+        if [ -d "/sys/class/nvme/$ctrl_name" ]; then
+          pci_path=$(readlink -f "/sys/class/nvme/$ctrl_name/device")
+        elif [ -d "/sys/block/$block_name/device" ]; then
+          pci_path=$(readlink -f "/sys/block/$block_name/device")
+        else
+          die "Cannot resolve $vfio_device to a PCI device"
+        fi
+        sbdf=$(basename "$pci_path")
+      else
+        die "Invalid --vfio-device value: $vfio_device (expected /dev/... or PCI SBDF)"
+      fi
+
+      [ -d "$pci_path" ] || die "PCI device not found: $pci_path"
+
+      # Bind to vfio-pci if not already bound
+      local current_driver=$(basename "$(readlink -f "$pci_path/driver" 2>/dev/null)" 2>/dev/null || echo "none")
+      if [ "$current_driver" != "vfio-pci" ]; then
+        say "Binding $sbdf to vfio-pci (currently: $current_driver)..."
+        echo "$sbdf" | sudo tee "$pci_path/driver/unbind" > /dev/null 2>&1 || true
+        echo "vfio-pci" | sudo tee "$pci_path/driver_override" > /dev/null
+        echo "$sbdf" | sudo tee /sys/bus/pci/drivers/vfio-pci/bind > /dev/null
+      fi
+      say "VFIO device ready: $sbdf ($pci_path)"
+
+      vfio_env_args=(--env "FC_VFIO_PCI_SBDF=$sbdf" --env "FC_VFIO_PCI_SYSFS_PATH=$pci_path")
+    fi
+
     # Testing (running Firecracker via the jailer) needs root access,
     # in order to set-up the Firecracker jail (manipulating cgroups, net
     # namespaces, etc).
@@ -1017,6 +1068,7 @@ cmd_test() {
         --cpuset-cpus="$cpuset_cpus" \
         --cpuset-mems="$cpuset_mems" \
         --env-file env.list \
+        "${vfio_env_args[@]}" \
         -- \
         $test_script "$@"
 
