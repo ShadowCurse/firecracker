@@ -37,7 +37,10 @@ use crate::pci::PciSBDF;
 use crate::pci::bus::PciRootError;
 use crate::resources::VmResources;
 use crate::snapshot::Persist;
+use crate::vfio::{VfioDeviceBundle, VfioError, VfioKvmAndContainer};
 use crate::vmm_config::memory_hotplug::MemoryHotplugConfig;
+use crate::vmm_config::mmds::MmdsConfigError;
+use crate::vmm_config::vfio::VfioConfig;
 use crate::vstate::bus::BusError;
 use crate::vstate::interrupts::InterruptError;
 use crate::vstate::memory::GuestMemoryMmap;
@@ -49,6 +52,10 @@ pub struct PciDevices {
     pub pci_segment: Option<PciSegment>,
     /// All VirtIO PCI devices of the system
     pub virtio_devices: HashMap<(VirtioDeviceType, String), Arc<Mutex<VirtioPciDevice>>>,
+
+    pub vfio_kvm_and_container: Option<VfioKvmAndContainer>,
+    // All Vfio PCI devices
+    pub vfio_devices: Vec<Arc<Mutex<VfioDeviceBundle>>>,
 }
 
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
@@ -65,6 +72,10 @@ pub enum PciManagerError {
     VirtioPciDevice(#[from] VirtioPciDeviceError),
     /// KVM error: {0}
     Kvm(#[from] vmm_sys_util::errno::Error),
+    /// MMDS error: {0}
+    Mmds(#[from] MmdsConfigError),
+    /// Vfio error: {0}
+    Vfio(#[from] VfioError),
 }
 
 impl PciDevices {
@@ -173,6 +184,49 @@ impl PciDevices {
         let virtio_device = Arc::new(Mutex::new(virtio_device));
 
         self.attach_common(vm, device_type, id, sbdf, virtio_device, event_manager)
+    }
+
+    pub fn attach_vfio_device(
+        &mut self,
+        vm: &Arc<Vm>,
+        config: VfioConfig,
+    ) -> Result<(), PciManagerError> {
+        let first_vfio_device = self.vfio_devices.is_empty();
+
+        if first_vfio_device {
+            assert!(self.vfio_kvm_and_container.is_none());
+            let container = crate::vfio::init_vfio_container()?;
+            let kvm_device = crate::vfio::init_kvm_device_vfio(vm.as_ref())?;
+            self.vfio_kvm_and_container = Some(VfioKvmAndContainer {
+                container,
+                kvm_device,
+            });
+        }
+
+        let pci_segment = self.pci_segment.as_ref().unwrap();
+        let pci_device_bdf = pci_segment.next_device_sbdf()?;
+        debug!("VFIO: Allocating BDF: {pci_device_bdf:?} for device");
+
+        let vfio_kvm_and_container = self.vfio_kvm_and_container.as_ref().unwrap();
+
+        let vfio_device_bundle = crate::vfio::init_vfio_device(
+            &vfio_kvm_and_container,
+            vm,
+            config,
+            pci_device_bdf,
+            first_vfio_device,
+        )?;
+
+        // This is for config space
+        pci_segment
+            .pci_bus
+            .lock()
+            .expect("Poisoned lock")
+            .add_device(pci_device_bdf.device(), vfio_device_bundle.clone());
+
+        self.vfio_devices.push(vfio_device_bundle);
+
+        Ok(())
     }
 
     fn restore_pci_device<T: 'static + VirtioDevice + MutEventSubscriber + Debug>(
