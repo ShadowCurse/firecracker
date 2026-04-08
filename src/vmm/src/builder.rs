@@ -279,6 +279,14 @@ pub fn build_microvm_for_boot(
         )?;
     }
 
+    for config in vm_resources.vfio.configs.iter() {
+        device_manager
+            .pci_devices
+            // NOTE: technically, there is no reason to clone,
+            // but unfortunatelly vm_resources are not mutable.
+            .attach_vfio_device(&vm, config.clone())?;
+    }
+
     #[cfg(target_arch = "aarch64")]
     device_manager.attach_legacy_devices_aarch64(
         &vm,
