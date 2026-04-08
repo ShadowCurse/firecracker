@@ -529,6 +529,11 @@ impl VmResources {
             .pop()
             .unwrap())
     }
+
+    /// Adds a VFIO passthrough device configuration.
+    pub fn set_vfio_device(&mut self, config: VfioConfig) -> Result<(), VfioConfigError> {
+        self.vfio.add(config)
+    }
 }
 
 impl From<&VmResources> for VmmConfig {
