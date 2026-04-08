@@ -30,6 +30,7 @@ use crate::vmm_config::mmds::{MmdsConfig, MmdsConfigError};
 use crate::vmm_config::net::*;
 use crate::vmm_config::pmem::{PmemBuilder, PmemConfig, PmemConfigError};
 use crate::vmm_config::serial::SerialConfig;
+use crate::vmm_config::vfio::{VfioConfig, VfioConfigError, VfioConfigs};
 use crate::vmm_config::vsock::*;
 use crate::vstate::memory;
 use crate::vstate::memory::{GuestRegionMmap, MemoryError};
@@ -67,6 +68,8 @@ pub enum ResourcesError {
     PmemDevice(#[from] PmemConfigError),
     /// Memory hotplug config error: {0}
     MemoryHotplugConfig(#[from] MemoryHotplugConfigError),
+    /// VFIO config error: {0}
+    VfioConfig(#[from] VfioConfigError),
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
@@ -99,6 +102,8 @@ pub struct VmmConfig {
     #[serde(skip)]
     pub serial_config: Option<SerialConfig>,
     pub memory_hotplug: Option<MemoryHotplugConfig>,
+    #[serde(default)]
+    pub vfio: Vec<VfioConfig>,
 }
 
 /// A data structure that encapsulates the device configurations
@@ -135,6 +140,8 @@ pub struct VmResources {
     pub pci_enabled: bool,
     /// Where serial console output should be written to
     pub serial_out_path: Option<PathBuf>,
+    /// VFIO passthrough configuration.
+    pub vfio: VfioConfigs,
 }
 
 impl VmResources {
@@ -222,6 +229,10 @@ impl VmResources {
 
         if let Some(memory_hotplug_config) = vmm_config.memory_hotplug {
             resources.set_memory_hotplug_config(memory_hotplug_config)?;
+        }
+
+        for config in vmm_config.vfio {
+            resources.vfio.add(config)?;
         }
 
         Ok(resources)
@@ -538,6 +549,7 @@ impl From<&VmResources> for VmmConfig {
             // serial_config is marked serde(skip) so that it doesnt end up in snapshots.
             serial_config: None,
             memory_hotplug: resources.memory_hotplug.clone(),
+            vfio: resources.vfio.configs.clone(),
         }
     }
 }
@@ -652,6 +664,7 @@ mod tests {
             pci_enabled: false,
             serial_out_path: None,
             memory_hotplug: Default::default(),
+            vfio: Default::default(),
         }
     }
 
