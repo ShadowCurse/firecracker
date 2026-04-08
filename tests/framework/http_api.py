@@ -84,15 +84,15 @@ class Resource:
 
         return res
 
-    def request(self, method, path, **kwargs):
+    def request(self, method, url_path, **kwargs):
         """Make an HTTP request"""
         kwargs = {key: val for key, val in kwargs.items() if val is not None}
-        url = self._api.endpoint + path
+        url = self._api.endpoint + url_path
         try:
             res = self._api.session.request(method, url, json=kwargs)
         except Exception as e:
             if self._api.error_callback:
-                self._api.error_callback(method, path, str(e))
+                self._api.error_callback(method, url_path, str(e))
             raise
         if res.status_code != HTTPStatus.NO_CONTENT:
             json = res.json()
@@ -110,23 +110,23 @@ class Resource:
         if self._api.validator:
             if kwargs:
                 try:
-                    self._api.validator.validate_request(method, path, kwargs)
+                    self._api.validator.validate_request(method, url_path, kwargs)
                 except ValidationError as e:
                     # Re-raise with more context
                     raise ValidationError(
-                        f"Request validation failed for {method} {path}: {e.message}"
+                        f"Request validation failed for {method} {url_path}: {e.message}"
                     ) from e
 
             if res.status_code == HTTPStatus.OK:
                 try:
                     response_body = res.json()
                     self._api.validator.validate_response(
-                        method, path, 200, response_body
+                        method, url_path, 200, response_body
                     )
                 except ValidationError as e:
                     # Re-raise with more context
                     raise ValidationError(
-                        f"Response validation failed for {method} {path}: {e.message}"
+                        f"Response validation failed for {method} {url_path}: {e.message}"
                     ) from e
         return res
 
