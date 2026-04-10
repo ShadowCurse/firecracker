@@ -272,6 +272,10 @@ fn create_chosen_node(
         )?;
     }
 
+    // Prevent the kernel from reassigning PCI BAR addresses. VFIO passthrough
+    // devices have fixed BAR mappings that cannot be moved.
+    fdt.property_u32("linux,pci-probe-only", 1)?;
+
     fdt.end_node(chosen)?;
 
     Ok(())
