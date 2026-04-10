@@ -484,6 +484,48 @@
             {
                 "syscall": "mprotect",
                 "comment": "Used by memory hotplug to protect access to underlying host memory"
+            },
+            {
+                "syscall": "dup",
+                "comment": "Used by vfio-ioctls to duplicate file descriptors for VFIO device setup"
+            },
+            {
+                "syscall": "readlinkat",
+                "comment": "Used by vfio-ioctls to resolve iommu_group symlink for VFIO devices"
+            },
+            {
+                "syscall": "ioctl",
+                "comment": "Used by vfio-ioctls during VfioDevice drop to detach group from container",
+                "args": [
+                    {
+                        "index": 1,
+                        "type": "dword",
+                        "op": "eq",
+                        "val": 15209,
+                        "comment": "VFIO_GROUP_UNSET_CONTAINER"
+                    }
+                ]
+            },
+            {
+                "syscall": "ioctl",
+                "comment": "Used by vfio-ioctls during VFIO device cleanup to unmap DMA regions",
+                "args": [
+                    {
+                        "index": 1,
+                        "type": "dword",
+                        "op": "eq",
+                        "val": 15218,
+                        "comment": "VFIO_IOMMU_UNMAP_DMA"
+                    }
+                ]
+            },
+            {
+                "syscall": "pread64",
+                "comment": "Used by VFIO passthrough for reading device PCI config and BAR regions"
+            },
+            {
+                "syscall": "pwrite64",
+                "comment": "Used by VFIO passthrough for writing device PCI config and BAR regions"
             }
         ]
     },
@@ -1086,6 +1128,14 @@
                         "comment": "KVM_IRQFD"
                     }
                 ]
+            },
+            {
+                "syscall": "pread64",
+                "comment": "Used by VFIO passthrough to read device PCI config and BAR regions on vCPU MMIO/PIO exits"
+            },
+            {
+                "syscall": "pwrite64",
+                "comment": "Used by VFIO passthrough to write device PCI config and BAR regions on vCPU MMIO/PIO exits"
             }
         ]
     }
