@@ -226,7 +226,9 @@ impl<I: Read + AsRawFd + Send + Debug> SerialWrapper<EventFdTrigger, SerialEvent
         }
 
         if let Some(input) = self.input.as_mut() {
-            let mut out = vec![0u8; avail_cap];
+            // The Fifo has a maximum size of 0x40 defined as FIFO_SIZE, but this
+            // constant is not public so have to hard code it here.
+            let mut out = [0u8; 0x40];
             let count = input.read(&mut out)?;
             if count > 0 {
                 self.serial
