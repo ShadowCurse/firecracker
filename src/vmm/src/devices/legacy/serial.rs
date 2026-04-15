@@ -12,8 +12,6 @@ use std::io::{self, Read, Stdin, Write};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::{Arc, Barrier};
 
-use crate::rate_limiter::{BucketReduction, TokenBucket};
-
 use event_manager::{EventOps, Events, MutEventSubscriber};
 use libc::EFD_NONBLOCK;
 use log::{error, warn};
@@ -25,6 +23,7 @@ use vmm_sys_util::eventfd::EventFd;
 
 use crate::devices::legacy::EventFdTrigger;
 use crate::logger::{IncMetric, SharedIncMetric};
+use crate::rate_limiter::{BucketReduction, TokenBucket};
 use crate::utils::usize_to_u64;
 use crate::vstate::bus::BusDevice;
 
@@ -331,38 +330,38 @@ impl<I: Read + AsRawFd + Send + Debug> MutEventSubscriber
                     return;
                 }
             }
-        }
-
-        // We expect to receive: `EventSet::IN`, `EventSet::HANG_UP` or
-        // `EventSet::ERROR`. To process all these events we just have to
-        // read from the serial input.
-        match self.recv_bytes() {
-            Ok(count) => {
-                // Handle EOF if the event came from the input source.
-                if input_fd == event.fd() && count == 0 {
-                    unregister_source(ops, &input_fd);
-                    unregister_source(ops, &buffer_ready_fd);
-                    warn!("Detached the serial input due to peer close/error.");
-                }
-            }
-            Err(err) => {
-                match err.raw_os_error() {
-                    Some(errno) if errno == libc::ENOBUFS => {
-                        unregister_source(ops, &input_fd);
-                    }
-                    Some(errno) if errno == libc::EWOULDBLOCK => {
-                        self.handle_ewouldblock(ops);
-                    }
-                    Some(errno) if errno == libc::ENOTTY => {
-                        error!("The serial device does not have the input source attached.");
-                        unregister_source(ops, &input_fd);
-                        unregister_source(ops, &buffer_ready_fd);
-                    }
-                    Some(_) | None => {
-                        // Unknown error, detach the serial input source.
+        } else if input_fd == event.fd() {
+            // We expect to receive: `EventSet::IN`, `EventSet::HANG_UP` or
+            // `EventSet::ERROR`. To process all these events we just have to
+            // read from the serial input.
+            match self.recv_bytes() {
+                Ok(count) => {
+                    // Handle EOF if the event came from the input source.
+                    if input_fd == event.fd() && count == 0 {
                         unregister_source(ops, &input_fd);
                         unregister_source(ops, &buffer_ready_fd);
                         warn!("Detached the serial input due to peer close/error.");
+                    }
+                }
+                Err(err) => {
+                    match err.raw_os_error() {
+                        Some(errno) if errno == libc::ENOBUFS => {
+                            unregister_source(ops, &input_fd);
+                        }
+                        Some(errno) if errno == libc::EWOULDBLOCK => {
+                            self.handle_ewouldblock(ops);
+                        }
+                        Some(errno) if errno == libc::ENOTTY => {
+                            error!("The serial device does not have the input source attached.");
+                            unregister_source(ops, &input_fd);
+                            unregister_source(ops, &buffer_ready_fd);
+                        }
+                        Some(_) | None => {
+                            // Unknown error, detach the serial input source.
+                            unregister_source(ops, &input_fd);
+                            unregister_source(ops, &buffer_ready_fd);
+                            warn!("Detached the serial input due to peer close/error.");
+                        }
                     }
                 }
             }
