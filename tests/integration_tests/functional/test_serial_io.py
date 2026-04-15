@@ -57,7 +57,8 @@ def test_serial_after_snapshot(uvm_plain, microvm_factory):
     assert "/root" in res
 
 
-def test_serial_active_tx_snapshot(uvm_plain, microvm_factory):
+@pytest.mark.parametrize("i", range(100))
+def test_serial_active_tx_snapshot(uvm_plain, microvm_factory, i):
     """
     Snapshot a guest that is actively transmitting on the serial console and
     test that the transmission continues after snapshot restore.
