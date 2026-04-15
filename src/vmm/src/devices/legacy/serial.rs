@@ -195,6 +195,12 @@ pub struct SerialWrapper<T: Trigger, EV: SerialEvents, I: Read + AsRawFd + Send>
     pub input: Option<I>,
 }
 
+enum SerialRecvBytesResult {
+    NoSpace,
+    Read(usize),
+    Err(std::io::Error),
+}
+
 impl<I: Read + AsRawFd + Send + Debug> SerialWrapper<EventFdTrigger, SerialEventsWrapper, I> {
     fn handle_ewouldblock(&self, ops: &mut EventOps) {
         let buffer_ready_fd = self.buffer_ready_evt_fd();
@@ -218,27 +224,26 @@ impl<I: Read + AsRawFd + Send + Debug> SerialWrapper<EventFdTrigger, SerialEvent
         };
     }
 
-    fn recv_bytes(&mut self) -> io::Result<usize> {
-        let avail_cap = self.serial.fifo_capacity();
-        if avail_cap == 0 {
-            return Err(io::Error::from_raw_os_error(libc::ENOBUFS));
+    fn recv_bytes(&mut self) -> SerialRecvBytesResult {
+        if self.serial.fifo_capacity() == 0 {
+            return SerialRecvBytesResult::NoSpace;
         }
 
         if let Some(input) = self.input.as_mut() {
             // The Fifo has a maximum size of 0x40 defined as FIFO_SIZE, but this
             // constant is not public so have to hard code it here.
             let mut out = [0u8; 0x40];
-            let count = input.read(&mut out)?;
-            if count > 0 {
-                self.serial
-                    .raw_input(&out[..count])
-                    .map_err(|_| io::Error::from_raw_os_error(libc::ENOBUFS))?;
+            match input.read(&mut out) {
+                Ok(count) => {
+                    if self.serial.raw_input(&out[..count]).is_err() {
+                        return SerialRecvBytesResult::NoSpace;
+                    }
+                    return SerialRecvBytesResult::Read(count);
+                }
+                Err(e) => return SerialRecvBytesResult::Err(e),
             }
-
-            return Ok(count);
         }
-
-        Err(io::Error::from_raw_os_error(libc::ENOTTY))
+        SerialRecvBytesResult::Err(io::Error::from_raw_os_error(libc::ENOTTY))
     }
 
     #[inline]
@@ -335,7 +340,8 @@ impl<I: Read + AsRawFd + Send + Debug> MutEventSubscriber
             // `EventSet::ERROR`. To process all these events we just have to
             // read from the serial input.
             match self.recv_bytes() {
-                Ok(count) => {
+                SerialRecvBytesResult::NoSpace => {}
+                SerialRecvBytesResult::Read(count) => {
                     // Handle EOF if the event came from the input source.
                     if input_fd == event.fd() && count == 0 {
                         unregister_source(ops, &input_fd);
@@ -343,11 +349,8 @@ impl<I: Read + AsRawFd + Send + Debug> MutEventSubscriber
                         warn!("Detached the serial input due to peer close/error.");
                     }
                 }
-                Err(err) => {
+                SerialRecvBytesResult::Err(err) => {
                     match err.raw_os_error() {
-                        Some(errno) if errno == libc::ENOBUFS => {
-                            unregister_source(ops, &input_fd);
-                        }
                         Some(errno) if errno == libc::EWOULDBLOCK => {
                             self.handle_ewouldblock(ops);
                         }
