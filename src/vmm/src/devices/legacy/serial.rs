@@ -225,7 +225,8 @@ impl<I: Read + AsRawFd + Send + Debug> SerialWrapper<EventFdTrigger, SerialEvent
     }
 
     fn recv_bytes(&mut self) -> SerialRecvBytesResult {
-        if self.serial.fifo_capacity() == 0 {
+        let capacity = self.serial.fifo_capacity();
+        if capacity == 0 {
             return SerialRecvBytesResult::NoSpace;
         }
 
@@ -233,7 +234,7 @@ impl<I: Read + AsRawFd + Send + Debug> SerialWrapper<EventFdTrigger, SerialEvent
             // The Fifo has a maximum size of 0x40 defined as FIFO_SIZE, but this
             // constant is not public so have to hard code it here.
             let mut out = [0u8; 0x40];
-            match input.read(&mut out) {
+            match input.read(&mut out[..capacity]) {
                 Ok(count) => {
                     if self.serial.raw_input(&out[..count]).is_err() {
                         return SerialRecvBytesResult::NoSpace;
