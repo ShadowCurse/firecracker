@@ -449,6 +449,21 @@ impl Vmm {
         }
     }
 
+    /// Check if the VM can be snapshotted
+    pub fn can_snapshot(&self) -> bool {
+        let mut has_vhost_user_devices = false;
+        self.device_manager
+            .for_each_virtio_device(|device_type, device| match device_type {
+                VirtioDeviceType::Block => {
+                    if let Some(b) = device.as_any().downcast_ref::<Block>() {
+                        has_vhost_user_devices |= b.is_vhost_user();
+                    }
+                }
+                _ => {}
+            });
+        return !has_vhost_user_devices;
+    }
+
     /// Starts the microVM vcpus.
     ///
     /// # Errors
@@ -555,7 +570,12 @@ impl Vmm {
 
     /// Saves the state of a paused Microvm.
     pub fn save_state(&mut self, vm_info: &VmInfo) -> Result<MicrovmState, MicrovmStateError> {
-        use self::MicrovmStateError::SaveVmState;
+        if !self.can_snapshot() {
+            return Err(MicrovmStateError::NotAllowed(
+                "Devices without snapshot support are present".into(),
+            ));
+        }
+
         // We need to save device state before saving KVM state.
         // Some devices, (at the time of writing this comment block device with async engine)
         // might modify the VirtIO transport and send an interrupt to the guest. If we save KVM
@@ -567,13 +587,17 @@ impl Vmm {
         let vm_state = {
             #[cfg(target_arch = "x86_64")]
             {
-                self.vm.save_state().map_err(SaveVmState)?
+                self.vm
+                    .save_state()
+                    .map_err(MicrovmStateError::SaveVmState)?
             }
             #[cfg(target_arch = "aarch64")]
             {
                 let mpidrs = construct_kvm_mpidrs(&vcpu_states);
 
-                self.vm.save_state(&mpidrs).map_err(SaveVmState)?
+                self.vm
+                    .save_state(&mpidrs)
+                    .map_err(MicrovmStateError::SaveVmState)?
             }
         };
 
