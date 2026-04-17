@@ -81,6 +81,8 @@ pub enum StartMicrovmError {
     CreateLegacyDevice(device_manager::legacy::LegacyDeviceError),
     /// Error enabling PCIe support: {0}
     EnablePciDevices(#[from] PciManagerError),
+    /// Cannot start a VM with VFIO devices attached, but PCI disabled
+    VfioDoesNotWorkWithoutPci,
     /// Error enabling pvtime on vcpu: {0}
     #[cfg(target_arch = "aarch64")]
     EnablePVTime(crate::arch::VcpuArchError),
@@ -205,7 +207,11 @@ pub fn build_microvm_for_boot(
     if vm_resources.pci_enabled {
         device_manager.enable_pci(&vm)?;
     } else {
-        boot_cmdline.insert("pci", "off")?;
+        if vm_resources.vfio.configs.is_empty() {
+            boot_cmdline.insert("pci", "off")?;
+        } else {
+            return Err(StartMicrovmError::VfioDoesNotWorkWithoutPci);
+        }
     }
 
     // The boot timer device needs to be the first device attached in order
