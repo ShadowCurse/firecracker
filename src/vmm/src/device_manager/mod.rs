@@ -47,7 +47,7 @@ use crate::devices::virtio::transport::pci::device::CAPABILITY_BAR_SIZE;
 use crate::devices::virtio::vsock::{VsockError, VsockUnixBackendError};
 use crate::logger::{error, info, warn};
 use crate::rate_limiter::TokenBucket;
-use crate::resources::VmResources;
+use crate::resources::{ResourcesError, VmResources};
 use crate::rpc_interface::VmmActionError;
 use crate::snapshot::Persist;
 use crate::utils::open_file_nonblock;
@@ -486,6 +486,20 @@ impl DeviceManager {
         }
 
         let dev_type = config.device_type();
+        match dev_type {
+            VirtioDeviceType::Balloon if !self.pci_devices.vfio_devices.is_empty() => {
+                return Err(VmmActionError::IncompatibleDeviceConfiguration(
+                    ResourcesError::VfioWithBalloon,
+                ));
+            }
+            VirtioDeviceType::Mem if !self.pci_devices.vfio_devices.is_empty() => {
+                return Err(VmmActionError::IncompatibleDeviceConfiguration(
+                    ResourcesError::VfioWithMemHotplug,
+                ));
+            }
+            _ => {}
+        }
+
         let dev_id = config.device_id().to_string();
 
         if self
@@ -767,9 +781,9 @@ impl<'a> Persist<'a> for DeviceManager {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use super::*;
     use vmm_sys_util::tempfile::TempFile;
 
+    use super::*;
     use crate::builder::tests::{
         CustomBlockConfig, default_kernel_cmdline, default_vmm, insert_block_devices,
     };
