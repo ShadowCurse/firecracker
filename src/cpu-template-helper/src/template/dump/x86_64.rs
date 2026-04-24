@@ -7,8 +7,9 @@ use vmm::MSR_RANGE;
 use vmm::arch::x86_64::generated::msr_index::*;
 use vmm::arch::x86_64::msr::MsrRange;
 use vmm::cpu_config::templates::{CpuConfiguration, CustomCpuTemplate, RegisterValueFilter};
+use vmm::cpu_config::x86_64::cpuid::Cpuid;
 use vmm::cpu_config::x86_64::cpuid::common::get_vendor_id_from_host;
-use vmm::cpu_config::x86_64::cpuid::{Cpuid, VENDOR_ID_AMD};
+use vmm::cpu_config::x86_64::cpuid::VENDOR_ID_AMD;
 use vmm::cpu_config::x86_64::custom_cpu_template::{
     CpuidLeafModifier, CpuidRegister, CpuidRegisterModifier, RegisterModifier,
 };
@@ -27,7 +28,6 @@ pub fn config_to_template(cpu_config: &CpuConfiguration) -> CustomCpuTemplate {
 fn cpuid_to_modifiers(cpuid: &Cpuid) -> Vec<CpuidLeafModifier> {
     cpuid
         .inner()
-        .iter()
         .map(|(key, entry)| {
             cpuid_leaf_modifier!(
                 key.leaf,
@@ -122,44 +122,40 @@ mod tests {
     use std::collections::BTreeMap;
 
     use vmm::cpu_config::x86_64::cpuid::{
-        CpuidEntry, CpuidKey, CpuidRegisters, IntelCpuid, KvmCpuidFlags,
+        KvmCpuidFlags,
     };
 
     use super::*;
 
     fn build_sample_cpuid() -> Cpuid {
-        Cpuid::Intel(IntelCpuid(BTreeMap::from([
-            (
-                CpuidKey {
-                    leaf: 0x0,
-                    subleaf: 0x0,
+        // Build a Cpuid with Intel vendor leaf + one sample leaf using the insert API.
+        let cpuid = Cpuid::try_from(
+            kvm_bindings::CpuId::from_entries(&[
+                kvm_bindings::kvm_cpuid_entry2 {
+                    function: 0x0,
+                    index: 0x0,
+                    flags: KvmCpuidFlags::EMPTY.0,
+                    eax: 0xffff_ffff,
+                    ebx: 0x756E6547,
+                    ecx: 0x6C65746E,
+                    edx: 0x49656E69,
+                    ..Default::default()
                 },
-                CpuidEntry {
-                    flags: KvmCpuidFlags::EMPTY,
-                    result: CpuidRegisters {
-                        eax: 0xffff_ffff,
-                        ebx: 0x0000_ffff,
-                        ecx: 0xffff_0000,
-                        edx: 0x0000_0000,
-                    },
+                kvm_bindings::kvm_cpuid_entry2 {
+                    function: 0x1,
+                    index: 0x1,
+                    flags: KvmCpuidFlags::SIGNIFICANT_INDEX.0,
+                    eax: 0xaaaa_aaaa,
+                    ebx: 0xaaaa_5555,
+                    ecx: 0x5555_aaaa,
+                    edx: 0x5555_5555,
+                    ..Default::default()
                 },
-            ),
-            (
-                CpuidKey {
-                    leaf: 0x1,
-                    subleaf: 0x1,
-                },
-                CpuidEntry {
-                    flags: KvmCpuidFlags::SIGNIFICANT_INDEX,
-                    result: CpuidRegisters {
-                        eax: 0xaaaa_aaaa,
-                        ebx: 0xaaaa_5555,
-                        ecx: 0x5555_aaaa,
-                        edx: 0x5555_5555,
-                    },
-                },
-            ),
-        ])))
+            ])
+            .unwrap(),
+        )
+        .unwrap();
+        cpuid
     }
 
     fn build_expected_cpuid_modifiers() -> Vec<CpuidLeafModifier> {
@@ -170,9 +166,9 @@ mod tests {
                 KvmCpuidFlags::EMPTY,
                 vec![
                     cpuid_reg_modifier!(CpuidRegister::Eax, 0xffff_ffff),
-                    cpuid_reg_modifier!(CpuidRegister::Ebx, 0x0000_ffff),
-                    cpuid_reg_modifier!(CpuidRegister::Ecx, 0xffff_0000),
-                    cpuid_reg_modifier!(CpuidRegister::Edx, 0x0000_0000),
+                    cpuid_reg_modifier!(CpuidRegister::Ebx, 0x756E6547),
+                    cpuid_reg_modifier!(CpuidRegister::Ecx, 0x6C65746E),
+                    cpuid_reg_modifier!(CpuidRegister::Edx, 0x49656E69),
                 ]
             ),
             cpuid_leaf_modifier!(

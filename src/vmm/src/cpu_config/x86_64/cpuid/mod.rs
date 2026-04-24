@@ -32,7 +32,6 @@
 
 //! Utility for configuring the CPUID (CPU identification) for the guest microVM.
 
-use std::convert::TryFrom;
 use std::mem::{size_of, transmute};
 
 /// cpuid utility functions.
@@ -181,7 +180,6 @@ pub trait CpuidTrait {
                 brand_string[15],
             ]);
         }
-
         // 0x80000003
         {
             let leaf: &mut CpuidEntry = self
@@ -212,7 +210,6 @@ pub trait CpuidTrait {
                 brand_string[31],
             ]);
         }
-
         // 0x80000004
         {
             let leaf: &mut CpuidEntry = self
@@ -243,7 +240,6 @@ pub trait CpuidTrait {
                 brand_string[47],
             ]);
         }
-
         Ok(())
     }
 }
@@ -305,74 +301,134 @@ pub enum CpuidTryFromKvmCpuid {
     UnsupportedVendor([u8; 12]),
 }
 
-/// CPUID information
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Cpuid {
-    /// Intel CPUID specific information.
-    Intel(IntelCpuid),
-    /// AMD CPUID specific information.
-    Amd(AmdCpuid),
+/// CPU vendor type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CpuVendor {
+    /// Intel CPU.
+    Intel,
+    /// AMD CPU.
+    Amd,
 }
 
+/// CPUID information backed by a flat `kvm_bindings::CpuId` array.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Cpuid {
+    /// The underlying KVM CPUID data.
+    kvm_cpuid: kvm_bindings::CpuId,
+    /// The detected CPU vendor.
+    vendor: CpuVendor,
+}
+
+impl Eq for Cpuid {}
+
 impl Cpuid {
-    /// Returns `Some(&mut IntelCpuid)` if `Self == Self::Intel(_)` else returns `None`.
+    /// Returns the CPU vendor.
     #[inline]
     #[must_use]
-    pub fn intel_mut(&mut self) -> Option<&mut IntelCpuid> {
-        match self {
-            Self::Intel(intel) => Some(intel),
-            Self::Amd(_) => None,
-        }
+    pub fn vendor(&self) -> CpuVendor {
+        self.vendor
     }
 
-    /// Returns `Some(&IntelCpuid)` if `Self == Self::Intel(_)` else returns `None`.
+    /// Returns a reference to the underlying `kvm_bindings::CpuId`.
+    #[inline]
+    #[must_use]
+    pub fn as_kvm_cpuid(&self) -> &kvm_bindings::CpuId {
+        &self.kvm_cpuid
+    }
+
+    /// Consumes self and returns the underlying `kvm_bindings::CpuId`.
+    #[inline]
+    #[must_use]
+    pub fn into_kvm_cpuid(self) -> kvm_bindings::CpuId {
+        self.kvm_cpuid
+    }
+
+    /// Returns a typed Intel view, if this is Intel CPUID data.
     #[inline]
     #[must_use]
     pub fn intel(&self) -> Option<&IntelCpuid> {
-        match self {
-            Self::Intel(intel) => Some(intel),
-            Self::Amd(_) => None,
+        match self.vendor {
+            CpuVendor::Intel => {
+                // JUSTIFICATION: There is no safe alternative.
+                // SAFETY: `IntelCpuid` is `#[repr(transparent)]` over `kvm_bindings::CpuId`,
+                // so the cast preserves layout and validity.
+                Some(unsafe { &*(std::ptr::from_ref(&self.kvm_cpuid).cast::<IntelCpuid>()) })
+            }
+            CpuVendor::Amd => None,
         }
     }
 
-    /// Returns `Some(&AmdCpuid)` if `Self == Self::Amd(_)` else returns `None`.
+    /// Returns a typed mutable Intel view, if this is Intel CPUID data.
+    #[inline]
+    #[must_use]
+    pub fn intel_mut(&mut self) -> Option<&mut IntelCpuid> {
+        match self.vendor {
+            CpuVendor::Intel => {
+                // JUSTIFICATION: There is no safe alternative.
+                // SAFETY: `IntelCpuid` is `#[repr(transparent)]` over `kvm_bindings::CpuId`,
+                // so the cast preserves layout and validity.
+                Some(unsafe {
+                    &mut *(std::ptr::from_mut(&mut self.kvm_cpuid).cast::<IntelCpuid>())
+                })
+            }
+            CpuVendor::Amd => None,
+        }
+    }
+
+    /// Returns a typed AMD view, if this is AMD CPUID data.
     #[inline]
     #[must_use]
     pub fn amd(&self) -> Option<&AmdCpuid> {
-        match self {
-            Self::Intel(_) => None,
-            Self::Amd(amd) => Some(amd),
+        match self.vendor {
+            CpuVendor::Intel => None,
+            CpuVendor::Amd => {
+                // JUSTIFICATION: There is no safe alternative.
+                // SAFETY: `AmdCpuid` is `#[repr(transparent)]` over `kvm_bindings::CpuId`,
+                // so the cast preserves layout and validity.
+                Some(unsafe { &*(std::ptr::from_ref(&self.kvm_cpuid).cast::<AmdCpuid>()) })
+            }
         }
     }
 
-    /// Returns `Some(&mut AmdCpuid)` if `Self == Self::Amd(_)` else returns `None`.
+    /// Returns a typed mutable AMD view, if this is AMD CPUID data.
     #[inline]
     #[must_use]
     pub fn amd_mut(&mut self) -> Option<&mut AmdCpuid> {
-        match self {
-            Self::Intel(_) => None,
-            Self::Amd(amd) => Some(amd),
+        match self.vendor {
+            CpuVendor::Intel => None,
+            CpuVendor::Amd => {
+                // JUSTIFICATION: There is no safe alternative.
+                // SAFETY: `AmdCpuid` is `#[repr(transparent)]` over `kvm_bindings::CpuId`,
+                // so the cast preserves layout and validity.
+                Some(unsafe { &mut *(std::ptr::from_mut(&mut self.kvm_cpuid).cast::<AmdCpuid>()) })
+            }
         }
     }
 
-    /// Returns imumutable reference to inner BTreeMap<CpuidKey, CpuidEntry>.
+    /// Returns an iterator over `(CpuidKey, &CpuidEntry)` pairs.
+    ///
+    /// This provides the same interface as iterating over the old `BTreeMap`-based inner
+    /// representation, but backed by the flat KVM array.
     #[inline]
-    #[must_use]
-    pub fn inner(&self) -> &std::collections::BTreeMap<CpuidKey, CpuidEntry> {
-        match self {
-            Self::Intel(intel_cpuid) => &intel_cpuid.0,
-            Self::Amd(amd_cpuid) => &amd_cpuid.0,
+    pub fn inner(&self) -> CpuidIter<'_> {
+        CpuidIter {
+            slice: self.kvm_cpuid.as_slice(),
+            pos: 0,
         }
     }
 
-    /// Returns mutable reference to inner BTreeMap<CpuidKey, CpuidEntry>.
-    #[inline]
-    #[must_use]
-    pub fn inner_mut(&mut self) -> &mut std::collections::BTreeMap<CpuidKey, CpuidEntry> {
-        match self {
-            Self::Intel(intel_cpuid) => &mut intel_cpuid.0,
-            Self::Amd(amd_cpuid) => &mut amd_cpuid.0,
+    /// Insert or update a CPUID entry.
+    pub fn insert(&mut self, key: CpuidKey, entry: CpuidEntry) {
+        cpuid_insert(&mut self.kvm_cpuid, key, entry);
+    }
+
+    /// Get or insert a CPUID entry, returning a mutable reference.
+    pub fn get_or_insert(&mut self, key: CpuidKey, default: CpuidEntry) -> &mut CpuidEntry {
+        // Check if entry exists
+        if self.get(&key).is_none() {
+            self.insert(key.clone(), default);
         }
+        self.get_mut(&key).expect("just inserted")
     }
 }
 
@@ -380,19 +436,13 @@ impl CpuidTrait for Cpuid {
     /// Gets a given sub-leaf.
     #[inline]
     fn get(&self, key: &CpuidKey) -> Option<&CpuidEntry> {
-        match self {
-            Self::Intel(intel_cpuid) => intel_cpuid.get(key),
-            Self::Amd(amd_cpuid) => amd_cpuid.get(key),
-        }
+        self.kvm_cpuid.get(key)
     }
 
     /// Gets a given sub-leaf.
     #[inline]
     fn get_mut(&mut self, key: &CpuidKey) -> Option<&mut CpuidEntry> {
-        match self {
-            Self::Intel(intel_cpuid) => intel_cpuid.get_mut(key),
-            Self::Amd(amd_cpuid) => amd_cpuid.get_mut(key),
-        }
+        self.kvm_cpuid.get_mut(key)
     }
 }
 
@@ -405,22 +455,71 @@ impl TryFrom<kvm_bindings::CpuId> for Cpuid {
             .vendor_id()
             .ok_or(CpuidTryFromKvmCpuid::MissingLeaf0)?;
 
-        match std::str::from_utf8(&vendor_id) {
-            Ok(VENDOR_ID_INTEL_STR) => Ok(Cpuid::Intel(IntelCpuid::from(kvm_cpuid))),
-            Ok(VENDOR_ID_AMD_STR) => Ok(Cpuid::Amd(AmdCpuid::from(kvm_cpuid))),
-            _ => Err(CpuidTryFromKvmCpuid::UnsupportedVendor(vendor_id)),
-        }
+        let vendor = match std::str::from_utf8(&vendor_id) {
+            Ok(VENDOR_ID_INTEL_STR) => CpuVendor::Intel,
+            Ok(VENDOR_ID_AMD_STR) => CpuVendor::Amd,
+            _ => return Err(CpuidTryFromKvmCpuid::UnsupportedVendor(vendor_id)),
+        };
+
+        Ok(Cpuid { kvm_cpuid, vendor })
     }
 }
 
 impl TryFrom<Cpuid> for kvm_bindings::CpuId {
-    type Error = vmm_sys_util::fam::Error;
+    type Error = std::convert::Infallible;
 
     fn try_from(cpuid: Cpuid) -> Result<Self, Self::Error> {
-        let entries = cpuid
-            .inner()
-            .iter()
-            .map(|(key, entry)| kvm_bindings::kvm_cpuid_entry2 {
+        Ok(cpuid.kvm_cpuid)
+    }
+}
+
+/// Iterator over `(CpuidKey, &CpuidEntry)` pairs from a flat `kvm_bindings::CpuId`.
+#[derive(Debug)]
+pub struct CpuidIter<'a> {
+    slice: &'a [kvm_bindings::kvm_cpuid_entry2],
+    pos: usize,
+}
+
+impl<'a> Iterator for CpuidIter<'a> {
+    type Item = (CpuidKey, &'a CpuidEntry);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.pos >= self.slice.len() {
+            return None;
+        }
+        let entry = &self.slice[self.pos];
+        self.pos += 1;
+        let key = CpuidKey {
+            leaf: entry.function,
+            subleaf: entry.index,
+        };
+        // SAFETY: Same transmute as in CpuidTrait for kvm_bindings::CpuId.
+        let cpuid_entry = unsafe {
+            let arr: &[u8; size_of::<kvm_bindings::kvm_cpuid_entry2>()] = transmute(entry);
+            let arr2: &[u8; size_of::<CpuidEntry>()] = arr[8..28].try_into().unwrap();
+            transmute::<_, &CpuidEntry>(arr2)
+        };
+        Some((key, cpuid_entry))
+    }
+}
+
+/// Helper to insert or update a CPUID entry in a `kvm_bindings::CpuId`.
+fn cpuid_insert(kvm_cpuid: &mut kvm_bindings::CpuId, key: CpuidKey, entry: CpuidEntry) {
+    // Try to find and update existing entry
+    if let Some(existing) = kvm_cpuid
+        .as_mut_slice()
+        .iter_mut()
+        .find(|e| e.function == key.leaf && e.index == key.subleaf)
+    {
+        existing.flags = entry.flags.0;
+        existing.eax = entry.result.eax;
+        existing.ebx = entry.result.ebx;
+        existing.ecx = entry.result.ecx;
+        existing.edx = entry.result.edx;
+    } else {
+        // Push new entry
+        kvm_cpuid
+            .push(kvm_bindings::kvm_cpuid_entry2 {
                 function: key.leaf,
                 index: key.subleaf,
                 flags: entry.flags.0,
@@ -430,9 +529,7 @@ impl TryFrom<Cpuid> for kvm_bindings::CpuId {
                 edx: entry.result.edx,
                 ..Default::default()
             })
-            .collect::<Vec<_>>();
-
-        kvm_bindings::CpuId::from_entries(&entries)
+            .expect("CPUID entry count exceeded KVM_MAX_CPUID_ENTRIES");
     }
 }
 
@@ -481,6 +578,7 @@ impl std::cmp::Ord for CpuidKey {
 #[derive(
     Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash,
 )]
+#[repr(transparent)]
 pub struct KvmCpuidFlags(pub u32);
 impl KvmCpuidFlags {
     /// Zero.
@@ -583,28 +681,7 @@ impl From<core::arch::x86_64::CpuidResult> for CpuidRegisters {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
     use super::*;
-
-    fn build_intel_leaf0_for_cpuid() -> (CpuidKey, CpuidEntry) {
-        (
-            CpuidKey {
-                leaf: 0x0,
-                subleaf: 0x0,
-            },
-            CpuidEntry {
-                flags: KvmCpuidFlags::EMPTY,
-                result: CpuidRegisters {
-                    eax: 0x1,
-                    // GenuineIntel
-                    ebx: 0x756E6547,
-                    ecx: 0x6C65746E,
-                    edx: 0x49656E69,
-                },
-            },
-        )
-    }
 
     fn build_intel_leaf0_for_kvmcpuid() -> kvm_bindings::kvm_cpuid_entry2 {
         kvm_bindings::kvm_cpuid_entry2 {
@@ -618,25 +695,6 @@ mod tests {
             edx: 0x49656E69,
             ..Default::default()
         }
-    }
-
-    fn build_amd_leaf0_for_cpuid() -> (CpuidKey, CpuidEntry) {
-        (
-            CpuidKey {
-                leaf: 0x0,
-                subleaf: 0x0,
-            },
-            CpuidEntry {
-                flags: KvmCpuidFlags::EMPTY,
-                result: CpuidRegisters {
-                    eax: 0x1,
-                    // AuthenticAMD
-                    ebx: 0x68747541,
-                    ecx: 0x444D4163,
-                    edx: 0x69746E65,
-                },
-            },
-        )
     }
 
     fn build_amd_leaf0_for_kvmcpuid() -> kvm_bindings::kvm_cpuid_entry2 {
@@ -653,24 +711,6 @@ mod tests {
         }
     }
 
-    fn build_sample_leaf_for_cpuid() -> (CpuidKey, CpuidEntry) {
-        (
-            CpuidKey {
-                leaf: 0x1,
-                subleaf: 0x2,
-            },
-            CpuidEntry {
-                flags: KvmCpuidFlags::SIGNIFICANT_INDEX,
-                result: CpuidRegisters {
-                    eax: 0x3,
-                    ebx: 0x4,
-                    ecx: 0x5,
-                    edx: 0x6,
-                },
-            },
-        )
-    }
-
     fn build_sample_leaf_for_kvmcpuid() -> kvm_bindings::kvm_cpuid_entry2 {
         kvm_bindings::kvm_cpuid_entry2 {
             function: 0x1,
@@ -684,26 +724,12 @@ mod tests {
         }
     }
 
-    fn build_sample_intel_cpuid() -> Cpuid {
-        Cpuid::Intel(IntelCpuid(BTreeMap::from([
-            build_intel_leaf0_for_cpuid(),
-            build_sample_leaf_for_cpuid(),
-        ])))
-    }
-
     fn build_sample_intel_kvmcpuid() -> kvm_bindings::CpuId {
         kvm_bindings::CpuId::from_entries(&[
             build_intel_leaf0_for_kvmcpuid(),
             build_sample_leaf_for_kvmcpuid(),
         ])
         .unwrap()
-    }
-
-    fn build_sample_amd_cpuid() -> Cpuid {
-        Cpuid::Amd(AmdCpuid(BTreeMap::from([
-            build_amd_leaf0_for_cpuid(),
-            build_sample_leaf_for_cpuid(),
-        ])))
     }
 
     fn build_sample_amd_kvmcpuid() -> kvm_bindings::CpuId {
@@ -716,7 +742,7 @@ mod tests {
 
     #[test]
     fn get() {
-        let cpuid = build_sample_intel_cpuid();
+        let cpuid = Cpuid::try_from(build_sample_intel_kvmcpuid()).unwrap();
         assert_eq!(
             cpuid.get(&CpuidKey {
                 leaf: 0x8888,
@@ -736,7 +762,7 @@ mod tests {
 
     #[test]
     fn get_mut() {
-        let mut cpuid = build_sample_intel_cpuid();
+        let mut cpuid = Cpuid::try_from(build_sample_intel_kvmcpuid()).unwrap();
         assert_eq!(
             cpuid.get_mut(&CpuidKey {
                 leaf: 0x888,
@@ -758,22 +784,24 @@ mod tests {
     fn test_kvmcpuid_to_cpuid() {
         let kvm_cpuid = build_sample_intel_kvmcpuid();
         let cpuid = Cpuid::try_from(kvm_cpuid).unwrap();
-        assert_eq!(cpuid, build_sample_intel_cpuid());
+        assert_eq!(cpuid.vendor(), CpuVendor::Intel);
 
         let kvm_cpuid = build_sample_amd_kvmcpuid();
         let cpuid = Cpuid::try_from(kvm_cpuid).unwrap();
-        assert_eq!(cpuid, build_sample_amd_cpuid());
+        assert_eq!(cpuid.vendor(), CpuVendor::Amd);
     }
 
     #[test]
     fn test_cpuid_to_kvmcpuid() {
-        let cpuid = build_sample_intel_cpuid();
+        let orig = build_sample_intel_kvmcpuid();
+        let cpuid = Cpuid::try_from(orig.clone()).unwrap();
         let kvm_cpuid = kvm_bindings::CpuId::try_from(cpuid).unwrap();
-        assert_eq!(kvm_cpuid, build_sample_intel_kvmcpuid());
+        assert_eq!(kvm_cpuid, orig);
 
-        let cpuid = build_sample_amd_cpuid();
+        let orig = build_sample_amd_kvmcpuid();
+        let cpuid = Cpuid::try_from(orig.clone()).unwrap();
         let kvm_cpuid = kvm_bindings::CpuId::try_from(cpuid).unwrap();
-        assert_eq!(kvm_cpuid, build_sample_amd_kvmcpuid());
+        assert_eq!(kvm_cpuid, orig);
     }
 
     #[test]
@@ -784,5 +812,73 @@ mod tests {
                 .unwrap();
         let cpuid = Cpuid::try_from(kvm_cpuid);
         assert_eq!(cpuid, Err(CpuidTryFromKvmCpuid::UnsupportedVendor([0; 12])));
+    }
+
+    #[test]
+    fn test_inner_iterator() {
+        let cpuid = Cpuid::try_from(build_sample_intel_kvmcpuid()).unwrap();
+        let entries: Vec<_> = cpuid.inner().collect();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(
+            entries[0].0,
+            CpuidKey {
+                leaf: 0x0,
+                subleaf: 0x0
+            }
+        );
+        assert_eq!(
+            entries[1].0,
+            CpuidKey {
+                leaf: 0x1,
+                subleaf: 0x2
+            }
+        );
+    }
+
+    #[test]
+    fn test_insert_new_and_update() {
+        let mut cpuid = Cpuid::try_from(build_sample_intel_kvmcpuid()).unwrap();
+        let orig_len = cpuid.inner().count();
+
+        // Update existing
+        cpuid.insert(
+            CpuidKey {
+                leaf: 0x1,
+                subleaf: 0x2,
+            },
+            CpuidEntry {
+                flags: KvmCpuidFlags::EMPTY,
+                result: CpuidRegisters {
+                    eax: 99,
+                    ebx: 0,
+                    ecx: 0,
+                    edx: 0,
+                },
+            },
+        );
+        assert_eq!(cpuid.inner().count(), orig_len);
+        assert_eq!(
+            cpuid.get(&CpuidKey::subleaf(0x1, 0x2)).unwrap().result.eax,
+            99
+        );
+
+        // Insert new
+        cpuid.insert(
+            CpuidKey {
+                leaf: 0xFF,
+                subleaf: 0x0,
+            },
+            CpuidEntry {
+                flags: KvmCpuidFlags::EMPTY,
+                result: CpuidRegisters {
+                    eax: 42,
+                    ebx: 0,
+                    ecx: 0,
+                    edx: 0,
+                },
+            },
+        );
+        assert_eq!(cpuid.inner().count(), orig_len + 1);
+        assert_eq!(cpuid.get(&CpuidKey::leaf(0xFF)).unwrap().result.eax, 42);
     }
 }

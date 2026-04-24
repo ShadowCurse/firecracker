@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #![allow(clippy::similar_names, clippy::unreadable_literal)]
 
-use super::{CpuidEntry, CpuidKey, CpuidRegisters, CpuidTrait, KvmCpuidFlags};
+use crate::cpu_config::x86_64::cpuid::cpuid_insert;
+
+use super::{CpuidEntry, CpuidKey, CpuidTrait};
 
 /// CPUID normalize implementation.
 mod normalize;
@@ -11,12 +13,17 @@ pub use normalize::{
     ExtendedApicIdError, ExtendedCacheTopologyError, FeatureEntryError, NormalizeCpuidError,
 };
 
-/// A structure matching the AMD CPUID specification as described in
-/// [AMD64 Architecture Programmer’s Manual Volume 3: General-Purpose and System Instructions](https://www.amd.com/system/files/TechDocs/24594.pdf)
+/// A typed view over a `kvm_bindings::CpuId` that is known to contain AMD CPUID data.
+///
+/// Matches the AMD CPUID specification as described in
+/// [AMD64 Architecture Programmer's Manual Volume 3: General-Purpose and System Instructions](https://www.amd.com/system/files/TechDocs/24594.pdf)
 /// .
 #[allow(clippy::module_name_repetitions)]
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub struct AmdCpuid(pub std::collections::BTreeMap<CpuidKey, CpuidEntry>);
+#[derive(Debug, Clone, PartialEq)]
+#[repr(transparent)]
+pub struct AmdCpuid(pub kvm_bindings::CpuId);
+
+impl Eq for AmdCpuid {}
 
 impl CpuidTrait for AmdCpuid {
     /// Gets a given sub-leaf.
@@ -32,59 +39,9 @@ impl CpuidTrait for AmdCpuid {
     }
 }
 
-impl From<kvm_bindings::CpuId> for AmdCpuid {
-    #[inline]
-    fn from(kvm_cpuid: kvm_bindings::CpuId) -> Self {
-        let map = kvm_cpuid
-            .as_slice()
-            .iter()
-            .map(|entry| {
-                (
-                    CpuidKey {
-                        leaf: entry.function,
-                        subleaf: entry.index,
-                    },
-                    CpuidEntry {
-                        flags: KvmCpuidFlags(entry.flags),
-                        result: CpuidRegisters {
-                            eax: entry.eax,
-                            ebx: entry.ebx,
-                            ecx: entry.ecx,
-                            edx: entry.edx,
-                        },
-                    },
-                )
-            })
-            .collect();
-        Self(map)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn get() {
-        let cpuid = AmdCpuid(std::collections::BTreeMap::new());
-        assert_eq!(
-            cpuid.get(&CpuidKey {
-                leaf: 0,
-                subleaf: 0
-            }),
-            None
-        );
-    }
-
-    #[test]
-    fn get_mut() {
-        let mut cpuid = AmdCpuid(std::collections::BTreeMap::new());
-        assert_eq!(
-            cpuid.get_mut(&CpuidKey {
-                leaf: 0,
-                subleaf: 0
-            }),
-            None
-        );
+impl AmdCpuid {
+    /// Insert or update a CPUID entry.
+    pub fn insert(&mut self, key: CpuidKey, entry: CpuidEntry) {
+        cpuid_insert(&mut self.0, key, entry);
     }
 }
