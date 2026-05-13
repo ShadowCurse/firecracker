@@ -165,6 +165,7 @@ use crate::vmm_config::machine_config::MachineConfig;
 use crate::vmm_config::memory_hotplug::MemoryHotplugConfig;
 use crate::vmm_config::mmds::MmdsConfig;
 use crate::vmm_config::net::NetworkInterfaceConfig;
+use crate::vmm_config::vfio::VfioConfig;
 use crate::vmm_config::vsock::VsockDeviceConfig;
 use crate::vstate::memory::{GuestMemory, GuestMemoryMmap, GuestMemoryRegion};
 use crate::vstate::vcpu::VcpuState;
@@ -852,6 +853,13 @@ impl Vmm {
     ) -> Result<(), VmmActionError> {
         self.device_manager
             .hotplug_device(self.vm.clone(), config, event_manager)
+    }
+
+    /// Attaches a VFIO device after VM start
+    #[inline]
+    pub fn hotplug_device_vfio(&mut self, config: VfioConfig) -> Result<(), VmmActionError> {
+        self.device_manager
+            .hotplug_device_vfio(self.vm.clone(), config)
     }
 
     /// Detaches a device after VM start
