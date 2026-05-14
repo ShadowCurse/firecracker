@@ -872,6 +872,13 @@ impl Vmm {
         self.device_manager
             .hot_unplug_device(self.vm.clone(), device_id, event_manager)
     }
+
+    /// Detaches a device after VM start
+    #[inline]
+    pub fn hot_unplug_vfio_device(&mut self, id: String) -> Result<(), VmmActionError> {
+        self.device_manager
+            .hot_unplug_vfio_device(&self.vm, id)
+    }
 }
 
 /// Process the content of the MPIDR_EL1 register in order to be able to pass it to KVM

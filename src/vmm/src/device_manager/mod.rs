@@ -653,6 +653,19 @@ impl DeviceManager {
 
         Ok(())
     }
+
+    /// Detaches a device after VM start
+    pub fn hot_unplug_vfio_device(
+        &mut self,
+        vm: &Vm,
+        id: String,
+    ) -> Result<(), VmmActionError> {
+        if !self.is_pci_enabled() {
+            return Err(VmmActionError::PciNotEnabled);
+        }
+        self.pci_devices.detach_vfio_device(vm, id)?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
