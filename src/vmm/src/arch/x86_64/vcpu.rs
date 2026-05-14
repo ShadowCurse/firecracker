@@ -5,7 +5,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the THIRD-PARTY file.
 
-use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -120,8 +119,8 @@ pub struct SetTscError(#[from] kvm_ioctls::Error);
 /// Error type for [`KvmVcpu::configure`].
 #[derive(Debug, thiserror::Error, displaydoc::Display, Eq, PartialEq)]
 pub enum KvmVcpuConfigureError {
-    /// Failed to convert `Cpuid` to `kvm_bindings::CpuId`: {0}
-    ConvertCpuidType(#[from] vmm_sys_util::fam::Error),
+    /// Failed to operate on `vmm_sys_util::fam::FamStructWrapper`: {0}
+    Fam(#[from] vmm_sys_util::fam::Error),
     /// Failed to apply modifications to CPUID: {0}
     NormalizeCpuidError(#[from] cpuid::NormalizeCpuidError),
     /// Failed to set CPUID: {0}
@@ -224,12 +223,13 @@ impl KvmVcpu {
 
         // Clone MSR entries that are modified by CPU template from `VcpuConfig`.
         let mut msrs = vcpu_config.cpu_config.msrs.clone();
-        self.msrs_to_save.extend(msrs.keys());
+        self.msrs_to_save
+            .extend(msrs.as_slice().iter().map(|entry| entry.index));
 
         // Apply MSR modification to comply the linux boot protocol.
-        create_boot_msr_entries().into_iter().for_each(|entry| {
-            msrs.insert(entry.index, entry.data);
-        });
+        for entry in create_boot_msr_entries() {
+            msrs.push(entry)?;
+        }
 
         // TODO - Add/amend MSRs for vCPUs based on cpu_config
         // By this point the Guest CPUID is established. Some CPU features require MSRs
@@ -249,16 +249,7 @@ impl KvmVcpu {
         // save is `architectural MSRs` + `MSRs inferred through CPUID` + `other
         // MSRs defined by the template`
 
-        let kvm_msrs = msrs
-            .into_iter()
-            .map(|entry| kvm_bindings::kvm_msr_entry {
-                index: entry.0,
-                data: entry.1,
-                ..Default::default()
-            })
-            .collect::<Vec<_>>();
-
-        crate::arch::x86_64::msr::set_msrs(&self.fd, &kvm_msrs)?;
+        crate::arch::x86_64::msr::set_msrs(&self.fd, &msrs)?;
         crate::arch::x86_64::regs::setup_regs(&self.fd, kernel_entry_point)?;
         crate::arch::x86_64::regs::setup_fpu(&self.fd)?;
         crate::arch::x86_64::regs::setup_sregs(guest_mem, &self.fd, kernel_entry_point.protocol)?;
@@ -536,19 +527,22 @@ impl KvmVcpu {
     /// # Errors
     ///
     /// * When `KvmVcpu::get_msr_chunks()` returns errors.
+    /// * When [`kvm_bindings::Msrs::new`] returns errors.
     pub fn get_msrs(
         &self,
         msr_index_iter: impl ExactSizeIterator<Item = u32>,
-    ) -> Result<BTreeMap<u32, u64>, KvmVcpuError> {
-        let mut msrs = BTreeMap::new();
-        self.get_msr_chunks(msr_index_iter)?
-            .iter()
-            .for_each(|msr_chunk| {
-                msr_chunk.as_slice().iter().for_each(|msr| {
-                    msrs.insert(msr.index, msr.data);
-                });
-            });
-        Ok(msrs)
+    ) -> Result<Msrs, KvmVcpuError> {
+        let chunks = self.get_msr_chunks(msr_index_iter)?;
+        let total: usize = chunks.iter().map(|c| c.as_slice().len()).sum();
+        let mut combined = Msrs::new(total).map_err(KvmVcpuError::Fam)?;
+        let dst = combined.as_mut_slice();
+        let mut offset = 0;
+        for chunk in &chunks {
+            let src = chunk.as_slice();
+            dst[offset..offset + src.len()].copy_from_slice(src);
+            offset += src.len();
+        }
+        Ok(combined)
     }
 
     /// Save the KVM internal state.
@@ -1014,7 +1008,7 @@ mod tests {
             smt: false,
             cpu_config: CpuConfiguration {
                 cpuid: Cpuid::try_from(vm.kvm().supported_cpuid.clone()).unwrap(),
-                msrs: BTreeMap::new(),
+                msrs: Msrs::new(0).unwrap(),
             },
         };
         vcpu.configure(
@@ -1082,7 +1076,7 @@ mod tests {
             smt: false,
             cpu_config: CpuConfiguration {
                 cpuid: Cpuid::try_from(vm.kvm().supported_cpuid.clone()).unwrap(),
-                msrs: BTreeMap::new(),
+                msrs: Msrs::new(0).unwrap(),
             },
         };
 

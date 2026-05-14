@@ -428,16 +428,15 @@ pub fn create_boot_msr_entries() -> Vec<kvm_msr_entry> {
 /// # Arguments
 ///
 /// * `vcpu` - Structure for the VCPU that holds the VCPU's fd.
+/// * `msrs` - The MSRs to write to KVM.
 ///
 /// # Errors
 ///
 /// When:
-/// - Failed to create [`vmm_sys_util::fam::FamStructWrapper`] for MSRs.
 /// - [`kvm_ioctls::ioctls::vcpu::VcpuFd::set_msrs`] errors.
 /// - [`kvm_ioctls::ioctls::vcpu::VcpuFd::set_msrs`] fails to write all given MSRs entries.
-pub fn set_msrs(vcpu: &VcpuFd, msr_entries: &[kvm_msr_entry]) -> Result<(), MsrError> {
-    let msrs = Msrs::from_entries(msr_entries)?;
-    vcpu.set_msrs(&msrs)
+pub fn set_msrs(vcpu: &VcpuFd, msrs: &Msrs) -> Result<(), MsrError> {
+    vcpu.set_msrs(msrs)
         .map_err(MsrError::SetMsrs)
         .and_then(|msrs_written| {
             if msrs_written == msrs.as_fam_struct_ref().nmsrs as usize {
@@ -484,7 +483,8 @@ mod tests {
     fn test_setup_msrs() {
         let vcpu = create_vcpu();
         let msr_boot_entries = create_boot_msr_entries();
-        set_msrs(&vcpu, &msr_boot_entries).unwrap();
+        let msrs = Msrs::from_entries(&msr_boot_entries).unwrap();
+        set_msrs(&vcpu, &msrs).unwrap();
 
         // This test will check against the last MSR entry configured (the tenth one).
         // See create_msr_entries() for details.
@@ -512,12 +512,13 @@ mod tests {
         // Test `set_msrs()` with a valid MSR entry. It should succeed, as IA32_TSC MSR is listed
         // in supported MSRs as of now.
         let vcpu = create_vcpu();
-        let msr_entries = vec![kvm_msr_entry {
+        let msrs = Msrs::from_entries(&[kvm_msr_entry {
             index: MSR_IA32_TSC,
             data: 0,
             ..Default::default()
-        }];
-        set_msrs(&vcpu, &msr_entries).unwrap();
+        }])
+        .unwrap();
+        set_msrs(&vcpu, &msrs).unwrap();
     }
 
     #[test]
@@ -526,12 +527,13 @@ mod tests {
         // listed in supported MSRs as of now. If hardware vendor adds this MSR index and KVM
         // supports this MSR, we need to change the index as needed.
         let vcpu = create_vcpu();
-        let msr_entries = vec![kvm_msr_entry {
+        let msrs = Msrs::from_entries(&[kvm_msr_entry {
             index: 2,
             ..Default::default()
-        }];
+        }])
+        .unwrap();
         assert_eq!(
-            set_msrs(&vcpu, &msr_entries).unwrap_err(),
+            set_msrs(&vcpu, &msrs).unwrap_err(),
             MsrError::SetMsrsIncomplete
         );
     }
