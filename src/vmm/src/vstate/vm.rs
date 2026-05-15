@@ -1084,9 +1084,10 @@ pub(crate) mod tests {
 
             let gsi = resource_allocator.allocate_gsi_msi(1).unwrap()[0];
             let range = resource_allocator
-                .allocate_32bit_mmio_memory(1024, 1024, AllocPolicy::FirstMatch)
+                .mmio32_memory
+                .allocate(1024, 1024, AllocPolicy::FirstMatch)
                 .unwrap();
-            (gsi, range)
+            (gsi, range.start())
         };
 
         let state = vm.save_state().unwrap();
@@ -1100,11 +1101,13 @@ pub(crate) mod tests {
         assert_eq!(gsi + 1, gsi_new);
 
         resource_allocator
-            .allocate_32bit_mmio_memory(1024, 1024, AllocPolicy::ExactMatch(range))
+            .mmio32_memory
+            .allocate(1024, 1024, AllocPolicy::ExactMatch(range))
             .unwrap_err();
         let range_new = resource_allocator
-            .allocate_32bit_mmio_memory(1024, 1024, AllocPolicy::FirstMatch)
+            .mmio32_memory
+            .allocate(1024, 1024, AllocPolicy::FirstMatch)
             .unwrap();
-        assert_eq!(range + 1024, range_new);
+        assert_eq!(range + 1024, range_new.start());
     }
 }
