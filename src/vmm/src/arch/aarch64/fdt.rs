@@ -6,6 +6,7 @@
 // found in the THIRD-PARTY file.
 
 use std::ffi::CString;
+use aws_lc_rs::rand;
 use std::fmt::Debug;
 
 use vm_fdt::{Error as VmFdtError, FdtWriter, FdtWriterNode};
@@ -275,6 +276,14 @@ fn create_chosen_node(
     // Prevent the kernel from reassigning PCI BAR addresses.
     // https://elixir.bootlin.com/linux/v6.19.8/source/drivers/pci/of.c#L255
     fdt.property_u32("linux,pci-probe-only", 1)?;
+
+    // Prodive initial rng for the guest
+    // It will be used if:
+    // - `CONFIG_RANDOM_TRUST_BOOTLOADER=y` is set
+    // - `random.trust_bootloader=on` kernel argument provided
+    let mut rng_seed = [0u8; 64];
+    rand::fill(&mut rng_seed).expect("could not generate rng-seed");
+    fdt.property("rng-seed", &rng_seed)?;
 
     fdt.end_node(chosen)?;
 
