@@ -10,6 +10,9 @@ and this project adheres to
 
 ### Added
 
+- [#xxxx](https://github.com/firecracker-microvm/firecracker/pull/xxxx): Added
+  missing `cfg_fail` metric to `virtio-balloon` and `virtio-mem` devices.
+
 ### Changed
 
 ### Deprecated
