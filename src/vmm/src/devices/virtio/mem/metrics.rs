@@ -41,6 +41,8 @@ pub fn flush_metrics<S: Serializer>(serializer: S) -> Result<S::Ok, S::Error> {
 pub(super) struct VirtioMemDeviceMetrics {
     /// Number of device activation failures
     pub activate_fails: SharedIncMetric,
+    /// Number of times when interacting with the space config failed.
+    pub cfg_fails: SharedIncMetric,
     /// Number of queue event handling failures
     pub queue_event_fails: SharedIncMetric,
     /// Number of queue events handled
@@ -82,6 +84,7 @@ impl VirtioMemDeviceMetrics {
     const fn new() -> Self {
         Self {
             activate_fails: SharedIncMetric::new(),
+            cfg_fails: SharedIncMetric::new(),
             queue_event_fails: SharedIncMetric::new(),
             queue_event_count: SharedIncMetric::new(),
             plug_agg: LatencyAggregateMetrics::new(),

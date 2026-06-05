@@ -321,6 +321,7 @@ def validate_fc_metrics(metrics):
         ],
         "memory_hotplug": [
             "activate_fails",
+            "cfg_fails",
             "queue_event_fails",
             "queue_event_count",
             "plug_count",
