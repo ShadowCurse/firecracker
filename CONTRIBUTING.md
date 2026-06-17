@@ -30,12 +30,17 @@ you want to merge your changes to Firecracker:
    [contribution quality standards](#contribution-quality-standards)
 1. [Create a pull request](https://help.github.com/articles/creating-a-pull-request-from-a-fork/)
    against the main branch of the Firecracker repository.
-1. Add two reviewers to your pull request (a maintainer will do that for you if
-   you're new). Work with your reviewers to address any comments and obtain a
-   minimum of 2 approvals from [maintainers](MAINTAINERS.md). To update your
-   pull request, amend existing commits whenever applicable. Then force-push the
-   new changes to your pull request branch. Address all review comments you
-   receive.
+1. Work with your reviewers to address any comments and obtain a minimum of 2
+   approvals from [maintainers](MAINTAINERS.md).
+   1. When you update your PR to accommodate the feedback, amend existing
+      commits instead of adding new ones. Remember the
+      [commits](#contribution-quality-standards) have their requirements.
+   1. Force-push the new changes to your pull request branch.
+   1. Remember that the PR can only be merged when all review comments are
+      addressed and resolved.
+   1. Don't hesitate to ask questions and engage in conversations if you are
+      unsure on how to address the feedback or implement some part of the change
+      you want.
 1. Once the pull request is approved, one of the maintainers will merge it.
 
 ## Request for Comments
@@ -56,9 +61,75 @@ If you just want to receive feedback for a contribution proposal, open an “RFC
 
 ## Contribution Quality Standards
 
-Most quality and style standards are enforced automatically during integration
-testing. For ease of use you can set up a git pre-commit hook by running the
-following in the Firecracker root directory:
+### PR description and Commits
+
+Your contribution needs to meet the following standards:
+
+- Document your pull request. Include the reasoning behind each change, and the
+  testing done.
+
+- Separate each **logical change** into its own commit.
+
+- Add a descriptive message for each commit. Follow
+  [commit message best practices](https://github.com/erlang/otp/wiki/writing-good-commit-messages)
+  and [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/)
+  rules or look at the linux kernel messaging style.
+
+  - Explain *why* the change is made, not *how* the code works (the diff already
+    shows the how). Capture the reasoning and context that would otherwise be
+    lost, since the commit message is what shows up in `git blame` later.
+
+  - A good commit message may look like
+
+    ```
+    A descriptive title of 72 characters or fewer
+
+    A concise description where each line is 72 characters or fewer.
+
+    Signed-off-by: <A full name> <A email>
+    Co-authored-by: <B full name> <B email>
+    ```
+
+  - More
+    [concrete example](https://github.com/firecracker-microvm/firecracker/commit/14108ca14ef160043aa518d1450b749311b3f0bb)
+
+- Add a [Developer Certificate of Origin](#developer-certificate-of-origin) to
+  each commit.
+
+- Each commit must pass all unit & code style tests, and the full pull request
+  must pass all integration tests.
+
+  - See [code formatting](#code-formatting) section for code style checks.
+  - See [tests/README.md](tests/README.md) for information on how to run tests.
+
+- Unit test coverage should increase the overall project code coverage until it
+  is very tricky to do so.
+
+- For each user visible change, include an integration test.
+
+### Code formatting
+
+Most code style standards are enforced automatically by code formatter we use.
+
+- Rust - `rust fmt`
+- Python - `black` and `pylint`
+- Markdown - `mdformat`
+
+These formatters are run automatically during integration testing in our CI. You
+can invoke all of them locally by running:
+
+```
+./tools/devtool fmt
+```
+
+or run the validation step with:
+
+```
+./tools/devtool checkstyle
+```
+
+For ease of use you can set up a git pre-commit hook by running the following in
+the Firecracker root directory:
 
 ```
 cat >> .git/hooks/pre-commit << EOF
@@ -69,99 +140,114 @@ EOF
 
 The first command will automatically lint your Rust, markdown and python changes
 when running `git commit`, as well as running any other checks our CI validates
-as part of its 'Style' step. Most reported violations can be automatically fixed
-using `./tools/devtool fmt`. The second command will then check that the code
+as part of its 'Style' step. The second command will then check that the code
 correctly compiles on all supported architectures, and that it passes Rust
 clippy rules defined for the project.
 
-Your contribution needs to meet the following standards:
+### Rust style
 
-- Separate each **logical change** into its own commit.
+#### General rules
 
-- Each commit must pass all unit & code style tests, and the full pull request
-  must pass all integration tests. See [tests/README.md](tests/README.md) for
-  information on how to run tests.
+- Remember that you write code for people to read and understand. Prefer
+  readability over fancy language features.
 
-- Unit test coverage must _increase_ the overall project code coverage.
+- Don't introduce unnecessary abstractions. It is easier to factor out some
+  common logic later rather than to try to fit new use-case into already
+  existing abstraction.
 
-- Include integration tests for any new functionality in your pull request.
+- If possible validate all input from user or guest before proceeding: this
+  allows the code that follows the validation to use asserts more freely.
 
-- Document all your public functions.
+- Put limits on loops operating on untrusted data, if meaningful limits exist.
+  Bounding the work done per request keeps a single malicious or buggy input
+  from monopolizing a thread.
 
-- Add a descriptive message for each commit. Follow
-  [commit message best practices](https://github.com/erlang/otp/wiki/writing-good-commit-messages).
+- Use correct integer width types instead of using integer conversions if
+  possible. Remember that widening is always safe, but narrowing is not.
 
-- A good commit message may look like
+- Return `Result` from a function if the error is a result of a:
+
+  - user invalid input/request
+  - guest invalid action/request
+  - system failure (syscall error etc.)
+
+- Assert by default in the rest of the cases: use assert!/unwrap/expect with
+  reasonable comments, panic strings. Possibly add a comment explaining why the
+  assertion is valid.
+
+#### `unsafe`
+
+Don't use `unsafe` until absolutely necessary. If `unsafe` is required, it must
+be accompanied by a comment detailing the **Safety** of the change as per
+`clippy::undocumented_unsafe_blocks`. This comment must list all invariants of the
+called function, and explain why they are upheld. If relevant, it must also
+prove that undefined behavior is not possible.
+
+Example:
+https://github.com/firecracker-microvm/firecracker/blob/main/src/vmm/src/devices/virtio/iov_deque.rs#L118
+
+#### Errors
+
+There are 3 main entities with which Firecracker interacts:
+
+- Host Kernel
+- User
+- Guest Kernel
+
+All of the interaction points with these entities are potential points of
+failure. In Firecracker we prefer to handle these failure points gracefully. In
+other words, we prefer to return errors and propagate them up the call stack,
+making them visible to the requesting API user (`User` or `Guest OS`).
+
+The example API call flow with the error propagation:
+
+```
+User -> Add block device -> Firecracker -> Try open a backing file -> Host Kernel -> No such file
+        Response  <-----------------------------------------------------------------------------|
+```
+
+This philosophy means we use `Result<... , ...>` types extensively across the
+codebase. There are some rules when it comes to its usage:
+
+- Don't redefine the `Result` type. Some libraries and even the standard library
+  sometimes redefine `Result<..., ...>` like this:
 
   ```
-  A descriptive title of 72 characters or fewer
-
-  A concise description where each line is 72 characters or fewer.
-
-  Signed-off-by: <A full name> <A email>
-  Co-authored-by: <B full name> <B email>
+  pub type Result<T> = result::Result<T, Error>;
   ```
 
-- **Usage of `unsafe` is heavily discouraged**. If `unsafe` is required, it
-  should be accompanied by a comment detailing its...
+  We find this pattern counter intuitive as it introduces additional indirection
+  jump needed to understand function definition.
 
-  - Justification, potentially including quantifiable reasons why safe
-    alternatives were not used (e.g. via a benchmark showing a valuable[^1]
-    performance improvements).
-  - Safety, as per
-    [`clippy::undocumented_unsafe_blocks`](https://rust-lang.github.io/rust-clippy/master/#undocumented_unsafe_blocks).
-    This comment must list all invariants of the called function, and explain
-    why there are upheld. If relevant, it must also prove that
-    [undefined behavior](https://doc.rust-lang.org/reference/behavior-considered-undefined.html)
-    is not possible.
+- Don't create unnecessary error types/enums. Sometimes the best way to deal
+  with errors is to not have them. Some failures can be handled in place where
+  they occur and do not require to be propagated up the call stack. Example:
+  https://github.com/firecracker-microvm/firecracker/blob/main/src/vmm/src/arch/aarch64/vcpu.rs#L51
 
-  E.g.
+#### Asserts
 
-  ```rust
-  // Test creating a resource.
-  // JUSTIFICATION: This cannot be accomplished without unsafe as
-  // `external_function()` returns `RawFd`. An alternative here still uses
-  // unsafe e.g. `drop(unsafe { OwnedFd::from_raw_fd(external_function()) });`.
-  // SAFETY: `external_function()` returns a valid file descriptor.
-  unsafe {
-      libc::close(external_function());
-  }
-  ```
+Asserts are not a way of error handling, but a way of error prevention. They are
+sanity checks placed in code, ensuring the correctness of assumptions the code
+is operating with. The usage of asserts is allowed everywhere, but in general
+they are most useful in the code paths that do not interact with host
+kernel/user or guest kernel inputs. Rules for assert usage:
 
-- Avoid using `Option::unwrap`/`Result::unwrap`. Prefer propagating errors
-  instead of aborting execution, or using `Option::expect`/`Result::except` if
-  no alternative exists. Leave a comment explaining why the code will not panic
-  in practice. Often, `unwrap`s are used because a previous check ensures they
-  are safe, e.g.
+- Assert the invariants a function is operating with. Example:
+  https://github.com/firecracker-microvm/firecracker/blob/main/src/vmm/src/pci/configuration.rs#L94
+- Use asserts as sanity checks if needed. Sometimes it is worth adding an assert
+  on an obviously true statement as a stronger guarantee of correctness.
+- Assert one condition at a time. Don't `assert!(a && b)` as it will be hard to
+  understand which condition failed. The `set_bar_64` example above follows this
+  rule: each invariant is a separate `assert!`.
 
-  ```rs
-  let my_value: u32 = ...;
-  if my_value <= u16::MAX {
-      Ok(my_value.try_into::<u16>().unwrap())
-  } else {
-      Err(Error::Overflow)
-  }
-  ```
+#### Converting Error code into Assert code
 
-  These can often be rewritten using `.map`/`.map_err` or `match`/`if let`
-  constructs such as
-
-  ```rs
-  my_value.try_into::<u16>()
-      .map_err(|_| Error::Overflow)
-  ```
-
-  See also
-  [this PR](https://github.com/firecracker-microvm/firecracker/pull/3557) for a
-  lot of examples.
-
-- Document your pull requests. Include the reasoning behind each change, and the
-  testing done.
-
-- Acknowledge Firecracker's [Apache 2.0 license](LICENSE) and certify that no
-  part of your contribution contravenes this license by signing off on all your
-  commits with `git -s`. Ensure that every file in your pull request has a
-  header referring to the repository license file.
+Firecracker holds very strict security and correctness guarantees. But as all
+things, they can be improved over time. Since usage of assertions increases the
+risk of the program stopping unexpectedly, there is a higher pressure on
+developers to ensure the code is correct and does not cause the program to
+crash. As a result, assertions are one of the tools we can utilize to improve
+the security and correctness of Firecracker.
 
 ## Developer Certificate of Origin
 
@@ -223,7 +309,4 @@ if your `user.name` and `user.email` are set in your git config, you can use
 `-s` or `--signoff` to add the `Signed-off-by` line to the end of the commit
 message automatically.
 
-Forgot to add DCO to a commit? Amend it with `git commit --amend -s`.
-
-[^1]: Performance improvements in non-hot paths are unlikely to be considered
-    valuable.
+**Note**: Forgot to add DCO to a commit? Amend it with `git commit --amend -s`.
