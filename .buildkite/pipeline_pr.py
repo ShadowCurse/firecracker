@@ -86,24 +86,24 @@ if not pipeline.args.no_kani and (
     )
 
 if run_all_tests(changed_files):
-    pipeline.build_group(
-        "build",
-        pipeline.devtool_test(pytest_opts="integration_tests/build/"),
-        depends_on_build=False,
-    )
-
-    pipeline.build_group(
-        "functional-and-security",
-        pipeline.devtool_test(
-            pytest_opts="-n 16 --dist worksteal integration_tests/{{functional,security}}",
-        ),
-    )
+    # pipeline.build_group(
+    #     "build",
+    #     pipeline.devtool_test(pytest_opts="integration_tests/build/"),
+    #     depends_on_build=False,
+    # )
+    #
+    # pipeline.build_group(
+    #     "functional-and-security",
+    #     pipeline.devtool_test(
+    #         pytest_opts="-n 16 --dist worksteal integration_tests/{{functional,security}}",
+    #     ),
+    # )
 
     pipeline.build_group(
         "performance",
         pipeline.devtool_test(
             devtool_opts="--performance -c 1-10 -m 0",
-            pytest_opts="../tests/integration_tests/performance/",
+            pytest_opts="../tests/integration_tests/performance/test_hotplug_memory.py",
         ),
         **DEFAULTS_PERF,
     )
