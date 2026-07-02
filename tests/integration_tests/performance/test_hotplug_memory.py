@@ -254,16 +254,13 @@ def check_hotunplug(uvm, requested_size_mib):
         assert rss_after < rss_before, "RSS didn't decrease"
 
 
-# TODO: remove this once the hotplug latency on 5.10 hosts is fixed
-@pytest.mark.skipif(
-    platform.machine() == "x86_64" and global_props.host_linux_version_tpl == (5, 10),
-    reason="GET /hotplug/memory intermittently exceeds the duration threshold on x86_64 5.10 hosts",
-)
 def test_virtio_mem_hotplug_hotunplug(uvm_any_memhp):
     """
     Check that memory can be hotplugged into the VM.
     """
     uvm = uvm_any_memhp
+    # TODO: remove this once the hotplug latency on 5.10 hosts is fixed
+    uvm.time_api_requests = False
     check_device_detected(uvm)
 
     check_hotplug(uvm, 1024)
@@ -463,11 +460,6 @@ def timed_memory_hotplug(uvm, size, metrics, metric_prefix, fc_metric_name):
     )
 
 
-# TODO: remove this once the hotplug latency on 5.10 hosts is fixed
-@pytest.mark.skipif(
-    platform.machine() == "x86_64" and global_props.host_linux_version_tpl == (5, 10),
-    reason="GET /hotplug/memory intermittently exceeds the duration threshold on x86_64 5.10 hosts",
-)
 @pytest.mark.nonci
 @pytest.mark.parametrize(
     "hotplug_size",
@@ -495,6 +487,8 @@ def test_memory_hotplug_latency(
             "block_size_mib": 2,
         }
         uvm = microvm_factory.build(guest_kernel, rootfs, pci=True)
+        # TODO: remove this once the hotplug latency on 5.10 hosts is fixed
+        uvm.time_api_requests = False
         uvm = uvm_booted_memhp(uvm, None, None, False, config, None, None, None)
 
         if i == 0:
