@@ -27,7 +27,7 @@ use crate::devices::virtio::block::CacheType;
 use crate::devices::virtio::block::virtio::metrics::{BlockDeviceMetrics, BlockMetricsPerDevice};
 use crate::devices::virtio::device::{ActiveState, DeviceState, VirtioDevice, VirtioDeviceType};
 use crate::devices::virtio::generated::virtio_blk::{
-    VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_RO, VIRTIO_BLK_ID_BYTES,
+    VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_RO, VIRTIO_BLK_F_TOPOLOGY, VIRTIO_BLK_ID_BYTES
 };
 use crate::devices::virtio::generated::virtio_config::VIRTIO_F_VERSION_1;
 use crate::devices::virtio::generated::virtio_ring::VIRTIO_RING_F_EVENT_IDX;
@@ -161,8 +161,26 @@ impl DiskProperties {
 
 #[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]
 #[repr(C)]
+struct virtio_blk_topology {
+    // # of logical blocks per physical block (log2)
+    physical_block_exp: u8,
+    // offset of first aligned logical block
+    alignment_offset: u8,
+    // suggested minimum I/O size in blocks
+    min_io_size: u16,
+    // optimal (suggested maximum) I/O size in blocks
+    opt_io_size: u16,
+}
+
+#[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]
+#[repr(C)]
 pub struct ConfigSpace {
     pub capacity: u64,
+    pub size_max: u32,
+    pub seg_max: u32,
+    pub geometry: u32,
+    pub blk_size: u32,
+    pub topology: virtio_blk_topology,
 }
 
 // SAFETY: `ConfigSpace` contains only PODs in `repr(C)` or `repr(transparent)`, without padding.
@@ -297,7 +315,7 @@ impl VirtioBlock {
             .map_err(VirtioBlockError::RateLimiter)?
             .unwrap_or_default();
 
-        let mut avail_features = (1u64 << VIRTIO_F_VERSION_1) | (1u64 << VIRTIO_RING_F_EVENT_IDX);
+        let mut avail_features = (1u64 << VIRTIO_F_VERSION_1) | (1u64 << VIRTIO_RING_F_EVENT_IDX) | (1u64 << VIRTIO_BLK_F_TOPOLOGY);
 
         if config.cache_type == CacheType::Writeback {
             avail_features |= 1u64 << VIRTIO_BLK_F_FLUSH;
@@ -311,9 +329,11 @@ impl VirtioBlock {
 
         let queues = BLOCK_QUEUE_SIZES.iter().map(|&s| Queue::new(s)).collect();
 
-        let config_space = ConfigSpace {
+        let mut config_space = ConfigSpace {
             capacity: disk_properties.nsectors.to_le(),
+            ..Default::default()
         };
+        config_space.topology.opt_io_size = 1;
 
         Ok(VirtioBlock {
             avail_features,
