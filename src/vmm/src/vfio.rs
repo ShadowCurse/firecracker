@@ -252,6 +252,23 @@ pub struct VfioRegisterMask {
     pub value: u32,
 }
 
+// TODO check if this is the first ever cap, even though it must never happen
+// Only for NVIDIA GPUs
+// const NVIDIA_PTP_CAP_OFFSET: u8 = 0xc8;
+const NVIDIA_PTP_CAP_OFFSET: u8 = 0xf8;
+
+use zerocopy::Immutable;
+#[derive(IntoBytes, Immutable)]
+#[repr(C, align(4))]
+struct NvidiaPtpCap {
+    cap_id: u8,
+    next_ptr: u8,
+    cap_length: u8,
+    signature_bit_low: u8,
+    signature_bit_high: u16,
+    approval_params: u16,
+}
+
 /// The VFIO device information
 pub struct VfioDevice {
     /// Configuration with which the device was created
@@ -268,6 +285,8 @@ pub struct VfioDevice {
     pub msix_state: VfioMsixState,
     /// Masks for configuration space registers
     pub masks: Vec<VfioRegisterMask>,
+    /// Last legacy pci cap register
+    pub last_cap_reg_idx: u8,
     /// Vm
     pub vm: Arc<KvmVm>,
 }
@@ -502,6 +521,20 @@ impl PciDevice for VfioDevice {
                 "[{}] PciDevice::read_config_register ignoring read to the ROM BAR",
                 self.config.id
             );
+        } else if reg_idx == self.last_cap_reg_idx as u16 {
+            self.device.region_read(
+                VFIO_PCI_CONFIG_REGION_INDEX,
+                result.as_mut_bytes(),
+                config_offset,
+            );
+            result &= 0xffff00ff;
+            result |= (NVIDIA_PTP_CAP_OFFSET as u32) << 8;
+        } else if reg_idx == NVIDIA_PTP_CAP_OFFSET as u16 / 4 {
+            // this is a constant since this cap must be the last in the chain
+            result = 0x50_u32 << 24 | 0x08_u32 << 16 | 0_u32 << 8 | 0x09_u32;
+        } else if reg_idx == (NVIDIA_PTP_CAP_OFFSET as u16 / 4) + 1 {
+            // hardcode clique to 0 for now
+            result = 0x5032_u32;
         } else {
             self.device.region_read(
                 VFIO_PCI_CONFIG_REGION_INDEX,
@@ -529,7 +562,7 @@ impl PciDevice for VfioDevice {
 #[allow(clippy::type_complexity)]
 fn vfio_device_get_pci_capabilities(
     config_space: &[u32; 1024],
-) -> (Option<(MsixCap, u8)>, Vec<VfioRegisterMask>) {
+) -> (Option<(MsixCap, u8)>, Vec<VfioRegisterMask>, u8) {
     fn config_space_read_bytes(config_space: &[u32; 1024], offset: u32, bytes: &mut [u8]) {
         let reg_idx = offset / 4;
         let in_reg_offset = offset % 4;
@@ -547,6 +580,7 @@ fn vfio_device_get_pci_capabilities(
 
     let mut msix_cap_and_register = None;
     let mut has_pci_express_cap = false;
+    let mut last_cap_offset: u8 = 0;
     // The legacy region with PCI capis is 256 bytes long and
     // split into 4 byte registers.
     const LOOP_UPPER_BOUND: u32 = 256 / 4;
@@ -564,6 +598,7 @@ fn vfio_device_get_pci_capabilities(
         next_cap_offset &= 0xfc;
 
         let current_cap_offset = next_cap_offset;
+        last_cap_offset = next_cap_offset;
 
         // PCIe spec revision 6.0: 7.5.3.1 PCI Express Capability List Register
         // |      2 bytes    |     1 byte    |          1 byte         |
@@ -765,7 +800,7 @@ fn vfio_device_get_pci_capabilities(
             }
         }
     }
-    (msix_cap_and_register, masks)
+    (msix_cap_and_register, masks, last_cap_offset)
 }
 
 /// Internal type storing BAR value and size obtained from the device
@@ -1373,6 +1408,7 @@ fn vfio_prepare_device(
         VfioBarMappings,
         VfioMsixState,
         Vec<VfioRegisterMask>,
+        u8,
     ),
     VfioError,
 > {
@@ -1396,7 +1432,7 @@ fn vfio_prepare_device(
         (*config_space).as_mut_bytes(),
         0,
     );
-    let (msix_cap_and_register, masks) = vfio_device_get_pci_capabilities(&config_space);
+    let (msix_cap_and_register, masks, last_cap_offset) = vfio_device_get_pci_capabilities(&config_space);
 
     // Only devices with MSI-X cap and irqs are supported
     let Some((msix_cap, msix_register)) = msix_cap_and_register else {
@@ -1467,7 +1503,7 @@ fn vfio_prepare_device(
         bar_hole_infos,
         config: msix_config,
     };
-    Ok((device, bars, bar_mappings, msix_state, masks))
+    Ok((device, bars, bar_mappings, msix_state, masks, last_cap_offset / 4))
 }
 
 /// This will open a VFIO device, attach it's group both to the KVM VFIO device and to the VFIO
@@ -1486,7 +1522,7 @@ fn vfio_init_device(
         config.sbdf.function()
     );
     debug!("Opening device at path: {}", sysfs_path);
-    let (device, bars, bar_mappings, msix_state, masks) =
+    let (device, bars, bar_mappings, msix_state, masks, last_cap_reg_idx) =
         vfio_prepare_device(container, vm, Path::new(&sysfs_path), sbdf)?;
 
     let vfio_device = Arc::new(Mutex::new(VfioDevice {
@@ -1498,6 +1534,7 @@ fn vfio_init_device(
         msix_state,
         masks,
         vm: vm.clone(),
+        last_cap_reg_idx,
     }));
 
     for hole in vfio_device.lock().unwrap().msix_state.bar_hole_infos.iter() {
