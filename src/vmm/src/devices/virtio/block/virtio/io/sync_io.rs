@@ -2,9 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::fs::File;
-use std::io::{Seek, SeekFrom, Write};
+use std::io;
+use std::os::unix::io::AsRawFd;
 
-use vm_memory::{GuestMemoryBackend, GuestMemoryError, ReadVolatile, WriteVolatile};
+use vm_memory::bitmap::Bitmap;
+use vm_memory::{GuestMemoryBackend, GuestMemoryError};
 
 use crate::vstate::memory::{GuestAddress, GuestMemoryMmap};
 
@@ -18,6 +20,8 @@ pub enum SyncIoError {
     SyncAll(std::io::Error),
     /// Transfer: {0}
     Transfer(GuestMemoryError),
+    /// Read/write: {0}
+    Io(std::io::Error),
 }
 
 #[derive(Debug)]
@@ -44,41 +48,81 @@ impl SyncFileEngine {
     }
 
     pub fn read(
-        &mut self,
+        &self,
         offset: u64,
         mem: &GuestMemoryMmap,
         addr: GuestAddress,
         count: u32,
     ) -> Result<u32, SyncIoError> {
-        self.file
-            .seek(SeekFrom::Start(offset))
-            .map_err(SyncIoError::Seek)?;
-        mem.get_slice(addr, count as usize)
-            .and_then(|mut slice| Ok(self.file.read_exact_volatile(&mut slice)?))
+        let slice = mem
+            .get_slice(addr, count as usize)
             .map_err(SyncIoError::Transfer)?;
+        let guard = slice.ptr_guard_mut();
+        // SAFETY: `guard` holds the slice mapped and the pointer valid for `count` bytes.
+        // `pread` writes into that region and does not modify any shared kernel state on
+        // `self.file` (the offset lives on the stack).
+        let ret = unsafe {
+            libc::pread(
+                self.file.as_raw_fd(),
+                guard.as_ptr().cast::<libc::c_void>(),
+                count as usize,
+                offset.cast_signed(),
+            )
+        };
+        if ret < 0 {
+            return Err(SyncIoError::Io(io::Error::last_os_error()));
+        }
+        let n = ret.cast_unsigned() as usize;
+        if n < count as usize {
+            return Err(SyncIoError::Io(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "short pread",
+            )));
+        }
+        // Mark the guest-memory region we just wrote to as dirty for snapshot tracking.
+        slice.bitmap().mark_dirty(0, n);
         Ok(count)
     }
 
     pub fn write(
-        &mut self,
+        &self,
         offset: u64,
         mem: &GuestMemoryMmap,
         addr: GuestAddress,
         count: u32,
     ) -> Result<u32, SyncIoError> {
-        self.file
-            .seek(SeekFrom::Start(offset))
-            .map_err(SyncIoError::Seek)?;
-        mem.get_slice(addr, count as usize)
-            .and_then(|slice| Ok(self.file.write_all_volatile(&slice)?))
+        let slice = mem
+            .get_slice(addr, count as usize)
             .map_err(SyncIoError::Transfer)?;
+        let guard = slice.ptr_guard();
+        // SAFETY: see `read()`. `pwrite` reads from the guest slice; `guard` keeps it valid.
+        let ret = unsafe {
+            libc::pwrite(
+                self.file.as_raw_fd(),
+                guard.as_ptr().cast::<libc::c_void>(),
+                count as usize,
+                offset.cast_signed(),
+            )
+        };
+        if ret < 0 {
+            return Err(SyncIoError::Io(io::Error::last_os_error()));
+        }
+        let n = ret.cast_unsigned() as usize;
+        if n < count as usize {
+            return Err(SyncIoError::Io(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "short pwrite",
+            )));
+        }
         Ok(count)
     }
 
-    pub fn flush(&mut self) -> Result<(), SyncIoError> {
-        // flush() first to force any cached data out of rust buffers.
-        self.file.flush().map_err(SyncIoError::Flush)?;
-        // Sync data out to physical media on host.
-        self.file.sync_all().map_err(SyncIoError::SyncAll)
+    pub fn flush(&self) -> Result<(), SyncIoError> {
+        // SAFETY: `fsync` on a valid, open fd; touches no user-mode state.
+        let ret = unsafe { libc::fsync(self.file.as_raw_fd()) };
+        if ret < 0 {
+            return Err(SyncIoError::SyncAll(io::Error::last_os_error()));
+        }
+        Ok(())
     }
 }
