@@ -2,14 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::fs::File;
-use std::io::{ErrorKind, Seek, SeekFrom, Write};
+use std::io;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::FileTypeExt;
 
-use vm_memory::{
-    GuestMemoryBackend, GuestMemoryError, ReadVolatile, VolatileMemoryError, VolatileSlice,
-    WriteVolatile,
-};
+use vm_memory::{GuestMemoryBackend, GuestMemoryError};
 
 use crate::vstate::memory::{Bitmap, GuestAddress, GuestMemoryMmap};
 
@@ -96,75 +93,84 @@ impl SyncFileEngine {
     }
 
     pub fn read(
-        &mut self,
+        &self,
         offset: u64,
         mem: &GuestMemoryMmap,
         addr: GuestAddress,
         count: u32,
     ) -> Result<u32, SyncIoError> {
-        self.file
-            .seek(SeekFrom::Start(offset))
-            .map_err(SyncIoError::Seek)?;
         let slice = mem
             .get_slice(addr, count as usize)
             .map_err(SyncIoError::Transfer)?;
-        // SAFETY: `get_slice` checked that `count` bytes at this address are guest memory, which
-        // the device keeps mapped. The copy carries no bitmap: vm-memory would mark the whole
-        // remainder dirty if a read failed, so marking is done below for the bytes read.
-        let mut unmarked =
-            unsafe { VolatileSlice::new(slice.ptr_guard_mut().as_ptr(), count as usize) };
-
-        // Read until the buffer is full, then mark dirty exactly what was read. A failed `read`
-        // writes nothing, so what the earlier ones filled is all there is to mark either way.
-        let mut filled = 0;
-        let result = loop {
-            if unmarked.is_empty() {
-                break Ok(());
-            }
-            // `unmarked` carries no bitmap, so vm-memory marks nothing; see above.
-            #[expect(clippy::disallowed_methods)]
-            match self.file.read_volatile(&mut unmarked) {
-                Ok(0) => {
-                    break Err(VolatileMemoryError::IOError(std::io::Error::new(
-                        ErrorKind::UnexpectedEof,
-                        "failed to fill whole buffer",
-                    )));
-                }
-                Ok(read) => {
-                    filled += read;
-                    // `read` cannot exceed the slice's length.
-                    unmarked = unmarked.offset(read).unwrap();
-                }
-                Err(VolatileMemoryError::IOError(err)) if err.kind() == ErrorKind::Interrupted => {}
-                Err(err) => break Err(err),
-            }
+        let guard = slice.ptr_guard_mut();
+        // SAFETY: `guard` holds the slice mapped and the pointer valid for `count` bytes.
+        // `pread` writes into that region and does not modify any shared kernel state on
+        // `self.file` (the offset lives on the stack).
+        let ret = unsafe {
+            libc::pread(
+                self.file.as_raw_fd(),
+                guard.as_ptr().cast::<libc::c_void>(),
+                count as usize,
+                offset.cast_signed(),
+            )
         };
-        slice.bitmap().mark_dirty(0, filled);
-        result.map_err(|err| SyncIoError::Transfer(err.into()))?;
+        if ret < 0 {
+            return Err(SyncIoError::Transfer(GuestMemoryError::IOError(
+                io::Error::last_os_error(),
+            )));
+        }
+        let n = ret.cast_unsigned() as usize;
+        // Mark the guest-memory region we just wrote to as dirty for snapshot tracking.
+        slice.bitmap().mark_dirty(0, n);
+        if n < count as usize {
+            return Err(SyncIoError::Transfer(GuestMemoryError::IOError(
+                io::Error::new(io::ErrorKind::UnexpectedEof, "short pread"),
+            )));
+        }
         Ok(count)
     }
 
     pub fn write(
-        &mut self,
+        &self,
         offset: u64,
         mem: &GuestMemoryMmap,
         addr: GuestAddress,
         count: u32,
     ) -> Result<u32, SyncIoError> {
-        self.file
-            .seek(SeekFrom::Start(offset))
-            .map_err(SyncIoError::Seek)?;
-        mem.get_slice(addr, count as usize)
-            .and_then(|slice| Ok(self.file.write_all_volatile(&slice)?))
+        let slice = mem
+            .get_slice(addr, count as usize)
             .map_err(SyncIoError::Transfer)?;
+        let guard = slice.ptr_guard();
+        // SAFETY: see `read()`. `pwrite` reads from the guest slice; `guard` keeps it valid.
+        let ret = unsafe {
+            libc::pwrite(
+                self.file.as_raw_fd(),
+                guard.as_ptr().cast::<libc::c_void>(),
+                count as usize,
+                offset.cast_signed(),
+            )
+        };
+        if ret < 0 {
+            return Err(SyncIoError::Transfer(GuestMemoryError::IOError(
+                io::Error::last_os_error(),
+            )));
+        }
+        let n = ret.cast_unsigned() as usize;
+        if n < count as usize {
+            return Err(SyncIoError::Transfer(GuestMemoryError::IOError(
+                io::Error::new(io::ErrorKind::WriteZero, "short pwrite"),
+            )));
+        }
         Ok(count)
     }
 
-    pub fn flush(&mut self) -> Result<(), SyncIoError> {
-        // flush() first to force any cached data out of rust buffers.
-        self.file.flush().map_err(SyncIoError::Flush)?;
-        // Sync data out to physical media on host.
-        self.file.sync_all().map_err(SyncIoError::SyncAll)
+    pub fn flush(&self) -> Result<(), SyncIoError> {
+        // SAFETY: `fsync` on a valid, open fd; touches no user-mode state.
+        let ret = unsafe { libc::fsync(self.file.as_raw_fd()) };
+        if ret < 0 {
+            return Err(SyncIoError::SyncAll(io::Error::last_os_error()));
+        }
+        Ok(())
     }
 
     pub fn discard(&mut self, range: (u64, u32)) -> Result<u32, SyncIoError> {
