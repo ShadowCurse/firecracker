@@ -14,11 +14,11 @@ impl BlockRuntimeState {
     pub const PROCESS_ASYNC_COMPLETION: u32 = 3;
 
     pub fn register_runtime_events(&self, ops: &mut EventOps) {
-        if let Err(err) = ops.add(Events::with_data(
-            &self.queue_evts[0],
-            Self::PROCESS_QUEUE,
-            EventSet::IN,
-        )) {
+        let block = self.block_ref();
+        let queue_evt = &block.queue_evts[self.queue_index as usize];
+        if let Err(err) =
+            ops.add(Events::with_data(queue_evt, Self::PROCESS_QUEUE, EventSet::IN))
+        {
             error!("Failed to register queue event: {}", err);
         }
         if let Err(err) = ops.add(Events::with_data(
@@ -28,7 +28,7 @@ impl BlockRuntimeState {
         )) {
             error!("Failed to register ratelimiter event: {}", err);
         }
-        if let FileEngine::Async(ref engine) = self.disk.file_engine
+        if let FileEngine::Async(ref engine) = block.disk.file_engine
             && let Err(err) = ops.add(Events::with_data(
                 engine.completion_evt(),
                 Self::PROCESS_ASYNC_COMPLETION,
@@ -93,15 +93,13 @@ impl MutEventSubscriber for BlockRuntimeState {
             );
             match source {
                 Self::PROCESS_QUEUE => {
-                    for event in &self.queue_evts {
-                        let _ = event.read();
-                    }
+                    let _ = self.block_ref().queue_evts[self.queue_index as usize].read();
                 }
                 Self::PROCESS_RATE_LIMITER => {
                     let _ = self.rate_limiter.event_handler();
                 }
                 Self::PROCESS_ASYNC_COMPLETION => {
-                    if let FileEngine::Async(ref engine) = self.disk.file_engine {
+                    if let FileEngine::Async(ref engine) = self.block_ref().disk.file_engine {
                         let _ = engine.completion_evt().read();
                     }
                 }
@@ -130,6 +128,10 @@ impl MutEventSubscriber for VirtioBlock {
     }
 
     fn init(&mut self, ops: &mut EventOps) {
+        // VirtioBlock's address is stable from this point on (it lives inside the outer
+        // `Arc<Mutex<Block>>` that the transport owns). Wire the single-thread runtime
+        // state to it now, so its subscriber methods can dereference the pointer.
+        self.refresh_block_ptr();
         match &mut self.runtime {
             Runtime::SingleThread(state) => state.init(ops),
             Runtime::WorkerThreads(_) => {}
