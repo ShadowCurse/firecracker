@@ -61,6 +61,10 @@ pub struct BlockDeviceConfig {
     // pub file_engine_type: FileEngineType,
     #[serde(rename = "io_engine")]
     pub file_engine_type: Option<FileEngineType>,
+    /// Number of virtio queues to expose to the guest. When more than one, the block
+    /// device runs in thread-per-queue mode with one worker thread per queue.
+    #[serde(default)]
+    pub num_queues: Option<u16>,
 
     // VhostUserBlock specific fields
     /// Path to the vhost-user socket.
@@ -213,6 +217,7 @@ mod tests {
                 path_on_host: self.path_on_host.clone(),
                 rate_limiter: self.rate_limiter,
                 file_engine_type: self.file_engine_type,
+                num_queues: self.num_queues,
 
                 socket: self.socket.clone(),
             }
@@ -240,6 +245,7 @@ mod tests {
             path_on_host: Some(dummy_path),
             rate_limiter: None,
             file_engine_type: None,
+            num_queues: None,
 
             socket: None,
         };
@@ -274,6 +280,7 @@ mod tests {
             path_on_host: Some(dummy_path),
             rate_limiter: None,
             file_engine_type: None,
+            num_queues: None,
 
             socket: None,
         };
@@ -306,6 +313,7 @@ mod tests {
             path_on_host: Some(dummy_path),
             rate_limiter: None,
             file_engine_type: None,
+            num_queues: None,
 
             socket: None,
         };
@@ -335,6 +343,7 @@ mod tests {
             path_on_host: Some(dummy_path_1),
             rate_limiter: None,
             file_engine_type: None,
+            num_queues: None,
 
             socket: None,
         };
@@ -351,6 +360,7 @@ mod tests {
             path_on_host: Some(dummy_path_2),
             rate_limiter: None,
             file_engine_type: None,
+            num_queues: None,
 
             socket: None,
         };
@@ -378,6 +388,7 @@ mod tests {
             path_on_host: Some(dummy_path_1),
             rate_limiter: None,
             file_engine_type: None,
+            num_queues: None,
 
             socket: None,
         };
@@ -394,6 +405,7 @@ mod tests {
             path_on_host: Some(dummy_path_2),
             rate_limiter: None,
             file_engine_type: None,
+            num_queues: None,
 
             socket: None,
         };
@@ -410,6 +422,7 @@ mod tests {
             path_on_host: Some(dummy_path_3),
             rate_limiter: None,
             file_engine_type: None,
+            num_queues: None,
 
             socket: None,
         };
@@ -451,6 +464,7 @@ mod tests {
             path_on_host: Some(dummy_path_1),
             rate_limiter: None,
             file_engine_type: None,
+            num_queues: None,
 
             socket: None,
         };
@@ -467,6 +481,7 @@ mod tests {
             path_on_host: Some(dummy_path_2),
             rate_limiter: None,
             file_engine_type: None,
+            num_queues: None,
 
             socket: None,
         };
@@ -483,6 +498,7 @@ mod tests {
             path_on_host: Some(dummy_path_3),
             rate_limiter: None,
             file_engine_type: None,
+            num_queues: None,
 
             socket: None,
         };
@@ -525,6 +541,7 @@ mod tests {
             path_on_host: Some(dummy_path_1.clone()),
             rate_limiter: None,
             file_engine_type: None,
+            num_queues: None,
 
             socket: None,
         };
@@ -541,6 +558,7 @@ mod tests {
             path_on_host: Some(dummy_path_2.clone()),
             rate_limiter: None,
             file_engine_type: None,
+            num_queues: None,
 
             socket: None,
         };
@@ -613,6 +631,7 @@ mod tests {
             path_on_host: Some(dummy_path_1),
             rate_limiter: None,
             file_engine_type: None,
+            num_queues: None,
 
             socket: None,
         };
@@ -629,6 +648,7 @@ mod tests {
             path_on_host: Some(dummy_path_2),
             rate_limiter: None,
             file_engine_type: None,
+            num_queues: None,
 
             socket: None,
         };
@@ -655,6 +675,7 @@ mod tests {
             path_on_host: Some(dummy_file.as_path().to_str().unwrap().to_string()),
             rate_limiter: None,
             file_engine_type: Some(FileEngineType::Sync),
+            num_queues: None,
 
             socket: None,
         };
@@ -685,6 +706,7 @@ mod tests {
             path_on_host: Some(backing_file.as_path().to_str().unwrap().to_string()),
             rate_limiter: None,
             file_engine_type: None,
+            num_queues: None,
 
             socket: None,
         };

@@ -100,6 +100,7 @@ impl From<VhostUserBlockConfig> for BlockDeviceConfig {
             path_on_host: None,
             rate_limiter: None,
             file_engine_type: None,
+            num_queues: None,
 
             socket: Some(value.socket),
         }
@@ -416,6 +417,7 @@ mod tests {
             path_on_host: None,
             rate_limiter: None,
             file_engine_type: None,
+            num_queues: None,
 
             socket: Some("sock".to_string()),
         };
@@ -431,6 +433,7 @@ mod tests {
             path_on_host: Some("path".to_string()),
             rate_limiter: None,
             file_engine_type: Some(FileEngineType::Sync),
+            num_queues: None,
 
             socket: None,
         };
@@ -446,6 +449,7 @@ mod tests {
             path_on_host: Some("path".to_string()),
             rate_limiter: None,
             file_engine_type: Some(FileEngineType::Sync),
+            num_queues: None,
 
             socket: Some("sock".to_string()),
         };

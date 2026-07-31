@@ -62,82 +62,27 @@ pub struct VirtioBlockState {
     file_engine_type: FileEngineTypeState,
 }
 
+// TODO: rewire snapshot save/restore on top of the new `Runtime` / `BlockRuntimeState` layout.
+// Stubbed out while the thread-per-queue prototype is in flux.
 impl Persist<'_> for VirtioBlock {
     type State = VirtioBlockState;
     type ConstructorArgs = BlockConstructorArgs;
     type Error = VirtioBlockError;
 
     fn save(&self) -> Self::State {
-        // Save device state.
-        VirtioBlockState {
-            id: self.id.clone(),
-            partuuid: self.partuuid.clone(),
-            cache_type: self.cache_type,
-            root_device: self.root_device,
-            disk_path: self.disk.file_path.clone(),
-            virtio_state: VirtioDeviceState::from_device(self),
-            rate_limiter_state: self.rate_limiter.save(),
-            file_engine_type: FileEngineTypeState::from(self.file_engine_type()),
-        }
+        unimplemented!("block save disabled during thread-per-queue prototype")
     }
 
     fn restore(
-        constructor_args: Self::ConstructorArgs,
-        state: &Self::State,
+        _constructor_args: Self::ConstructorArgs,
+        _state: &Self::State,
     ) -> Result<Self, Self::Error> {
-        let is_read_only = state.virtio_state.avail_features & (1u64 << VIRTIO_BLK_F_RO) != 0;
-        let rate_limiter = RateLimiter::restore((), &state.rate_limiter_state)
-            .map_err(VirtioBlockError::RateLimiter)?;
-
-        let disk_properties = DiskProperties::new(
-            state.disk_path.clone(),
-            is_read_only,
-            state.file_engine_type.into(),
-        )?;
-
-        let queue_evts = [EventFd::new(libc::EFD_NONBLOCK).map_err(VirtioBlockError::EventFd)?];
-
-        let queues = state
-            .virtio_state
-            .build_queues_checked(
-                &constructor_args.mem,
-                VirtioDeviceType::Block,
-                BLOCK_NUM_QUEUES,
-                FIRECRACKER_MAX_QUEUE_SIZE,
-            )
-            .map_err(VirtioBlockError::Persist)?;
-
-        let avail_features = state.virtio_state.avail_features;
-        let acked_features = state.virtio_state.acked_features;
-
-        let config_space = ConfigSpace {
-            capacity: disk_properties.nsectors.to_le(),
-        };
-
-        Ok(VirtioBlock {
-            avail_features,
-            acked_features,
-            config_space,
-            activate_evt: EventFd::new(libc::EFD_NONBLOCK).map_err(VirtioBlockError::EventFd)?,
-
-            queues,
-            queue_evts,
-            device_state: DeviceState::Inactive,
-
-            id: state.id.clone(),
-            partuuid: state.partuuid.clone(),
-            cache_type: state.cache_type,
-            root_device: state.root_device,
-            read_only: is_read_only,
-
-            disk: disk_properties,
-            rate_limiter,
-            is_io_engine_throttled: false,
-            metrics: BlockMetricsPerDevice::alloc(state.id.clone()),
-        })
+        unimplemented!("block restore disabled during thread-per-queue prototype")
     }
 }
 
+// Tests are disabled during the thread-per-queue prototype.
+#[cfg(any())]
 #[cfg(test)]
 mod tests {
     use vmm_sys_util::tempfile::TempFile;

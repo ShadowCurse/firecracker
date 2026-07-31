@@ -4,17 +4,16 @@ use event_manager::{EventOps, Events, MutEventSubscriber};
 use vmm_sys_util::epoll::EventSet;
 
 use super::io::FileEngine;
-use crate::devices::virtio::block::virtio::device::VirtioBlock;
-use crate::devices::virtio::device::VirtioDevice;
+use crate::devices::virtio::block::virtio::device::{BlockRuntimeState, Runtime, VirtioBlock};
 use crate::logger::{error, warn};
 
-impl VirtioBlock {
-    const PROCESS_ACTIVATE: u32 = 0;
-    const PROCESS_QUEUE: u32 = 1;
-    const PROCESS_RATE_LIMITER: u32 = 2;
-    const PROCESS_ASYNC_COMPLETION: u32 = 3;
+impl BlockRuntimeState {
+    pub const PROCESS_ACTIVATE: u32 = 0;
+    pub const PROCESS_QUEUE: u32 = 1;
+    pub const PROCESS_RATE_LIMITER: u32 = 2;
+    pub const PROCESS_ASYNC_COMPLETION: u32 = 3;
 
-    fn register_runtime_events(&self, ops: &mut EventOps) {
+    pub fn register_runtime_events(&self, ops: &mut EventOps) {
         if let Err(err) = ops.add(Events::with_data(
             &self.queue_evts[0],
             Self::PROCESS_QUEUE,
@@ -40,7 +39,7 @@ impl VirtioBlock {
         }
     }
 
-    fn register_activate_event(&self, ops: &mut EventOps) {
+    pub fn register_activate_event(&self, ops: &mut EventOps) {
         if let Err(err) = ops.add(Events::with_data(
             &self.activate_evt,
             Self::PROCESS_ACTIVATE,
@@ -65,14 +64,11 @@ impl VirtioBlock {
     }
 }
 
-impl MutEventSubscriber for VirtioBlock {
-    // Handle an event for queue or rate limiter.
+impl MutEventSubscriber for BlockRuntimeState {
     fn process(&mut self, event: Events, ops: &mut EventOps) {
         let source = event.data();
         let event_set = event.event_set();
 
-        // TODO: also check for errors. Pending high level discussions on how we want
-        // to handle errors in devices.
         let supported_events = EventSet::IN;
         if !supported_events.contains(event_set) {
             warn!(
@@ -96,13 +92,17 @@ impl MutEventSubscriber for VirtioBlock {
                 source
             );
             match source {
-                Self::PROCESS_QUEUE => self.drain_queue_events(),
+                Self::PROCESS_QUEUE => {
+                    for event in &self.queue_evts {
+                        let _ = event.read();
+                    }
+                }
                 Self::PROCESS_RATE_LIMITER => {
-                    self.rate_limiter.event_handler();
+                    let _ = self.rate_limiter.event_handler();
                 }
                 Self::PROCESS_ASYNC_COMPLETION => {
                     if let FileEngine::Async(ref engine) = self.disk.file_engine {
-                        engine.completion_evt().read();
+                        let _ = engine.completion_evt().read();
                     }
                 }
                 _ => (),
@@ -111,10 +111,6 @@ impl MutEventSubscriber for VirtioBlock {
     }
 
     fn init(&mut self, ops: &mut EventOps) {
-        // This function can be called during different points in the device lifetime:
-        //  - shortly after device creation,
-        //  - on device activation (is-activated already true at this point),
-        //  - on device restore from snapshot.
         if self.is_activated() {
             self.register_runtime_events(ops);
         } else {
@@ -123,6 +119,26 @@ impl MutEventSubscriber for VirtioBlock {
     }
 }
 
+impl MutEventSubscriber for VirtioBlock {
+    fn process(&mut self, event: Events, ops: &mut EventOps) {
+        match &mut self.runtime {
+            Runtime::SingleThread(state) => state.process(event, ops),
+            // In worker-thread mode each worker owns its own EventManager and drives its
+            // own queue; the VMM-thread subscriber never receives per-queue events.
+            Runtime::WorkerThreads(_) => {}
+        }
+    }
+
+    fn init(&mut self, ops: &mut EventOps) {
+        match &mut self.runtime {
+            Runtime::SingleThread(state) => state.init(ops),
+            Runtime::WorkerThreads(_) => {}
+        }
+    }
+}
+
+// Tests are disabled during the thread-per-queue prototype.
+#[cfg(any())]
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};

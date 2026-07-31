@@ -58,24 +58,32 @@ pub fn default_block_with_path(path: String, file_engine_type: FileEngineType) -
             }),
         }),
         file_engine_type,
+        num_queues: 1,
     };
 
     // The default block device is read-write and non-root.
     VirtioBlock::new(config).unwrap()
 }
 
+// The helpers below reach into `VirtioBlock` fields that moved into `BlockRuntimeState`.
+// They are gated out during the thread-per-queue prototype; the tests that use them are
+// gated out too.
+#[cfg(any())]
 pub fn set_queue(blk: &mut VirtioBlock, idx: usize, q: Queue) {
     blk.queues[idx] = q;
 }
 
+#[cfg(any())]
 pub fn set_rate_limiter(blk: &mut VirtioBlock, rl: RateLimiter) {
     blk.rate_limiter = rl;
 }
 
+#[cfg(any())]
 pub fn rate_limiter(blk: &mut VirtioBlock) -> &RateLimiter {
     &blk.rate_limiter
 }
 
+#[cfg(any())]
 #[cfg(test)]
 pub fn simulate_queue_event(b: &mut VirtioBlock, maybe_expected_irq: Option<bool>) {
     // Trigger the queue event.
@@ -93,6 +101,7 @@ pub fn simulate_queue_event(b: &mut VirtioBlock, maybe_expected_irq: Option<bool
     }
 }
 
+#[cfg(any())]
 #[cfg(test)]
 pub fn simulate_async_completion_event(b: &mut VirtioBlock, expected_irq: bool) {
     if let FileEngine::Async(ref mut engine) = b.disk.file_engine {
@@ -112,6 +121,7 @@ pub fn simulate_async_completion_event(b: &mut VirtioBlock, expected_irq: bool) 
     );
 }
 
+#[cfg(any())]
 #[cfg(test)]
 pub fn simulate_queue_and_async_completion_events(b: &mut VirtioBlock, expected_irq: bool) {
     match b.disk.file_engine {

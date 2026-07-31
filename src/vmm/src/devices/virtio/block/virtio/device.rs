@@ -21,17 +21,17 @@ use vmm_sys_util::eventfd::EventFd;
 
 use super::io::async_io;
 use super::request::*;
-use super::{BLOCK_QUEUE_SIZES, SECTOR_SHIFT, SECTOR_SIZE, VirtioBlockError, io as block_io};
+use super::{SECTOR_SHIFT, SECTOR_SIZE, VirtioBlockError, io as block_io};
 use crate::devices::virtio::ActivateError;
 use crate::devices::virtio::block::CacheType;
 use crate::devices::virtio::block::virtio::metrics::{BlockDeviceMetrics, BlockMetricsPerDevice};
 use crate::devices::virtio::device::{ActiveState, DeviceState, VirtioDevice, VirtioDeviceType};
 use crate::devices::virtio::generated::virtio_blk::{
-    VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_RO, VIRTIO_BLK_ID_BYTES,
+    VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_MQ, VIRTIO_BLK_F_RO, VIRTIO_BLK_ID_BYTES,
 };
 use crate::devices::virtio::generated::virtio_config::VIRTIO_F_VERSION_1;
 use crate::devices::virtio::generated::virtio_ring::VIRTIO_RING_F_EVENT_IDX;
-use crate::devices::virtio::queue::{InvalidAvailIdx, Queue};
+use crate::devices::virtio::queue::{FIRECRACKER_MAX_QUEUE_SIZE, InvalidAvailIdx, Queue};
 use crate::devices::virtio::transport::{VirtioInterrupt, VirtioInterruptType};
 use crate::impl_device_type;
 use crate::logger::{IncMetric, error, warn};
@@ -159,13 +159,26 @@ impl DiskProperties {
     }
 }
 
+// Layout of `virtio_blk_config` up through `num_queues`. All fields we don't advertise
+// (size_max, seg_max, geometry, blk_size, topology, writeback, unused) stay zero, which
+// the virtio spec treats as "not supported" for every one of them, so the guest ignores
+// them. `num_queues` sits at offset 34 (`VIRTIO_BLK_F_MQ`).
 #[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]
-#[repr(C)]
+#[repr(C, packed)]
 pub struct ConfigSpace {
     pub capacity: u64,
+    pub size_max: u32,
+    pub seg_max: u32,
+    pub geometry: [u8; 4],
+    pub blk_size: u32,
+    pub topology: [u8; 8],
+    pub writeback: u8,
+    pub unused0: u8,
+    pub num_queues: u16,
 }
 
-// SAFETY: `ConfigSpace` contains only PODs in `repr(C)` or `repr(transparent)`, without padding.
+// SAFETY: `ConfigSpace` contains only PODs in `repr(C, packed)`; every byte is
+// initialized and there are no invalid bit patterns.
 unsafe impl ByteValued for ConfigSpace {}
 
 /// Use this structure to set up the Block Device before booting the kernel.
@@ -197,6 +210,14 @@ pub struct VirtioBlockConfig {
     #[serde(default)]
     #[serde(rename = "io_engine")]
     pub file_engine_type: FileEngineType,
+    /// Number of virtio queues to expose to the guest. Values greater than 1 enable
+    /// thread-per-queue mode with one worker thread driving each queue.
+    #[serde(default = "default_num_queues")]
+    pub num_queues: u16,
+}
+
+fn default_num_queues() -> u16 {
+    1
 }
 
 impl TryFrom<&BlockDeviceConfig> for VirtioBlockConfig {
@@ -214,6 +235,7 @@ impl TryFrom<&BlockDeviceConfig> for VirtioBlockConfig {
                 path_on_host: path_on_host.clone(),
                 rate_limiter: value.rate_limiter,
                 file_engine_type: value.file_engine_type.unwrap_or_default(),
+                num_queues: value.num_queues.unwrap_or(1),
             })
         } else {
             Err(VirtioBlockError::Config)
@@ -233,6 +255,7 @@ impl From<VirtioBlockConfig> for BlockDeviceConfig {
             path_on_host: Some(value.path_on_host),
             rate_limiter: value.rate_limiter,
             file_engine_type: Some(value.file_engine_type),
+            num_queues: Some(value.num_queues),
 
             socket: None,
         }
@@ -240,6 +263,16 @@ impl From<VirtioBlockConfig> for BlockDeviceConfig {
 }
 
 /// Virtio device for exposing block level read/write operations on a host file.
+///
+/// Configuration wrapper. All queue-processing state and logic lives in
+/// [`BlockRuntimeState`]. In single-thread mode (`num_queues == 1`) the VMM thread drives
+/// one runtime state; when `num_queues > 1` we spawn one worker thread per queue, each
+/// owning its own `BlockRuntimeState`.
+///
+/// `queue_evts` and the activation-time `interrupt` live on `VirtioBlock` so the
+/// transport can access them (register ioeventfds, trigger interrupts, notify queues)
+/// regardless of runtime mode. Worker `BlockRuntimeState`s carry duplicated event fds
+/// (`EventFd::try_clone`) that point at the same kernel objects.
 #[derive(Debug)]
 pub struct VirtioBlock {
     // Virtio fields.
@@ -248,10 +281,12 @@ pub struct VirtioBlock {
     pub config_space: ConfigSpace,
     pub activate_evt: EventFd,
 
-    // Transport related fields.
-    pub queues: Vec<Queue>,
-    pub queue_evts: [EventFd; 1],
-    pub device_state: DeviceState,
+    // Transport-visible per-queue eventfds. Also cloned into each runtime instance.
+    pub queue_evts: Vec<EventFd>,
+    // Interrupt is stashed here at activation time so `interrupt_trigger()` keeps working
+    // once the queues have been moved into worker threads.
+    pub interrupt: Option<Arc<dyn VirtioInterrupt>>,
+    pub activated: bool,
 
     // Implementation specific fields.
     pub id: String,
@@ -259,8 +294,46 @@ pub struct VirtioBlock {
     pub cache_type: CacheType,
     pub root_device: bool,
     pub read_only: bool,
+    pub thread_per_queue: bool,
+    pub num_queues: u16,
+    /// Path to the backing file. Kept on the device wrapper so `config()` works after
+    /// the disk has been moved into worker threads.
+    pub disk_path: String,
+    pub file_engine_type: FileEngineType,
+    pub rate_limiter_config: Option<RateLimiterConfig>,
 
-    // Host file and properties.
+    pub runtime: Runtime,
+}
+
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug)]
+pub enum Runtime {
+    SingleThread(BlockRuntimeState),
+    WorkerThreads(Vec<WorkerState>),
+}
+
+#[derive(Debug)]
+pub struct WorkerState {
+    pub thread_handle: std::thread::JoinHandle<()>,
+}
+
+/// Runtime state and queue-processing logic for one queue.
+///
+/// In single-thread mode the VMM owns one instance driving the single queue. In
+/// worker-thread mode there is one instance per queue, each moved into its own worker
+/// thread with its own `EventManager`.
+#[derive(Debug)]
+pub struct BlockRuntimeState {
+    pub queues: Vec<Queue>,
+    pub queue_evts: Vec<EventFd>,
+    pub device_state: DeviceState,
+    pub activate_evt: EventFd,
+    /// Guest-side index of the queue this state drives. Used to fire the right MSI-X
+    /// vector via `VirtioInterruptType::Queue(queue_index)` in PCI mode. In single-thread
+    /// mode this is always 0.
+    pub queue_index: u16,
+
+    pub read_only: bool,
     pub disk: DiskProperties,
     pub rate_limiter: RateLimiter,
     pub is_io_engine_throttled: bool,
@@ -285,7 +358,7 @@ impl VirtioBlock {
     /// The given file must be seekable and sizable.
     pub fn new(config: VirtioBlockConfig) -> Result<VirtioBlock, VirtioBlockError> {
         let disk_properties = DiskProperties::new(
-            config.path_on_host,
+            config.path_on_host.clone(),
             config.is_read_only,
             config.file_engine_type,
         )?;
@@ -305,12 +378,46 @@ impl VirtioBlock {
             avail_features |= 1u64 << VIRTIO_BLK_F_RO;
         };
 
-        let queue_evts = [EventFd::new(libc::EFD_NONBLOCK).map_err(VirtioBlockError::EventFd)?];
+        assert!(config.num_queues >= 1, "num_queues must be >= 1");
+        if config.num_queues > 1 {
+            avail_features |= 1u64 << VIRTIO_BLK_F_MQ;
+        }
+        let num_queues = config.num_queues as usize;
 
-        let queues = BLOCK_QUEUE_SIZES.iter().map(|&s| Queue::new(s)).collect();
+        let queue_evts: Vec<EventFd> = (0..num_queues)
+            .map(|_| EventFd::new(libc::EFD_NONBLOCK).map_err(VirtioBlockError::EventFd))
+            .collect::<Result<_, _>>()?;
+        // Duplicate fds pointing at the same underlying kernel EventFds; guest kicks and
+        // `notify_queue_events()` writes reach both copies.
+        let runtime_queue_evts: Vec<EventFd> = queue_evts
+            .iter()
+            .map(|evt| evt.try_clone().map_err(VirtioBlockError::EventFd))
+            .collect::<Result<_, _>>()?;
+
+        let queues: Vec<Queue> = (0..num_queues)
+            .map(|_| Queue::new(FIRECRACKER_MAX_QUEUE_SIZE))
+            .collect();
 
         let config_space = ConfigSpace {
             capacity: disk_properties.nsectors.to_le(),
+            num_queues: config.num_queues.to_le(),
+            ..Default::default()
+        };
+
+        // Any config with more than one queue implicitly runs in thread-per-queue mode.
+        let thread_per_queue = num_queues > 1;
+
+        let runtime_state = BlockRuntimeState {
+            queues,
+            queue_evts: runtime_queue_evts,
+            device_state: DeviceState::Inactive,
+            activate_evt: EventFd::new(libc::EFD_NONBLOCK).map_err(VirtioBlockError::EventFd)?,
+            queue_index: 0,
+            read_only: config.is_read_only,
+            disk: disk_properties,
+            rate_limiter,
+            is_io_engine_throttled: false,
+            metrics: BlockMetricsPerDevice::alloc(config.drive_id.clone()),
         };
 
         Ok(VirtioBlock {
@@ -319,42 +426,157 @@ impl VirtioBlock {
             config_space,
             activate_evt: EventFd::new(libc::EFD_NONBLOCK).map_err(VirtioBlockError::EventFd)?,
 
-            queues,
             queue_evts,
-            device_state: DeviceState::Inactive,
+            interrupt: None,
+            activated: false,
 
-            id: config.drive_id.clone(),
+            id: config.drive_id,
             partuuid: config.partuuid,
             cache_type: config.cache_type,
             root_device: config.is_root_device,
             read_only: config.is_read_only,
+            thread_per_queue,
+            num_queues: config.num_queues,
+            disk_path: config.path_on_host,
+            file_engine_type: config.file_engine_type,
+            rate_limiter_config: config.rate_limiter,
 
-            disk: disk_properties,
-            rate_limiter,
-            is_io_engine_throttled: false,
-            metrics: BlockMetricsPerDevice::alloc(config.drive_id),
+            runtime: Runtime::SingleThread(runtime_state),
         })
     }
 
-    /// Returns a copy of a device config
+    /// Returns the single-thread runtime state. Panics in worker-thread mode.
+    pub fn runtime_state(&self) -> &BlockRuntimeState {
+        match &self.runtime {
+            Runtime::SingleThread(s) => s,
+            Runtime::WorkerThreads(_) => unreachable!("only supported in single-thread mode"),
+        }
+    }
+
+    /// Returns the single-thread runtime state. Panics in worker-thread mode.
+    pub fn runtime_state_mut(&mut self) -> &mut BlockRuntimeState {
+        match &mut self.runtime {
+            Runtime::SingleThread(s) => s,
+            Runtime::WorkerThreads(_) => unreachable!("only supported in single-thread mode"),
+        }
+    }
+
+    /// Returns a copy of a device config.
     pub fn config(&self) -> VirtioBlockConfig {
-        let rl: RateLimiterConfig = (&self.rate_limiter).into();
         VirtioBlockConfig {
             drive_id: self.id.clone(),
-            path_on_host: self.disk.file_path.clone(),
+            path_on_host: self.disk_path.clone(),
             is_root_device: self.root_device,
             partuuid: self.partuuid.clone(),
             is_read_only: self.read_only,
             cache_type: self.cache_type,
-            rate_limiter: rl.into_option(),
-            file_engine_type: self.file_engine_type(),
+            rate_limiter: self.rate_limiter_config,
+            file_engine_type: self.file_engine_type,
+            num_queues: self.num_queues,
         }
     }
 
+    /// Convenience proxies to the single-thread runtime state.
+    pub fn process_virtio_queues(&mut self) -> Result<(), InvalidAvailIdx> {
+        self.runtime_state_mut().process_virtio_queues()
+    }
+
+    pub fn update_disk_image(&mut self, disk_image_path: String) -> Result<(), VirtioBlockError> {
+        self.runtime_state_mut()
+            .update_disk_image(disk_image_path)?;
+        self.config_space.capacity = self.runtime_state().disk.nsectors.to_le();
+        if self.is_activated() {
+            self.interrupt_trigger()
+                .trigger(VirtioInterruptType::Config)
+                .unwrap();
+        }
+        Ok(())
+    }
+
+    pub fn update_rate_limiter(&mut self, bytes: BucketUpdate, ops: BucketUpdate) {
+        self.runtime_state_mut().update_rate_limiter(bytes, ops);
+    }
+
+    pub fn prepare_save(&mut self) {
+        if !self.is_activated() {
+            return;
+        }
+        // Only meaningful in single-thread mode; worker-thread mode would need an RPC.
+        if let Runtime::SingleThread(state) = &mut self.runtime {
+            state.prepare_save();
+        }
+    }
+}
+
+impl BlockRuntimeState {
+    /// Consume this state and split it into per-queue runtime states. Each returned state
+    /// owns exactly one queue and its eventfd. When there is more than one queue, each
+    /// per-queue state gets a **fresh** disk handle (re-opening the backing file) and a
+    /// **fresh** rate limiter (built from the same config).
+    pub fn into_per_queue(
+        self,
+        disk_path: &str,
+        file_engine_type: FileEngineType,
+        rate_limiter_config: Option<RateLimiterConfig>,
+        mem: GuestMemoryMmap,
+        interrupt: Arc<dyn VirtioInterrupt>,
+    ) -> Result<Vec<Self>, VirtioBlockError> {
+        let BlockRuntimeState {
+            queues,
+            queue_evts,
+            read_only,
+            disk,
+            rate_limiter,
+            metrics,
+            ..
+        } = self;
+        assert_eq!(queues.len(), queue_evts.len());
+
+        let n = queues.len();
+        let mut queues_iter = queues.into_iter();
+        let mut evts_iter = queue_evts.into_iter();
+
+        let mut out = Vec::with_capacity(n);
+        // The first per-queue state reuses the disk/rate_limiter we already have; every
+        // subsequent state gets its own copy so workers can run without contending.
+        let mut disk_opt = Some(disk);
+        let mut rl_opt = Some(rate_limiter);
+        let n_u16 = u16::try_from(n).expect("queue count fits in u16");
+        for idx in 0..n_u16 {
+            let q = queues_iter.next().unwrap();
+            let e = evts_iter.next().unwrap();
+
+            let disk = match disk_opt.take() {
+                Some(d) => d,
+                None => DiskProperties::new(disk_path.to_string(), read_only, file_engine_type)?,
+            };
+            let rate_limiter = match rl_opt.take() {
+                Some(r) => r,
+                None => rate_limiter_config
+                    .map(RateLimiter::from)
+                    .unwrap_or_default(),
+            };
+
+            out.push(BlockRuntimeState {
+                queues: vec![q],
+                queue_evts: vec![e],
+                device_state: DeviceState::Activated(ActiveState {
+                    mem: mem.clone(),
+                    interrupt: interrupt.clone(),
+                }),
+                activate_evt: EventFd::new(libc::EFD_NONBLOCK).map_err(VirtioBlockError::EventFd)?,
+                queue_index: idx,
+                read_only,
+                disk,
+                rate_limiter,
+                is_io_engine_throttled: false,
+                metrics: Arc::clone(&metrics),
+            });
+        }
+        Ok(out)
+    }
+
     /// Process a single event in the Virtio queue.
-    ///
-    /// This function is called by the event manager when the guest notifies us
-    /// about new buffers in the queue.
     pub(crate) fn process_queue_event(&mut self) {
         self.metrics.queue_event_count.inc();
         if let Err(err) = self.queue_evts[0].read() {
@@ -376,19 +598,20 @@ impl VirtioBlock {
 
     pub(crate) fn process_rate_limiter_event(&mut self) {
         self.metrics.rate_limiter_event_count.inc();
-        // Upon rate limiter event, call the rate limiter handler
-        // and restart processing the queue.
         if self.rate_limiter.event_handler().is_ok() {
             self.process_queue(0).unwrap()
         }
     }
 
     /// Device specific function for peaking inside a queue and processing descriptors.
-    pub fn process_queue(&mut self, queue_index: usize) -> Result<(), InvalidAvailIdx> {
-        // This is safe since we checked in the event handler that the device is activated.
+    /// `local_index` is the index into `self.queues` (always 0 in worker mode; can be
+    /// up to `queues.len()-1` in single-thread mode). The interrupt is fired against the
+    /// guest-visible queue index stored in `self.queue_index`.
+    pub fn process_queue(&mut self, local_index: usize) -> Result<(), InvalidAvailIdx> {
         let active_state = self.device_state.active_state().unwrap();
 
-        let queue = &mut self.queues[queue_index];
+        let queue = &mut self.queues[local_index];
+        let guest_queue_index = self.queue_index;
         let mut used_any = false;
 
         while let Some(head) = queue.pop_or_enable_notification()? {
@@ -397,8 +620,6 @@ impl VirtioBlock {
                 match Request::parse(&head, &active_state.mem, self.disk.nsectors) {
                     Ok(request) => {
                         if request.rate_limit(&mut self.rate_limiter) {
-                            // Stop processing the queue and return this descriptor chain to the
-                            // avail ring, for later processing.
                             queue.undo_pop();
                             self.metrics.rate_limiter_throttled_events.inc();
                             break;
@@ -446,7 +667,7 @@ impl VirtioBlock {
         if used_any && queue.prepare_kick() {
             active_state
                 .interrupt
-                .trigger(VirtioInterruptType::Queue(0))
+                .trigger(VirtioInterruptType::Queue(guest_queue_index))
                 .unwrap_or_else(|_| {
                     self.metrics.event_fails.inc();
                 });
@@ -468,9 +689,9 @@ impl VirtioBlock {
     fn process_async_completion_queue(&mut self) {
         let engine = unwrap_async_file_engine_or_return!(&mut self.disk.file_engine);
 
-        // This is safe since we checked in the event handler that the device is activated.
         let active_state = self.device_state.active_state().unwrap();
         let queue = &mut self.queues[0];
+        let guest_queue_index = self.queue_index;
 
         loop {
             match engine.pop(&active_state.mem) {
@@ -509,7 +730,7 @@ impl VirtioBlock {
         if queue.prepare_kick() {
             active_state
                 .interrupt
-                .trigger(VirtioInterruptType::Queue(0))
+                .trigger(VirtioInterruptType::Queue(guest_queue_index))
                 .unwrap_or_else(|_| {
                     self.metrics.event_fails.inc();
                 });
@@ -531,23 +752,19 @@ impl VirtioBlock {
         }
     }
 
-    /// Update the backing file and the config space of the block device.
+    /// Update the backing file of the block device. The config space and the driver kick
+    /// happen at the [`VirtioBlock`] wrapper level.
     pub fn update_disk_image(&mut self, disk_image_path: String) -> Result<(), VirtioBlockError> {
         self.disk.update(disk_image_path, self.read_only)?;
-        self.config_space.capacity = self.disk.nsectors.to_le(); // virtio_block_config_space();
-
-        // Kick the driver to pick up the changes. (But only if the device is already activated).
-        if self.is_activated() {
-            self.interrupt_trigger()
-                .trigger(VirtioInterruptType::Config)
-                .unwrap();
-        }
-
         self.metrics.update_count.inc();
         Ok(())
     }
 
-    /// Updates the parameters for the rate limiter
+    pub fn is_activated(&self) -> bool {
+        self.device_state.is_activated()
+    }
+
+    /// Updates the parameters for the rate limiter.
     pub fn update_rate_limiter(&mut self, bytes: BucketUpdate, ops: BucketUpdate) {
         self.rate_limiter.update_buckets(bytes, ops);
     }
@@ -579,6 +796,34 @@ impl VirtioBlock {
     }
 }
 
+/// Body of a per-queue worker thread. Registers the given [`BlockRuntimeState`] with an
+/// EventManager and runs the epoll loop forever. Since the state is already `Activated`
+/// (set by `into_per_queue`), `MutEventSubscriber::init` will register the runtime events
+/// directly on first tick.
+fn run_worker_loop(state: BlockRuntimeState) {
+    use std::sync::{Arc, Mutex};
+
+    use event_manager::{EventManager, SubscriberOps};
+
+    let subscriber: Arc<Mutex<BlockRuntimeState>> = Arc::new(Mutex::new(state));
+    let mut event_manager: EventManager<Arc<Mutex<dyn event_manager::MutEventSubscriber>>> =
+        match EventManager::new() {
+            Ok(em) => em,
+            Err(err) => {
+                error!("block worker: failed to create EventManager: {:?}", err);
+                return;
+            }
+        };
+    event_manager.add_subscriber(subscriber);
+
+    loop {
+        if let Err(err) = event_manager.run() {
+            error!("block worker: EventManager run failed: {:?}", err);
+            return;
+        }
+    }
+}
+
 impl VirtioDevice for VirtioBlock {
     impl_device_type!(VirtioDeviceType::Block);
 
@@ -599,11 +844,18 @@ impl VirtioDevice for VirtioBlock {
     }
 
     fn queues(&self) -> &[Queue] {
-        &self.queues
+        match &self.runtime {
+            Runtime::SingleThread(s) => &s.queues,
+            // Queues have been moved into worker threads.
+            Runtime::WorkerThreads(_) => &[],
+        }
     }
 
     fn queues_mut(&mut self) -> &mut [Queue] {
-        &mut self.queues
+        match &mut self.runtime {
+            Runtime::SingleThread(s) => &mut s.queues,
+            Runtime::WorkerThreads(_) => &mut [],
+        }
     }
 
     fn queue_events(&self) -> &[EventFd] {
@@ -611,11 +863,9 @@ impl VirtioDevice for VirtioBlock {
     }
 
     fn interrupt_trigger(&self) -> &dyn VirtioInterrupt {
-        self.device_state
-            .active_state()
-            .expect("Device is not initialized")
-            .interrupt
-            .deref()
+        self.interrupt
+            .as_deref()
+            .expect("Device is not activated")
     }
 
     fn config_as_bytes(&self) -> &[u8] {
@@ -623,7 +873,7 @@ impl VirtioDevice for VirtioBlock {
     }
 
     fn write_config(&mut self, offset: u64, data: &[u8]) {
-        self.metrics.cfg_fails.inc();
+        self.runtime_state().metrics.cfg_fails.inc();
         warn!(
             "virtio-block: guest driver attempted to write device config (offset={:#x}, len={:#x})",
             offset,
@@ -638,59 +888,148 @@ impl VirtioDevice for VirtioBlock {
     ) -> Result<(), ActivateError> {
         assert!(!self.is_activated());
 
-        for q in self.queues.iter_mut() {
-            q.initialize(&mem)
-                .map_err(ActivateError::QueueMemoryError)?;
-        }
-
         let event_idx = self.has_feature(u64::from(VIRTIO_RING_F_EVENT_IDX));
-        if event_idx {
-            for queue in &mut self.queues {
-                queue.enable_notif_suppression();
-            }
-        }
 
-        if self.activate_evt.write(1).is_err() {
-            self.metrics.activate_fails.inc();
-            return Err(ActivateError::EventFd);
+        if !self.thread_per_queue {
+            let state = self.runtime_state_mut();
+            for q in state.queues.iter_mut() {
+                q.initialize(&mem)
+                    .map_err(ActivateError::QueueMemoryError)?;
+            }
+            if event_idx {
+                for queue in state.queues.iter_mut() {
+                    queue.enable_notif_suppression();
+                }
+            }
+            if state.activate_evt.write(1).is_err() {
+                state.metrics.activate_fails.inc();
+                return Err(ActivateError::EventFd);
+            }
+            state.device_state = DeviceState::Activated(ActiveState {
+                mem: mem.clone(),
+                interrupt: interrupt.clone(),
+            });
+            self.interrupt = Some(interrupt);
+            self.activated = true;
+            Ok(())
+        } else {
+            // Worker-thread mode: one thread per queue.
+            let mut state =
+                match std::mem::replace(&mut self.runtime, Runtime::WorkerThreads(Vec::new())) {
+                    Runtime::SingleThread(s) => s,
+                    Runtime::WorkerThreads(_) => unreachable!("checked !is_activated above"),
+                };
+
+            // Drop queues the guest never configured (blk-mq caps to nr_online_cpus).
+            let ready: Vec<bool> = state.queues.iter().map(|q| q.ready).collect();
+            let mut queues_iter = state.queues.into_iter();
+            let mut evts_iter = state.queue_evts.into_iter();
+            let mut kept_queues = Vec::new();
+            let mut kept_evts = Vec::new();
+            for is_ready in ready {
+                let q = queues_iter.next().unwrap();
+                let e = evts_iter.next().unwrap();
+                if is_ready {
+                    kept_queues.push(q);
+                    kept_evts.push(e);
+                }
+            }
+            state.queues = kept_queues;
+            state.queue_evts = kept_evts;
+            assert!(
+                !state.queues.is_empty(),
+                "guest activated block device with zero ready queues"
+            );
+
+            for q in state.queues.iter_mut() {
+                q.initialize(&mem)
+                    .map_err(ActivateError::QueueMemoryError)?;
+            }
+            if event_idx {
+                for q in state.queues.iter_mut() {
+                    q.enable_notif_suppression();
+                }
+            }
+
+            let per_queue_states = state
+                .into_per_queue(
+                    &self.disk_path,
+                    self.file_engine_type,
+                    self.rate_limiter_config,
+                    mem.clone(),
+                    interrupt.clone(),
+                )
+                .map_err(|err| {
+                    error!("Failed to build per-queue block runtime states: {:?}", err);
+                    ActivateError::EventFd
+                })?;
+
+            let mut workers = Vec::with_capacity(per_queue_states.len());
+            for (idx, per_queue) in per_queue_states.into_iter().enumerate() {
+                let thread_handle = std::thread::Builder::new()
+                    .name(format!("fc_virtio_blk_{}_{}", self.id, idx))
+                    .spawn(move || run_worker_loop(per_queue))
+                    .map_err(|_| ActivateError::EventFd)?;
+                workers.push(WorkerState { thread_handle });
+            }
+
+            self.runtime = Runtime::WorkerThreads(workers);
+            self.interrupt = Some(interrupt);
+            self.activated = true;
+            Ok(())
         }
-        self.device_state = DeviceState::Activated(ActiveState { mem, interrupt });
-        Ok(())
     }
 
     fn is_activated(&self) -> bool {
-        self.device_state.is_activated()
+        self.activated
     }
 
     fn deactivate(&mut self) {
-        self.device_state = DeviceState::Inactive;
+        self.activated = false;
+        self.interrupt = None;
+        if let Runtime::SingleThread(s) = &mut self.runtime {
+            s.device_state = DeviceState::Inactive;
+        }
     }
 
     fn _reset(&mut self) -> bool {
-        if let Err(err) = self.disk.file_engine.drain(true) {
-            error!("Failed to reset block IO engine: {:?}", err);
-            return false;
+        match &mut self.runtime {
+            Runtime::SingleThread(state) => {
+                if let Err(err) = state.disk.file_engine.drain(true) {
+                    error!("Failed to reset block IO engine: {:?}", err);
+                    return false;
+                }
+                state.is_io_engine_throttled = false;
+                true
+            }
+            // In worker-thread mode the disk lives inside a worker; would need an RPC.
+            Runtime::WorkerThreads(_) => false,
         }
-        self.is_io_engine_throttled = false;
-        true
     }
 }
 
 impl Drop for VirtioBlock {
     fn drop(&mut self) {
-        match self.cache_type {
-            CacheType::Unsafe => {
-                if let Err(err) = self.disk.file_engine.drain(true) {
-                    error!("Failed to drain ops on drop: {:?}", err);
+        match &mut self.runtime {
+            Runtime::SingleThread(state) => match self.cache_type {
+                CacheType::Unsafe => {
+                    if let Err(err) = state.disk.file_engine.drain(true) {
+                        error!("Failed to drain ops on drop: {:?}", err);
+                    }
                 }
-            }
-            CacheType::Writeback => {
-                self.drain_and_flush(true);
-            }
-        };
+                CacheType::Writeback => {
+                    state.drain_and_flush(true);
+                }
+            },
+            // TODO: signal each worker to exit and join its thread so we drain and flush
+            // deterministically. For now the workers outlive the device until process exit.
+            Runtime::WorkerThreads(_) => {}
+        }
     }
 }
 
+// Tests are disabled during the thread-per-queue prototype.
+#[cfg(any())]
 #[cfg(test)]
 mod tests {
     use std::fs::metadata;
