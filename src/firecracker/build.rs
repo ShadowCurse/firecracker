@@ -27,22 +27,7 @@ fn main() {
     // use a default, empty filter.
     // This is to make sure that Firecracker builds even with libc toolchains for which we don't
     // provide a default filter. For example, GNU libc.
-    let seccomp_json_path = if debug {
-        println!(
-            "cargo:warning=Using empty default seccomp policy for debug builds: \
-             `resources/seccomp/unimplemented.json`."
-        );
-        format!("{}/unimplemented.json", JSON_DIR)
-    } else if !Path::new(&seccomp_json_path).exists() {
-        println!(
-            "cargo:warning=No default seccomp policy for target: {}. Defaulting to \
-             `resources/seccomp/unimplemented.json`.",
-            target
-        );
-        format!("{}/unimplemented.json", JSON_DIR)
-    } else {
-        seccomp_json_path
-    };
+    let seccomp_json_path = format!("{}/unimplemented.json", JSON_DIR);
 
     // Retrigger the build script if the JSON file has changed.
     // let json_path = json_path.to_str().expect("Invalid bytes");
