@@ -30,7 +30,13 @@
                 "syscall": "read"
             },
             {
+                "syscall": "pread64"
+            },
+            {
                 "syscall": "write"
+            },
+            {
+                "syscall": "pwrite64"
             },
             {
                 "syscall": "mincore"
@@ -1686,6 +1692,12 @@
         "filter": [
             {
                 "syscall": "epoll_ctl"
+            },
+            {
+                "syscall": "pread64"
+            },
+            {
+                "syscall": "pwrite64"
             },
             {
                 "syscall": "lseek",
