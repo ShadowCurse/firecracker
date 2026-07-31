@@ -124,6 +124,7 @@ impl Persist<'_> for VirtioBlock {
             rate_limiter,
             is_io_engine_throttled: false,
             block: Default::default(),
+            control: None,
         };
 
         Ok(VirtioBlock {

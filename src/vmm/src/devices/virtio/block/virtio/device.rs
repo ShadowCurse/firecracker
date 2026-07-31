@@ -14,6 +14,7 @@ use std::ops::Deref;
 use std::os::linux::fs::MetadataExt;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::mpsc::{Receiver, Sender, channel};
 
 use block_io::FileEngine;
 use serde::{Deserialize, Serialize};
@@ -291,7 +292,38 @@ pub struct VirtioBlock {
 #[derive(Debug)]
 pub enum Runtime {
     SingleThread(BlockRuntimeState),
-    WorkerThreads(Vec<std::thread::JoinHandle<()>>),
+    WorkerThreads(Vec<WorkerHandle>),
+}
+
+/// VMM-side handle for one worker thread.
+#[derive(Debug)]
+pub struct WorkerHandle {
+    pub thread: std::thread::JoinHandle<()>,
+    pub to_worker: Sender<ControlMsg>,
+    pub from_worker: Receiver<ControlResponse>,
+    /// EventFd the worker's EventManager subscribes to; VMM writes to it after posting a
+    /// message on `to_worker` to wake the worker up.
+    pub control_evt: EventFd,
+}
+
+/// Control messages sent VMM -> worker.
+#[derive(Debug, Clone)]
+pub enum ControlMsg {
+    /// Stop processing queue events until [`ControlMsg::Resume`] is received.
+    Pause,
+    /// Resume processing queue events.
+    Resume,
+    /// Terminate the worker; the thread's event loop breaks.
+    Terminate,
+    /// Update the local rate-limiter's bucket configuration.
+    UpdateRateLimiter(BucketUpdate, BucketUpdate),
+}
+
+/// Worker -> VMM responses.
+#[derive(Debug)]
+pub enum ControlResponse {
+    Ok,
+    Err(String),
 }
 
 /// Raw pointer to the owning [`VirtioBlock`]. Worker `i` only mutates slot `i` of
@@ -318,6 +350,23 @@ pub struct BlockRuntimeState {
     pub is_io_engine_throttled: bool,
     /// Pointer back to the owning device. See [`BlockPtr`].
     pub(crate) block: BlockPtr,
+    /// Present in worker-thread mode: control channel + eventfd + pause flag.
+    /// In single-thread mode this is `None`.
+    pub(crate) control: Option<WorkerControl>,
+}
+
+/// Worker-side end of the control channel.
+#[derive(Debug)]
+pub struct WorkerControl {
+    pub from_vmm: Receiver<ControlMsg>,
+    pub to_vmm: Sender<ControlResponse>,
+    pub control_evt: EventFd,
+    /// While paused the worker skips queue-event processing but still services control
+    /// messages, so it can be resumed or terminated.
+    pub paused: bool,
+    /// Set by the worker after processing a [`ControlMsg::Terminate`]. `run_worker_loop`
+    /// checks it after each `EventManager::run()` batch and exits.
+    pub should_stop: bool,
 }
 
 macro_rules! unwrap_async_file_engine_or_return {
@@ -391,6 +440,7 @@ impl VirtioBlock {
             rate_limiter,
             is_io_engine_throttled: false,
             block: BlockPtr::default(),
+            control: None,
         };
 
         Ok(VirtioBlock {
@@ -464,13 +514,13 @@ impl VirtioBlock {
     }
 
     pub fn update_disk_image(&mut self, disk_image_path: String) -> Result<(), VirtioBlockError> {
-        // Not safe in worker-thread mode: workers hold raw pointers into `self.disk`
-        // and reopening the backing file while workers are using it would race.
-        assert!(
-            !matches!(self.runtime, Runtime::WorkerThreads(_)),
-            "update_disk_image is not supported in worker-thread mode yet"
-        );
-        self.disk.update(disk_image_path, self.read_only)?;
+        // In worker-thread mode we must quiesce the workers before touching `self.disk`;
+        // they hold a raw pointer into it and would race with the reopen otherwise.
+        self.pause();
+        let update_result = self.disk.update(disk_image_path, self.read_only);
+        // Always resume, whether the update succeeded or not.
+        self.resume();
+        update_result?;
         self.config_space.capacity = self.disk.nsectors.to_le();
         self.metrics.update_count.inc();
         if self.is_activated() {
@@ -482,9 +532,79 @@ impl VirtioBlock {
     }
 
     pub fn update_rate_limiter(&mut self, bytes: BucketUpdate, ops: BucketUpdate) {
-        self.runtime_state_mut()
-            .rate_limiter
-            .update_buckets(bytes, ops);
+        match &self.runtime {
+            Runtime::SingleThread(_) => {
+                self.runtime_state_mut()
+                    .rate_limiter
+                    .update_buckets(bytes, ops);
+            }
+            Runtime::WorkerThreads(_) => {
+                // Each worker owns its own rate limiter; ask them to update it.
+                self.broadcast(ControlMsg::UpdateRateLimiter(bytes, ops));
+            }
+        }
+    }
+
+    /// Worker lifecycle. In single-thread mode these are no-ops (there are no workers).
+    pub fn start(&mut self) {
+        // Workers are spawned by `activate()`. This entry point exists so callers can
+        // treat the lifecycle uniformly without checking mode.
+    }
+
+    /// Pause every worker thread and wait for them to acknowledge.
+    pub fn pause(&mut self) {
+        self.broadcast(ControlMsg::Pause);
+    }
+
+    /// Resume every worker thread and wait for them to acknowledge.
+    pub fn resume(&mut self) {
+        self.broadcast(ControlMsg::Resume);
+    }
+
+    /// Terminate every worker thread and join it. After this call the runtime holds an
+    /// empty `WorkerThreads` vector; single-thread mode is not restored.
+    pub fn terminate(&mut self) {
+        self.broadcast(ControlMsg::Terminate);
+        if let Runtime::WorkerThreads(workers) =
+            std::mem::replace(&mut self.runtime, Runtime::WorkerThreads(Vec::new()))
+        {
+            for w in workers {
+                if let Err(err) = w.thread.join() {
+                    error!("block worker join failed: {:?}", err);
+                }
+            }
+        }
+    }
+
+    /// Send `msg` to every worker (if any), waking each up via its control eventfd, and
+    /// wait for each `ControlResponse`. In single-thread mode this is a no-op.
+    fn broadcast(&mut self, msg: ControlMsg) {
+        let workers = match &self.runtime {
+            Runtime::WorkerThreads(w) => w,
+            Runtime::SingleThread(_) => return,
+        };
+        // Send + kick each worker.
+        for w in workers {
+            if let Err(err) = w.to_worker.send(msg.clone()) {
+                error!("block: failed to send control msg: {:?}", err);
+                continue;
+            }
+            if let Err(err) = w.control_evt.write(1) {
+                error!("block: failed to kick worker control evt: {:?}", err);
+            }
+        }
+        // Await ack from each worker in turn.
+        for w in workers {
+            match w.from_worker.recv() {
+                Ok(ControlResponse::Ok) => {}
+                Ok(ControlResponse::Err(e)) => {
+                    error!("block worker returned error for {:?}: {}", msg, e);
+                }
+                Err(err) => {
+                    error!("block worker response channel closed: {:?}", err);
+                }
+            }
+        }
     }
 
     /// Retrieve the file engine type.
@@ -713,9 +833,8 @@ impl BlockRuntimeState {
 }
 
 /// Body of a per-queue worker thread. Registers the given [`BlockRuntimeState`] with an
-/// EventManager and runs the epoll loop forever. The state's owner is already activated
-/// by the time we get here, so `MutEventSubscriber::init` will register runtime events
-/// directly on first tick.
+/// EventManager and runs the epoll loop. Exits when a [`ControlMsg::Terminate`] has been
+/// serviced (which sets `should_stop`).
 fn run_worker_loop(state: BlockRuntimeState) {
     use std::sync::{Arc, Mutex};
 
@@ -730,11 +849,21 @@ fn run_worker_loop(state: BlockRuntimeState) {
                 return;
             }
         };
-    event_manager.add_subscriber(subscriber);
+    event_manager.add_subscriber(subscriber.clone());
 
     loop {
         if let Err(err) = event_manager.run() {
             error!("block worker: EventManager run failed: {:?}", err);
+            return;
+        }
+        // Check for termination request.
+        if subscriber
+            .lock()
+            .expect("Poisoned lock")
+            .control
+            .as_ref()
+            .is_some_and(|c| c.should_stop)
+        {
             return;
         }
     }
@@ -829,15 +958,22 @@ impl VirtioDevice for VirtioBlock {
             return Ok(());
         }
 
-        // Worker-thread mode. Take the shared config out of the initial single-thread
-        // runtime state; each worker gets its own RateLimiter built from the same config.
+        // Worker-thread mode. Each worker gets its own RateLimiter built from the same
+        // config, a control channel + eventfd pair for VMM-side coordination, and a
+        // pointer back to VirtioBlock.
         let ptr = self as *mut VirtioBlock;
         let rl_config: RateLimiterConfig = (&self.runtime_state().rate_limiter).into();
-        let mut workers: Vec<std::thread::JoinHandle<()>> = Vec::new();
+        let mut workers: Vec<WorkerHandle> = Vec::new();
         for (idx, q) in self.queues.iter().enumerate() {
             if !q.ready {
                 continue;
             }
+            let (to_worker, from_vmm) = channel::<ControlMsg>();
+            let (to_vmm, from_worker) = channel::<ControlResponse>();
+            let control_evt =
+                EventFd::new(libc::EFD_NONBLOCK).map_err(|_| ActivateError::EventFd)?;
+            let worker_evt = control_evt.try_clone().map_err(|_| ActivateError::EventFd)?;
+
             let per_queue = BlockRuntimeState {
                 queue_index: u16::try_from(idx).expect("queue index fits in u16"),
                 rate_limiter: rl_config
@@ -846,13 +982,25 @@ impl VirtioDevice for VirtioBlock {
                     .unwrap_or_default(),
                 is_io_engine_throttled: false,
                 block: BlockPtr(ptr),
+                control: Some(WorkerControl {
+                    from_vmm,
+                    to_vmm,
+                    control_evt: worker_evt,
+                    paused: false,
+                    should_stop: false,
+                }),
             };
             let name = format!("fc_virtio_blk_{}_{}", self.id, idx);
-            let thread_handle = std::thread::Builder::new()
+            let thread = std::thread::Builder::new()
                 .name(name)
                 .spawn(move || run_worker_loop(per_queue))
                 .map_err(|_| ActivateError::EventFd)?;
-            workers.push(thread_handle);
+            workers.push(WorkerHandle {
+                thread,
+                to_worker,
+                from_worker,
+                control_evt,
+            });
         }
         assert!(
             !workers.is_empty(),
@@ -889,11 +1037,10 @@ impl VirtioDevice for VirtioBlock {
 
 impl Drop for VirtioBlock {
     fn drop(&mut self) {
-        // In worker-thread mode workers may still be running and holding a raw pointer to
-        // `self.disk`; we don't join them here (see the TODO on the worker loop), so skip
-        // disk draining to avoid racing with them.
+        // Terminate and join worker threads before touching `self.disk`; they hold a raw
+        // pointer into it.
         if matches!(self.runtime, Runtime::WorkerThreads(_)) {
-            return;
+            self.terminate();
         }
         match self.cache_type {
             CacheType::Unsafe => {

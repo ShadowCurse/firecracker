@@ -4,7 +4,9 @@ use event_manager::{EventOps, Events, MutEventSubscriber};
 use vmm_sys_util::epoll::EventSet;
 
 use super::io::FileEngine;
-use crate::devices::virtio::block::virtio::device::{BlockRuntimeState, Runtime, VirtioBlock};
+use crate::devices::virtio::block::virtio::device::{
+    BlockRuntimeState, ControlMsg, ControlResponse, Runtime, VirtioBlock,
+};
 use crate::devices::virtio::device::VirtioDevice;
 use crate::logger::{error, warn};
 
@@ -13,6 +15,8 @@ impl BlockRuntimeState {
     pub const PROCESS_QUEUE: u32 = 1;
     pub const PROCESS_RATE_LIMITER: u32 = 2;
     pub const PROCESS_ASYNC_COMPLETION: u32 = 3;
+    /// Control eventfd. Only used in worker-thread mode.
+    pub const PROCESS_CONTROL: u32 = 4;
 
     pub fn register_runtime_events(&self, ops: &mut EventOps) {
         let block = self.block_ref();
@@ -37,6 +41,17 @@ impl BlockRuntimeState {
             ))
         {
             error!("Failed to register IO engine completion event: {}", err);
+        }
+        // In worker-thread mode we also subscribe to the control eventfd so the VMM can
+        // reach us for pause/resume/update/terminate.
+        if let Some(ctrl) = &self.control
+            && let Err(err) = ops.add(Events::with_data(
+                &ctrl.control_evt,
+                Self::PROCESS_CONTROL,
+                EventSet::IN,
+            ))
+        {
+            error!("Failed to register control event: {}", err);
         }
     }
 
@@ -65,6 +80,89 @@ impl BlockRuntimeState {
     }
 }
 
+impl BlockRuntimeState {
+    /// Drain the control channel and apply queued VMM messages. Returns `true` if a
+    /// terminate message was received — the worker loop should then exit.
+    fn service_control(&mut self, ops: &mut EventOps) -> bool {
+        // Read the eventfd first so subsequent writes will re-arm it.
+        if let Some(ctrl) = &self.control {
+            let _ = ctrl.control_evt.read();
+        }
+        let mut terminate = false;
+        // Drain all pending messages.
+        while let Some(msg) = self.control.as_ref().and_then(|c| c.from_vmm.try_recv().ok()) {
+            let response = match msg {
+                ControlMsg::Pause => {
+                    if let Some(ctrl) = self.control.as_mut() {
+                        ctrl.paused = true;
+                    }
+                    ControlResponse::Ok
+                }
+                ControlMsg::Resume => {
+                    if let Some(ctrl) = self.control.as_mut() {
+                        ctrl.paused = false;
+                    }
+                    // Kick queue processing in case anything piled up while paused.
+                    if self.is_activated() {
+                        let _ = self.process_virtio_queues();
+                    }
+                    ControlResponse::Ok
+                }
+                ControlMsg::Terminate => {
+                    terminate = true;
+                    if let Some(ctrl) = self.control.as_mut() {
+                        ctrl.should_stop = true;
+                    }
+                    // Unregister subscriptions so run() returns quickly.
+                    self.unregister_runtime_events(ops);
+                    ControlResponse::Ok
+                }
+                ControlMsg::UpdateRateLimiter(bytes, ops_update) => {
+                    self.rate_limiter.update_buckets(bytes, ops_update);
+                    ControlResponse::Ok
+                }
+            };
+            if let Some(ctrl) = &self.control {
+                let _ = ctrl.to_vmm.send(response);
+            }
+        }
+        terminate
+    }
+
+    /// Unsubscribe every event we registered in `register_runtime_events`.
+    fn unregister_runtime_events(&self, ops: &mut EventOps) {
+        let block = self.block_ref();
+        let _ = ops.remove(Events::with_data(
+            &block.queue_evts[self.queue_index as usize],
+            Self::PROCESS_QUEUE,
+            EventSet::IN,
+        ));
+        let _ = ops.remove(Events::with_data(
+            &self.rate_limiter,
+            Self::PROCESS_RATE_LIMITER,
+            EventSet::IN,
+        ));
+        if let FileEngine::Async(ref engine) = block.disk.file_engine {
+            let _ = ops.remove(Events::with_data(
+                engine.completion_evt(),
+                Self::PROCESS_ASYNC_COMPLETION,
+                EventSet::IN,
+            ));
+        }
+        if let Some(ctrl) = &self.control {
+            let _ = ops.remove(Events::with_data(
+                &ctrl.control_evt,
+                Self::PROCESS_CONTROL,
+                EventSet::IN,
+            ));
+        }
+    }
+
+    fn paused(&self) -> bool {
+        self.control.as_ref().is_some_and(|c| c.paused)
+    }
+}
+
 impl MutEventSubscriber for BlockRuntimeState {
     fn process(&mut self, event: Events, ops: &mut EventOps) {
         let source = event.data();
@@ -82,9 +180,34 @@ impl MutEventSubscriber for BlockRuntimeState {
         if self.is_activated() {
             match source {
                 Self::PROCESS_ACTIVATE => self.process_activate_event(ops),
-                Self::PROCESS_QUEUE => self.process_queue_event(),
-                Self::PROCESS_RATE_LIMITER => self.process_rate_limiter_event(),
-                Self::PROCESS_ASYNC_COMPLETION => self.process_async_completion_event(),
+                Self::PROCESS_CONTROL => {
+                    self.service_control(ops);
+                }
+                Self::PROCESS_QUEUE if !self.paused() => self.process_queue_event(),
+                Self::PROCESS_RATE_LIMITER if !self.paused() => self.process_rate_limiter_event(),
+                Self::PROCESS_ASYNC_COMPLETION if !self.paused() => {
+                    self.process_async_completion_event();
+                }
+                Self::PROCESS_QUEUE
+                | Self::PROCESS_RATE_LIMITER
+                | Self::PROCESS_ASYNC_COMPLETION => {
+                    // Paused: drain the eventfd (or rate-limiter timer) but don't do IO.
+                    match source {
+                        Self::PROCESS_QUEUE => {
+                            let _ = self.block_ref().queue_evts[self.queue_index as usize].read();
+                        }
+                        Self::PROCESS_RATE_LIMITER => {
+                            let _ = self.rate_limiter.event_handler();
+                        }
+                        Self::PROCESS_ASYNC_COMPLETION => {
+                            if let FileEngine::Async(ref engine) = self.block_ref().disk.file_engine
+                            {
+                                let _ = engine.completion_evt().read();
+                            }
+                        }
+                        _ => (),
+                    }
+                }
                 _ => warn!("Block: Spurious event received: {:?}", source),
             }
         } else {
