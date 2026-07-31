@@ -26,7 +26,13 @@
                 "syscall": "read"
             },
             {
+                "syscall": "pread64"
+            },
+            {
                 "syscall": "write"
+            },
+            {
+                "syscall": "pwrite64"
             },
             {
                 "syscall": "mincore"
