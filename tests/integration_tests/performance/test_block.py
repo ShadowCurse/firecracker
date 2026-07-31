@@ -18,10 +18,10 @@ pytestmark = pin_guest_kernel(ACPI_GUEST_KERNELS)
 BLOCK_DEVICE_SIZE_MB = 2048
 
 # Time (in seconds) for which fio "warms up"
-WARMUP_SEC = 10
+WARMUP_SEC = 1
 
 # Time (in seconds) for which fio runs after warmup is done
-RUNTIME_SEC = 30
+RUNTIME_SEC = 3
 
 # VM guest memory size
 GUEST_MEM_MIB = 1024
