@@ -10,7 +10,9 @@ use vmm_sys_util::eventfd::EventFd;
 use super::device::DiskProperties;
 use super::*;
 use crate::devices::virtio::block::persist::BlockConstructorArgs;
-use crate::devices::virtio::block::virtio::device::FileEngineType;
+use crate::devices::virtio::block::virtio::device::{
+    BlockRuntimeState, FileEngineType, Runtime,
+};
 use crate::devices::virtio::block::virtio::metrics::BlockMetricsPerDevice;
 use crate::devices::virtio::device::{ActiveState, DeviceState, VirtioDeviceType};
 use crate::devices::virtio::generated::virtio_blk::VIRTIO_BLK_F_RO;
@@ -62,27 +64,93 @@ pub struct VirtioBlockState {
     file_engine_type: FileEngineTypeState,
 }
 
-// TODO: rewire snapshot save/restore on top of the new `Runtime` / `BlockRuntimeState` layout.
-// Stubbed out while the thread-per-queue prototype is in flux.
 impl Persist<'_> for VirtioBlock {
     type State = VirtioBlockState;
     type ConstructorArgs = BlockConstructorArgs;
     type Error = VirtioBlockError;
 
     fn save(&self) -> Self::State {
-        unimplemented!("block save disabled during thread-per-queue prototype")
+        // Save device state.
+        VirtioBlockState {
+            id: self.id.clone(),
+            partuuid: self.partuuid.clone(),
+            cache_type: self.cache_type,
+            root_device: self.root_device,
+            disk_path: self.disk.file_path.clone(),
+            virtio_state: VirtioDeviceState::from_device(self),
+            rate_limiter_state: self.runtime_state().rate_limiter.save(),
+            file_engine_type: FileEngineTypeState::from(self.file_engine_type()),
+        }
     }
 
     fn restore(
-        _constructor_args: Self::ConstructorArgs,
-        _state: &Self::State,
+        constructor_args: Self::ConstructorArgs,
+        state: &Self::State,
     ) -> Result<Self, Self::Error> {
-        unimplemented!("block restore disabled during thread-per-queue prototype")
+        let is_read_only = state.virtio_state.avail_features & (1u64 << VIRTIO_BLK_F_RO) != 0;
+        let rate_limiter = RateLimiter::restore((), &state.rate_limiter_state)
+            .map_err(VirtioBlockError::RateLimiter)?;
+
+        let disk_properties = DiskProperties::new(
+            state.disk_path.clone(),
+            is_read_only,
+            state.file_engine_type.into(),
+        )?;
+
+        let queue_evts =
+            vec![EventFd::new(libc::EFD_NONBLOCK).map_err(VirtioBlockError::EventFd)?];
+
+        let queues = state
+            .virtio_state
+            .build_queues_checked(
+                &constructor_args.mem,
+                VirtioDeviceType::Block,
+                BLOCK_NUM_QUEUES,
+                FIRECRACKER_MAX_QUEUE_SIZE,
+            )
+            .map_err(VirtioBlockError::Persist)?;
+
+        let avail_features = state.virtio_state.avail_features;
+        let acked_features = state.virtio_state.acked_features;
+
+        let config_space = ConfigSpace {
+            capacity: disk_properties.nsectors.to_le(),
+            num_queues: 1u16.to_le(),
+            ..Default::default()
+        };
+
+        let runtime_state = BlockRuntimeState {
+            queue_index: 0,
+            rate_limiter,
+            is_io_engine_throttled: false,
+            block: Default::default(),
+        };
+
+        Ok(VirtioBlock {
+            avail_features,
+            acked_features,
+            config_space,
+            activate_evt: EventFd::new(libc::EFD_NONBLOCK).map_err(VirtioBlockError::EventFd)?,
+
+            queues,
+            queue_evts,
+            disk: disk_properties,
+            device_state: DeviceState::Inactive,
+            metrics: BlockMetricsPerDevice::alloc(state.id.clone()),
+
+            id: state.id.clone(),
+            partuuid: state.partuuid.clone(),
+            cache_type: state.cache_type,
+            root_device: state.root_device,
+            read_only: is_read_only,
+            thread_per_queue: false,
+            num_queues: 1,
+
+            runtime: Runtime::SingleThread(runtime_state),
+        })
     }
 }
 
-// Tests are disabled during the thread-per-queue prototype.
-#[cfg(any())]
 #[cfg(test)]
 mod tests {
     use vmm_sys_util::tempfile::TempFile;
@@ -107,6 +175,7 @@ mod tests {
             cache_type: CacheType::Writeback,
             rate_limiter: None,
             file_engine_type: FileEngineType::default(),
+            num_queues: 1,
         };
 
         let block = VirtioBlock::new(config).unwrap();
@@ -148,6 +217,7 @@ mod tests {
             cache_type: CacheType::Unsafe,
             rate_limiter: None,
             file_engine_type: FileEngineType::default(),
+            num_queues: 1,
         };
 
         let block = VirtioBlock::new(config).unwrap();

@@ -65,32 +65,25 @@ pub fn default_block_with_path(path: String, file_engine_type: FileEngineType) -
     VirtioBlock::new(config).unwrap()
 }
 
-// The helpers below reach into `VirtioBlock` fields that moved into `BlockRuntimeState`.
-// They are gated out during the thread-per-queue prototype; the tests that use them are
-// gated out too.
-#[cfg(any())]
 pub fn set_queue(blk: &mut VirtioBlock, idx: usize, q: Queue) {
     blk.queues[idx] = q;
 }
 
-#[cfg(any())]
 pub fn set_rate_limiter(blk: &mut VirtioBlock, rl: RateLimiter) {
-    blk.rate_limiter = rl;
+    blk.runtime_state_mut().rate_limiter = rl;
 }
 
-#[cfg(any())]
 pub fn rate_limiter(blk: &mut VirtioBlock) -> &RateLimiter {
-    &blk.rate_limiter
+    &blk.runtime_state().rate_limiter
 }
 
-#[cfg(any())]
 #[cfg(test)]
 pub fn simulate_queue_event(b: &mut VirtioBlock, maybe_expected_irq: Option<bool>) {
     // Trigger the queue event.
 
     b.queue_evts[0].write(1).unwrap();
     // Handle event.
-    b.process_queue_event();
+    b.runtime_state_mut().process_queue_event();
     // Validate the queue operation finished successfully.
     if let Some(expected_irq) = maybe_expected_irq {
         assert_eq!(
@@ -101,7 +94,6 @@ pub fn simulate_queue_event(b: &mut VirtioBlock, maybe_expected_irq: Option<bool
     }
 }
 
-#[cfg(any())]
 #[cfg(test)]
 pub fn simulate_async_completion_event(b: &mut VirtioBlock, expected_irq: bool) {
     if let FileEngine::Async(ref mut engine) = b.disk.file_engine {
@@ -110,7 +102,7 @@ pub fn simulate_async_completion_event(b: &mut VirtioBlock, expected_irq: bool) 
         // Wait for the async completion event to be sent.
         thread::sleep(Duration::from_millis(150));
         // Handle event.
-        b.process_async_completion_event();
+        b.runtime_state_mut().process_async_completion_event();
     }
 
     // Validate if there are pending IRQs.
@@ -121,7 +113,6 @@ pub fn simulate_async_completion_event(b: &mut VirtioBlock, expected_irq: bool) 
     );
 }
 
-#[cfg(any())]
 #[cfg(test)]
 pub fn simulate_queue_and_async_completion_events(b: &mut VirtioBlock, expected_irq: bool) {
     match b.disk.file_engine {

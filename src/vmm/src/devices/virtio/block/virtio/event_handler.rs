@@ -5,6 +5,7 @@ use vmm_sys_util::epoll::EventSet;
 
 use super::io::FileEngine;
 use crate::devices::virtio::block::virtio::device::{BlockRuntimeState, Runtime, VirtioBlock};
+use crate::devices::virtio::device::VirtioDevice;
 use crate::logger::{error, warn};
 
 impl BlockRuntimeState {
@@ -41,7 +42,7 @@ impl BlockRuntimeState {
 
     pub fn register_activate_event(&self, ops: &mut EventOps) {
         if let Err(err) = ops.add(Events::with_data(
-            &self.activate_evt,
+            &self.block_ref().activate_evt,
             Self::PROCESS_ACTIVATE,
             EventSet::IN,
         )) {
@@ -50,12 +51,12 @@ impl BlockRuntimeState {
     }
 
     fn process_activate_event(&self, ops: &mut EventOps) {
-        if let Err(err) = self.activate_evt.read() {
+        if let Err(err) = self.block_ref().activate_evt.read() {
             error!("Failed to consume block activate event: {:?}", err);
         }
         self.register_runtime_events(ops);
         if let Err(err) = ops.remove(Events::with_data(
-            &self.activate_evt,
+            &self.block_ref().activate_evt,
             Self::PROCESS_ACTIVATE,
             EventSet::IN,
         )) {
@@ -139,8 +140,6 @@ impl MutEventSubscriber for VirtioBlock {
     }
 }
 
-// Tests are disabled during the thread-per-queue prototype.
-#[cfg(any())]
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};

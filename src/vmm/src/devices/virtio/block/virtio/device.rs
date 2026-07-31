@@ -10,6 +10,7 @@ use std::convert::From;
 use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{Seek, SeekFrom};
+use std::ops::Deref;
 use std::os::linux::fs::MetadataExt;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -159,21 +160,14 @@ impl DiskProperties {
     }
 }
 
-// Layout of `virtio_blk_config` up through `num_queues`. All fields we don't advertise
-// (size_max, seg_max, geometry, blk_size, topology, writeback, unused) stay zero, which
-// the virtio spec treats as "not supported" for every one of them, so the guest ignores
-// them. `num_queues` sits at offset 34 (`VIRTIO_BLK_F_MQ`).
+// `num_queues` sits at offset 34 in `virtio_blk_config` (`VIRTIO_BLK_F_MQ`). Unused
+// fields in between (size_max, seg_max, geometry, blk_size, topology, writeback, unused)
+// stay zero, which the virtio spec treats as "not supported" for each of them.
 #[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]
 #[repr(C, packed)]
 pub struct ConfigSpace {
     pub capacity: u64,
-    pub size_max: u32,
-    pub seg_max: u32,
-    pub geometry: [u8; 4],
-    pub blk_size: u32,
-    pub topology: [u8; 8],
-    pub writeback: u8,
-    pub unused0: u8,
+    pub _reserved: [u8; 26],
     pub num_queues: u16,
 }
 
@@ -263,11 +257,6 @@ impl From<VirtioBlockConfig> for BlockDeviceConfig {
 }
 
 /// Virtio device for exposing block level read/write operations on a host file.
-///
-/// All block-related data lives here. In single-thread mode the VMM thread drives one
-/// [`BlockRuntimeState`] pointing back at `VirtioBlock` and touching only slot 0 of the
-/// per-queue arrays. In worker-thread mode we spawn one thread per queue with its own
-/// `BlockRuntimeState`; each worker only touches its own `queue_index` slot.
 #[derive(Debug)]
 pub struct VirtioBlock {
     // Virtio fields.
@@ -276,19 +265,10 @@ pub struct VirtioBlock {
     pub config_space: ConfigSpace,
     pub activate_evt: EventFd,
 
-    // Per-queue arrays, indexed by queue index. In single-thread mode we use slot 0. In
-    // worker-thread mode worker `i` is the only one touching slot `i` after activation,
-    // so `BlockRuntimeState` can access these through a raw pointer without any locking.
+    // Transport related fields.
     pub queues: Vec<Queue>,
     pub queue_evts: Vec<EventFd>,
-    pub disk: DiskProperties,
     pub device_state: DeviceState,
-    pub metrics: Arc<BlockDeviceMetrics>,
-
-    // Interrupt is stashed here at activation time so `interrupt_trigger()` keeps working
-    // in both modes.
-    pub interrupt: Option<Arc<dyn VirtioInterrupt>>,
-    pub activated: bool,
 
     // Implementation specific fields.
     pub id: String,
@@ -298,13 +278,15 @@ pub struct VirtioBlock {
     pub read_only: bool,
     pub thread_per_queue: bool,
     pub num_queues: u16,
-    pub disk_path: String,
-    pub file_engine_type: FileEngineType,
-    pub rate_limiter_config: Option<RateLimiterConfig>,
+
+    // Host file and properties.
+    pub disk: DiskProperties,
+    pub metrics: Arc<BlockDeviceMetrics>,
 
     pub runtime: Runtime,
 }
 
+/// Runtime layout: one thread drives all queues (single-thread) or one thread per queue.
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum Runtime {
@@ -312,13 +294,13 @@ pub enum Runtime {
     WorkerThreads(Vec<std::thread::JoinHandle<()>>),
 }
 
-/// Raw pointer to the owning [`VirtioBlock`]. Manually made `Send` because after
-/// activation each worker only accesses its own slot in the per-queue arrays and the
-/// remaining fields are read-only.
-struct BlockPtr(*mut VirtioBlock);
+/// Raw pointer to the owning [`VirtioBlock`]. Worker `i` only mutates slot `i` of
+/// `queues`/`queue_evts` after activation and only reads the remaining (immutable-post-
+/// activation) fields, so no locking is needed on this pointer.
+#[derive(Default)]
+pub struct BlockPtr(*mut VirtioBlock);
 
-// SAFETY: See BlockPtr doc. Workers never race on the same slot; VirtioBlock's own fields
-// (id, cache_type, features, metrics Arc, ...) are read-only after `activate()`.
+// SAFETY: See BlockPtr doc.
 unsafe impl Send for BlockPtr {}
 
 impl fmt::Debug for BlockPtr {
@@ -327,17 +309,15 @@ impl fmt::Debug for BlockPtr {
     }
 }
 
-/// Runtime state and queue-processing logic for one queue.
+/// Per-queue runtime state driven by one thread.
 #[derive(Debug)]
 pub struct BlockRuntimeState {
-    /// Guest-side index of the queue this state drives (also the index into
-    /// `block.queues` / `block.queue_evts`).
+    /// Guest-visible index of the queue this state drives.
     pub queue_index: u16,
-    pub activate_evt: EventFd,
     pub rate_limiter: RateLimiter,
     pub is_io_engine_throttled: bool,
     /// Pointer back to the owning device. See [`BlockPtr`].
-    block: BlockPtr,
+    pub(crate) block: BlockPtr,
 }
 
 macro_rules! unwrap_async_file_engine_or_return {
@@ -404,16 +384,13 @@ impl VirtioBlock {
             .map(RateLimiter::from)
             .unwrap_or_default();
 
-        // The runtime state carries a raw pointer back to VirtioBlock. That pointer is
-        // filled in lazily by `refresh_block_ptr()` (called from `activate()`), because
-        // VirtioBlock's address can change between construction and activation (it gets
-        // moved into the outer `Block` enum and then into `Arc<Mutex<Block>>`).
+        // Pointer back to VirtioBlock is filled in by `refresh_block_ptr()` once its
+        // address is stable (i.e. once wrapped in `Arc<Mutex<Block>>`).
         let runtime_state = BlockRuntimeState {
             queue_index: 0,
-            activate_evt: EventFd::new(libc::EFD_NONBLOCK).map_err(VirtioBlockError::EventFd)?,
             rate_limiter,
             is_io_engine_throttled: false,
-            block: BlockPtr(std::ptr::null_mut()),
+            block: BlockPtr::default(),
         };
 
         Ok(VirtioBlock {
@@ -428,9 +405,6 @@ impl VirtioBlock {
             device_state: DeviceState::Inactive,
             metrics: BlockMetricsPerDevice::alloc(config.drive_id.clone()),
 
-            interrupt: None,
-            activated: false,
-
             id: config.drive_id,
             partuuid: config.partuuid,
             cache_type: config.cache_type,
@@ -438,17 +412,13 @@ impl VirtioBlock {
             read_only: config.is_read_only,
             thread_per_queue,
             num_queues: config.num_queues,
-            disk_path: config.path_on_host,
-            file_engine_type: config.file_engine_type,
-            rate_limiter_config: config.rate_limiter,
 
             runtime: Runtime::SingleThread(runtime_state),
         })
     }
 
-    /// Fill in the raw pointer inside the single-thread `BlockRuntimeState` (or into all
-    /// worker states, but by the time workers exist this has already been done). Called
-    /// from `activate()`; also used before spawning workers to seed their states.
+    /// Wire the raw pointer inside the single-thread `BlockRuntimeState` once
+    /// VirtioBlock's address is stable (post-`Arc<Mutex<...>>`).
     pub(crate) fn refresh_block_ptr(&mut self) {
         let ptr = self as *mut VirtioBlock;
         if let Runtime::SingleThread(state) = &mut self.runtime {
@@ -474,15 +444,16 @@ impl VirtioBlock {
 
     /// Returns a copy of a device config.
     pub fn config(&self) -> VirtioBlockConfig {
+        let rl: RateLimiterConfig = (&self.runtime_state().rate_limiter).into();
         VirtioBlockConfig {
             drive_id: self.id.clone(),
-            path_on_host: self.disk_path.clone(),
+            path_on_host: self.disk.file_path.clone(),
             is_root_device: self.root_device,
             partuuid: self.partuuid.clone(),
             is_read_only: self.read_only,
             cache_type: self.cache_type,
-            rate_limiter: self.rate_limiter_config,
-            file_engine_type: self.file_engine_type,
+            rate_limiter: rl.into_option(),
+            file_engine_type: self.file_engine_type(),
             num_queues: self.num_queues,
         }
     }
@@ -511,12 +482,17 @@ impl VirtioBlock {
     }
 
     pub fn update_rate_limiter(&mut self, bytes: BucketUpdate, ops: BucketUpdate) {
-        self.runtime_state_mut().update_rate_limiter(bytes, ops);
+        self.runtime_state_mut()
+            .rate_limiter
+            .update_buckets(bytes, ops);
     }
 
     /// Retrieve the file engine type.
     pub fn file_engine_type(&self) -> FileEngineType {
-        self.file_engine_type
+        match self.disk.file_engine {
+            FileEngine::Sync(_) => FileEngineType::Sync,
+            FileEngine::Async(_) => FileEngineType::Async,
+        }
     }
 
     fn drain_and_flush(&mut self, discard: bool) {
@@ -544,23 +520,15 @@ impl VirtioBlock {
 
 impl BlockRuntimeState {
     /// Access to the owning [`VirtioBlock`]. See [`BlockPtr`] for the safety invariant.
-    ///
-    /// The returned reference is deliberately given an unbound `'a` lifetime so the
-    /// borrow checker doesn't tie it to `&self` — the raw pointer we hold is not
-    /// derived from `self`, so this reference doesn't actually alias `self`. Callers
-    /// must uphold the invariant that only *this* worker touches its slot in the
-    /// per-queue arrays after activation.
+    /// The returned reference has an unbound lifetime so the borrow checker doesn't tie
+    /// it to `&self` (the pointer isn't derived from `self`).
     #[allow(clippy::mut_from_ref)]
     pub(crate) fn block<'a>(&self) -> &'a mut VirtioBlock {
-        // SAFETY: see BlockPtr doc and `refresh_block_ptr()`. The pointer was written
-        // from a valid `&mut VirtioBlock` before any worker was spawned. Between then
-        // and drop, VirtioBlock is pinned in place (it lives inside an Arc<Mutex<...>>
-        // once handed to the transport). Fields accessed through this reference are
-        // either indexed by `self.queue_index` (unique per worker) or read-only.
+        // SAFETY: see BlockPtr. Worker `i` only mutates slot `i` of the per-queue arrays
+        // after activation; everything else it touches is read-only or atomic.
         unsafe { &mut *self.block.0 }
     }
 
-    /// Shared-ref helper for read-only accesses (event registration, etc.).
     pub(crate) fn block_ref(&self) -> &VirtioBlock {
         // SAFETY: see `block()`.
         unsafe { &*self.block.0 }
@@ -740,12 +708,7 @@ impl BlockRuntimeState {
     }
 
     pub fn is_activated(&self) -> bool {
-        self.block().activated
-    }
-
-    /// Updates the parameters for the rate limiter.
-    pub fn update_rate_limiter(&mut self, bytes: BucketUpdate, ops: BucketUpdate) {
-        self.rate_limiter.update_buckets(bytes, ops);
+        self.block_ref().device_state.is_activated()
     }
 }
 
@@ -809,9 +772,11 @@ impl VirtioDevice for VirtioBlock {
     }
 
     fn interrupt_trigger(&self) -> &dyn VirtioInterrupt {
-        self.interrupt
-            .as_deref()
-            .expect("Device is not activated")
+        self.device_state
+            .active_state()
+            .expect("Device is not initialized")
+            .interrupt
+            .deref()
     }
 
     fn config_as_bytes(&self) -> &[u8] {
@@ -849,12 +814,7 @@ impl VirtioDevice for VirtioBlock {
             }
         }
 
-        self.device_state = DeviceState::Activated(ActiveState {
-            mem,
-            interrupt: interrupt.clone(),
-        });
-        self.interrupt = Some(interrupt);
-        self.activated = true;
+        self.device_state = DeviceState::Activated(ActiveState { mem, interrupt });
 
         // Now that VirtioBlock's address is stable (it's already inside its Arc<Mutex>),
         // fill in the raw pointer on the runtime state and (for worker mode) spawn one
@@ -862,15 +822,17 @@ impl VirtioDevice for VirtioBlock {
         self.refresh_block_ptr();
 
         if !self.thread_per_queue {
-            let state = self.runtime_state_mut();
-            if state.activate_evt.write(1).is_err() {
+            if self.activate_evt.write(1).is_err() {
+                self.metrics.activate_fails.inc();
                 return Err(ActivateError::EventFd);
             }
             return Ok(());
         }
 
-        // Worker-thread mode.
+        // Worker-thread mode. Take the shared config out of the initial single-thread
+        // runtime state; each worker gets its own RateLimiter built from the same config.
         let ptr = self as *mut VirtioBlock;
+        let rl_config: RateLimiterConfig = (&self.runtime_state().rate_limiter).into();
         let mut workers: Vec<std::thread::JoinHandle<()>> = Vec::new();
         for (idx, q) in self.queues.iter().enumerate() {
             if !q.ready {
@@ -878,9 +840,8 @@ impl VirtioDevice for VirtioBlock {
             }
             let per_queue = BlockRuntimeState {
                 queue_index: u16::try_from(idx).expect("queue index fits in u16"),
-                activate_evt: EventFd::new(libc::EFD_NONBLOCK).map_err(|_| ActivateError::EventFd)?,
-                rate_limiter: self
-                    .rate_limiter_config
+                rate_limiter: rl_config
+                    .into_option()
                     .map(RateLimiter::from)
                     .unwrap_or_default(),
                 is_io_engine_throttled: false,
@@ -902,12 +863,10 @@ impl VirtioDevice for VirtioBlock {
     }
 
     fn is_activated(&self) -> bool {
-        self.activated
+        self.device_state.is_activated()
     }
 
     fn deactivate(&mut self) {
-        self.activated = false;
-        self.interrupt = None;
         self.device_state = DeviceState::Inactive;
     }
 
@@ -949,8 +908,6 @@ impl Drop for VirtioBlock {
     }
 }
 
-// Tests are disabled during the thread-per-queue prototype.
-#[cfg(any())]
 #[cfg(test)]
 mod tests {
     use std::fs::metadata;
@@ -986,6 +943,7 @@ mod tests {
             path_on_host: Some("path".to_string()),
             rate_limiter: None,
             file_engine_type: Default::default(),
+            num_queues: None,
 
             socket: None,
         };
@@ -1001,6 +959,7 @@ mod tests {
             path_on_host: None,
             rate_limiter: None,
             file_engine_type: Default::default(),
+            num_queues: None,
 
             socket: Some("sock".to_string()),
         };
@@ -1016,6 +975,7 @@ mod tests {
             path_on_host: Some("path".to_string()),
             rate_limiter: None,
             file_engine_type: Default::default(),
+            num_queues: None,
 
             socket: Some("sock".to_string()),
         };
@@ -1081,7 +1041,11 @@ mod tests {
 
             let config = block.config_as_bytes();
             // The block's backing file size is 0x1000, so there are 8 (4096/512) sectors.
-            let expected_config_space = ConfigSpace { capacity: 8 };
+            let expected_config_space = ConfigSpace {
+                capacity: 8,
+                num_queues: 1,
+                ..Default::default()
+            };
             assert_eq!(config, expected_config_space.as_slice());
         }
     }
@@ -1101,6 +1065,7 @@ mod tests {
                 0,
                 ConfigSpace {
                     capacity: 0x1122334455667788,
+                    ..Default::default()
                 }
                 .as_slice(),
             );
@@ -1841,25 +1806,25 @@ mod tests {
             // Run scenario that doesn't trigger FullSq BlockError: Add sq_size flush requests.
             add_flush_requests_batch(&mut block, &vq, IO_URING_NUM_ENTRIES);
             simulate_queue_event(&mut block, Some(false));
-            assert!(!block.is_io_engine_throttled);
+            assert!(!block.runtime_state().is_io_engine_throttled);
             simulate_async_completion_event(&mut block, true);
             check_flush_requests_batch(IO_URING_NUM_ENTRIES, &vq);
 
             // Run scenario that triggers FullSqError : Add sq_size + 10 flush requests.
             add_flush_requests_batch(&mut block, &vq, IO_URING_NUM_ENTRIES + 10);
             simulate_queue_event(&mut block, Some(false));
-            assert!(block.is_io_engine_throttled);
+            assert!(block.runtime_state().is_io_engine_throttled);
             // When the async_completion_event is triggered:
             // 1. sq_size requests should be processed processed.
             // 2. is_io_engine_throttled should be set back to false.
             // 3. process_queue() should be called again.
             simulate_async_completion_event(&mut block, true);
-            assert!(!block.is_io_engine_throttled);
+            assert!(!block.runtime_state().is_io_engine_throttled);
             check_flush_requests_batch(IO_URING_NUM_ENTRIES, &vq);
             // check that process_queue() was called again resulting in the processing of the
             // remaining 10 ops.
             simulate_async_completion_event(&mut block, true);
-            assert!(!block.is_io_engine_throttled);
+            assert!(!block.runtime_state().is_io_engine_throttled);
             check_flush_requests_batch(IO_URING_NUM_ENTRIES + 10, &vq);
         }
 
@@ -1877,18 +1842,18 @@ mod tests {
             // completion. Then try to push another entry.
             add_flush_requests_batch(&mut block, &vq, IO_URING_NUM_ENTRIES);
             simulate_queue_event(&mut block, Some(false));
-            assert!(!block.is_io_engine_throttled);
+            assert!(!block.runtime_state().is_io_engine_throttled);
             thread::sleep(Duration::from_millis(150));
             add_flush_requests_batch(&mut block, &vq, IO_URING_NUM_ENTRIES);
             simulate_queue_event(&mut block, Some(false));
-            assert!(!block.is_io_engine_throttled);
+            assert!(!block.runtime_state().is_io_engine_throttled);
             thread::sleep(Duration::from_millis(150));
 
             add_flush_requests_batch(&mut block, &vq, 1);
             simulate_queue_event(&mut block, Some(false));
-            assert!(block.is_io_engine_throttled);
+            assert!(block.runtime_state().is_io_engine_throttled);
             simulate_async_completion_event(&mut block, true);
-            assert!(!block.is_io_engine_throttled);
+            assert!(!block.runtime_state().is_io_engine_throttled);
             check_flush_requests_batch(IO_URING_NUM_ENTRIES * 2, &vq);
         }
     }
@@ -1954,7 +1919,7 @@ mod tests {
                 );
 
                 // Assert that limiter is blocked.
-                assert!(block.rate_limiter.is_blocked());
+                assert!(block.runtime_state().rate_limiter.is_blocked());
                 // Make sure the data is still queued for processing.
                 assert_eq!(vq.used.idx.get(), 0);
             }
@@ -1968,10 +1933,10 @@ mod tests {
                 check_metric_after_block!(
                     &block.metrics.rate_limiter_throttled_events,
                     0,
-                    block.process_rate_limiter_event()
+                    block.runtime_state_mut().process_rate_limiter_event()
                 );
                 // Validate the rate_limiter is no longer blocked.
-                assert!(!block.rate_limiter.is_blocked());
+                assert!(!block.runtime_state().rate_limiter.is_blocked());
                 // Complete async IO ops if needed
                 simulate_async_completion_event(&mut block, true);
 
@@ -2023,7 +1988,7 @@ mod tests {
                 );
 
                 // Assert that limiter is blocked.
-                assert!(block.rate_limiter.is_blocked());
+                assert!(block.runtime_state().rate_limiter.is_blocked());
                 // Make sure the data is still queued for processing.
                 assert_eq!(vq.used.idx.get(), 0);
             }
@@ -2038,7 +2003,7 @@ mod tests {
                 );
 
                 // Assert that limiter is blocked.
-                assert!(block.rate_limiter.is_blocked());
+                assert!(block.runtime_state().rate_limiter.is_blocked());
                 // Make sure the data is still queued for processing.
                 assert_eq!(vq.used.idx.get(), 0);
             }
@@ -2052,10 +2017,10 @@ mod tests {
                 check_metric_after_block!(
                     &block.metrics.rate_limiter_throttled_events,
                     0,
-                    block.process_rate_limiter_event()
+                    block.runtime_state_mut().process_rate_limiter_event()
                 );
                 // Validate the rate_limiter is no longer blocked.
-                assert!(!block.rate_limiter.is_blocked());
+                assert!(!block.runtime_state().rate_limiter.is_blocked());
                 // Complete async IO ops if needed
                 simulate_async_completion_event(&mut block, true);
 
