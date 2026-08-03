@@ -100,15 +100,17 @@ impl PartialOrd for BusRange {
 /// only restriction is that no two devices can overlap in this address space.
 #[derive(Default, Debug)]
 pub struct Bus {
-    devices: RwLock<BTreeMap<BusRange, Weak<Mutex<dyn BusDevice>>>>,
+    // devices: RwLock<BTreeMap<BusRange, Weak<Mutex<dyn BusDevice>>>>,
+    devices: [Option<(BusRange, Weak<Mutex<dyn BusDevice>>)>; 32],
 }
 
 impl Bus {
     /// Constructs an a bus with an empty address space.
     pub fn new() -> Bus {
-        Bus {
-            devices: RwLock::new(BTreeMap::new()),
-        }
+        Default::default()
+        // Bus {
+        //     devices: RwLock::new(BTreeMap::new()),
+        // }
     }
 
     /// Insert a device into the [`Bus`] in the range [`addr`, `addr` + `len`].
@@ -120,26 +122,48 @@ impl Bus {
     ) -> Result<(), BusError> {
         let new_range = BusRange::new(base, len)?;
 
+        // TODO add an assert that only 1 thread acceses this
+
         // Reject all cases where the new device's range overlaps with an existing device.
         if self
             .devices
-            .read()
-            .unwrap()
+            // .read()
+            // .unwrap()
             .iter()
-            .any(|(range, _dev)| range.overlaps(&new_range))
+            .any(|o| {
+                if let Some((range, _dev)) = o {
+                    range.overlaps(&new_range)
+                } else {
+                    false
+                }
+            })
         {
             return Err(BusError::Overlap);
         }
 
-        if self
-            .devices
-            .write()
-            .unwrap()
-            .insert(new_range, Arc::downgrade(&device))
-            .is_some()
-        {
+        #[allow(mutable_transmutes)]
+        let self_mut: &mut Self = unsafe { core::mem::transmute(self) };
+        let mut inserted = false;
+        for d in self_mut.devices.iter_mut() {
+            if d.is_none() {
+                *d = Some((new_range, Arc::downgrade(&device)));
+                inserted = true;
+            }
+        }
+        if !inserted {
+            // no space
             return Err(BusError::Overlap);
         }
+
+        // if self
+        //     .devices
+        //     .write()
+        //     .unwrap()
+        //     .insert(new_range, Arc::downgrade(&device))
+        //     .is_some()
+        // {
+        //     return Err(BusError::Overlap);
+        // }
 
         Ok(())
     }
@@ -148,9 +172,22 @@ impl Bus {
     pub fn remove(&self, base: u64, len: u64) -> Result<(), BusError> {
         let bus_range = BusRange::new(base, len)?;
 
-        if self.devices.write().unwrap().remove(&bus_range).is_none() {
-            return Err(BusError::MissingAddressRange);
+        // only vmm thread must be able to call this
+
+        #[allow(mutable_transmutes)]
+        let self_mut: &mut Self = unsafe { core::mem::transmute(self) };
+        for d in self_mut.devices.iter_mut() {
+            if let Some(dd) = &d {
+                if dd.0 == bus_range {
+                    *d = None;
+                    break;
+                }
+            }
         }
+
+        // if self.devices.write().unwrap().remove(&bus_range).is_none() {
+        //     return Err(BusError::MissingAddressRange);
+        // }
 
         Ok(())
     }
@@ -162,21 +199,36 @@ impl Bus {
         addr: u64,
         f: impl FnOnce(&mut dyn BusDevice, u64, u64) -> T,
     ) -> Result<T, BusError> {
-        let devices = self.devices.read().unwrap();
-        if let Some((range, dev)) = devices
-            .range(..=BusRange::new(addr, 1).unwrap())
-            .next_back()
-            && addr <= range.end()
-            && let Some(device) = dev.upgrade()
-        {
-            let mut device = device.lock().unwrap();
-            let base = range.base();
-            let offset = addr - range.base();
-            let result = f(&mut *device, base, offset);
-            Ok(result)
-        } else {
-            Err(BusError::MissingAddressRange)
+        // let devices = self.devices.read().unwrap();
+        for d in self.devices.iter() {
+            if let Some(dd) = d {
+                if dd.0.overlaps(&BusRange::new(addr, 1).unwrap()) {
+                    if let Some(device) = dd.1.upgrade() {
+                        let mut device = device.lock().unwrap();
+                        let base = dd.0.base();
+                        let offset = addr - dd.0.base();
+                        let result = f(&mut *device, base, offset);
+                        return Ok(result);
+                    }
+                }
+            }
         }
+        Err(BusError::MissingAddressRange)
+
+        // if let Some((range, dev)) = devices
+        //     .range(..=BusRange::new(addr, 1).unwrap())
+        //     .next_back()
+        //     && addr <= range.end()
+        //     && let Some(device) = dev.upgrade()
+        // {
+        //     let mut device = device.lock().unwrap();
+        //     let base = range.base();
+        //     let offset = addr - range.base();
+        //     let result = f(&mut *device, base, offset);
+        //     Ok(result)
+        // } else {
+        //     Err(BusError::MissingAddressRange)
+        // }
     }
 
     /// Reads data from the device that owns the range containing `addr` and puts it into `data`.
