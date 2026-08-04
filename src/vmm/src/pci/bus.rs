@@ -14,6 +14,7 @@ use crate::pci::configuration::PciConfiguration;
 use crate::pci::{PciBridgeSubclass, PciClassCode, PciDevice};
 use crate::utils::u64_to_usize;
 use crate::vstate::bus::BusDevice;
+use crate::vstate::bus::BusRange;
 
 /// Errors for device manager.
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
@@ -61,6 +62,7 @@ impl BusDevice for PciRoot {}
 impl PciDevice for PciRoot {
     fn write_config_register(
         &mut self,
+        _range: &BusRange,
         reg_idx: u16,
         offset: u8,
         data: &[u8],
@@ -195,7 +197,12 @@ impl PciConfigIo {
     /// Handle a configuration space write over Port IO
     // offset is validated to be < 4 at the top of this function.
     #[allow(clippy::cast_possible_truncation)]
-    pub fn config_space_write(&mut self, offset: u64, data: &[u8]) -> Option<Arc<Barrier>> {
+    pub fn config_space_write(
+        &mut self,
+        range: &BusRange,
+        offset: u64,
+        data: &[u8],
+    ) -> Option<Arc<Barrier>> {
         if u64_to_usize(offset) + data.len() > 4 {
             return None;
         }
@@ -230,7 +237,7 @@ impl PciConfigIo {
             let offset = offset as u8;
 
             // Update the register value
-            device.write_config_register(register, offset, data)
+            device.write_config_register(range, register, offset, data)
         } else {
             None
         }
@@ -280,14 +287,20 @@ impl BusDevice for PciConfigIo {
         }
     }
 
-    fn write(&mut self, _base: u64, offset: u64, data: &[u8]) -> Option<Arc<Barrier>> {
+    fn write(
+        &mut self,
+        range: &BusRange,
+        _base: u64,
+        offset: u64,
+        data: &[u8],
+    ) -> Option<Arc<Barrier>> {
         // `offset` is relative to 0xcf8
         match offset {
             o @ 0..=3 => {
                 self.set_config_address(o, data);
                 None
             }
-            o @ 4..=7 => self.config_space_write(o - 4, data),
+            o @ 4..=7 => self.config_space_write(range, o - 4, data),
             _ => None,
         }
     }
@@ -326,7 +339,13 @@ impl PciConfigMmio {
         }
     }
 
-    fn config_space_write(&mut self, config_address: u32, offset: u64, data: &[u8]) {
+    fn config_space_write(
+        &mut self,
+        range: &BusRange,
+        config_address: u32,
+        offset: u64,
+        data: &[u8],
+    ) {
         if u64_to_usize(offset) + data.len() > 4 {
             return;
         }
@@ -352,7 +371,7 @@ impl PciConfigMmio {
             let offset = offset as u8;
 
             // Update the register value
-            device.write_config_register(register, offset, data);
+            device.write_config_register(range, register, offset, data);
         }
     }
 }
@@ -379,7 +398,13 @@ impl BusDevice for PciConfigMmio {
         }
     }
 
-    fn write(&mut self, _base: u64, offset: u64, data: &[u8]) -> Option<Arc<Barrier>> {
+    fn write(
+        &mut self,
+        range: &BusRange,
+        _base: u64,
+        offset: u64,
+        data: &[u8],
+    ) -> Option<Arc<Barrier>> {
         if offset > u64::from(u32::MAX) {
             return None;
         }
@@ -388,7 +413,7 @@ impl BusDevice for PciConfigMmio {
         #[allow(clippy::cast_possible_truncation)]
         let offset_u32 = offset as u32;
 
-        self.config_space_write(offset_u32, offset % 4, data);
+        self.config_space_write(range, offset_u32, offset % 4, data);
 
         None
     }

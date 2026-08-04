@@ -6,7 +6,7 @@ use std::sync::{Arc, Barrier};
 use utils::time::TimestampUs;
 
 use crate::logger::info;
-use crate::vstate::bus::BusDevice;
+use crate::vstate::bus::{BusDevice, BusRange};
 
 const MAGIC_VALUE_SIGNAL_GUEST_BOOT_COMPLETE: u8 = 123;
 
@@ -17,7 +17,13 @@ pub struct BootTimer {
 }
 
 impl BusDevice for BootTimer {
-    fn write(&mut self, _base: u64, offset: u64, data: &[u8]) -> Option<Arc<Barrier>> {
+    fn write(
+        &mut self,
+        _range: &BusRange,
+        _base: u64,
+        offset: u64,
+        data: &[u8],
+    ) -> Option<Arc<Barrier>> {
         // Only handle byte length instructions at a zero offset.
         if data.len() != 1 || offset != 0 {
             return None;

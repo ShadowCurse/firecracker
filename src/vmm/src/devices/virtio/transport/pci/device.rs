@@ -7,6 +7,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0 AND BSD-3-Clause
 
+use crate::vstate::bus::BusRange;
 use std::cmp;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
@@ -831,6 +832,7 @@ impl VirtioInterrupt for VirtioInterruptMsix {
 impl PciDevice for VirtioPciDevice {
     fn write_config_register(
         &mut self,
+        _range: &BusRange,
         reg_idx: u16,
         offset: u8,
         data: &[u8],
@@ -1077,7 +1079,13 @@ impl BusDevice for VirtioPciDevice {
         self.read_bar(base, offset, data)
     }
 
-    fn write(&mut self, base: u64, offset: u64, data: &[u8]) -> Option<Arc<Barrier>> {
+    fn write(
+        &mut self,
+        _range: &BusRange,
+        base: u64,
+        offset: u64,
+        data: &[u8],
+    ) -> Option<Arc<Barrier>> {
         self.write_bar(base, offset, data)
     }
 }

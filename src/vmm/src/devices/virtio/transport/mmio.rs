@@ -17,7 +17,7 @@ use crate::devices::virtio::device_status;
 use crate::devices::virtio::queue::Queue;
 use crate::logger::{IncMetric, METRICS, error, warn};
 use crate::utils::byte_order;
-use crate::vstate::bus::BusDevice;
+use crate::vstate::bus::{BusDevice, BusRange};
 use crate::vstate::interrupts::InterruptError;
 use crate::vstate::memory::{GuestAddress, GuestMemoryMmap};
 
@@ -287,7 +287,13 @@ impl BusDevice for MmioTransport {
         };
     }
 
-    fn write(&mut self, base: u64, offset: u64, data: &[u8]) -> Option<Arc<Barrier>> {
+    fn write(
+        &mut self,
+        _range: &BusRange,
+        base: u64,
+        offset: u64,
+        data: &[u8],
+    ) -> Option<Arc<Barrier>> {
         fn hi(v: &mut GuestAddress, x: u32) {
             *v = (*v & 0xffff_ffff) | (u64::from(x) << 32)
         }

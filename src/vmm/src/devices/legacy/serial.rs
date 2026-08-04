@@ -24,7 +24,7 @@ use crate::devices::legacy::EventFdTrigger;
 use crate::logger::{IncMetric, SharedIncMetric, error, warn};
 use crate::rate_limiter::{BucketReduction, TokenBucket};
 use crate::utils::usize_to_u64;
-use crate::vstate::bus::BusDevice;
+use crate::vstate::bus::{BusDevice, BusRange};
 
 /// Metrics specific to the UART device.
 #[derive(Debug, Serialize, Default)]
@@ -420,7 +420,13 @@ where
         }
     }
 
-    fn write(&mut self, _base: u64, offset: u64, data: &[u8]) -> Option<Arc<Barrier>> {
+    fn write(
+        &mut self,
+        _range: &BusRange,
+        _base: u64,
+        offset: u64,
+        data: &[u8],
+    ) -> Option<Arc<Barrier>> {
         if let (Ok(offset), 1) = (u8::try_from(offset), data.len()) {
             if let Err(err) = self.serial.write(offset, data[0]) {
                 // Counter incremented for any handle_write() error.

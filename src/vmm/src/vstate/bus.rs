@@ -7,9 +7,10 @@
 
 //! Handles routing to devices in an address space.
 
-use std::cmp::Ordering;
-use std::collections::btree_map::BTreeMap;
-use std::sync::{Arc, Barrier, Mutex, RwLock, Weak};
+use std::cell::UnsafeCell;
+use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Barrier, Mutex, Weak};
 
 /// Trait for devices that respond to reads or writes in an arbitrary address space.
 ///
@@ -20,7 +21,13 @@ pub trait BusDevice: Send {
     /// Reads at `offset` from this device
     fn read(&mut self, base: u64, offset: u64, data: &mut [u8]) {}
     /// Writes at `offset` into this device
-    fn write(&mut self, base: u64, offset: u64, data: &[u8]) -> Option<Arc<Barrier>> {
+    fn write(
+        &mut self,
+        range: &BusRange,
+        base: u64,
+        offset: u64,
+        data: &[u8],
+    ) -> Option<Arc<Barrier>> {
         None
     }
 }
@@ -38,211 +45,274 @@ pub enum BusError {
     InvalidRange,
 }
 
-/// Holds a base and end representing the address space occupied by a `BusDevice`.
+/// Address range occupied by a device.
 ///
-/// * base - The address at which the range start.
-/// * end - The last address of the range (inclusive).
-#[derive(Debug, Copy, Clone)]
+/// Encoded as `base` + `len` in two independent `AtomicU64`s so that:
+///  * readers can observe the range without locking or blocking any writer;
+///  * a writer can atomically hide the range from readers by storing `len = 0`,
+///    change `base` while the range is invisible, and republish the new
+///    `(base, len)` — without racing with concurrent lookups.
+///
+/// `len == 0` is the "empty / in transition" sentinel: searches skip such
+/// slots. Because `len` is only ever stored as `0` or as the real (non-zero)
+/// length of the range, the seqlock-style double check on `len` in `snapshot`
+/// is immune to ABA — the same `len` value at both endpoints implies the
+/// intervening `base` load returned a consistent view of the current range.
+#[derive(Debug, Default)]
 pub struct BusRange {
-    /// base address of a range within a [`Bus`]
-    base: u64,
-    /// last address of a range within a [`Bus`] (inclusive)
-    end: u64,
+    /// Base address (inclusive).
+    pub base: AtomicU64,
+    /// Length of the range in bytes. Zero means the slot is empty / in transition.
+    pub len: AtomicU64,
 }
 
-#[allow(missing_docs)]
 impl BusRange {
+    /// Create a new range covering `[base, base + len)`.
+    ///
+    /// Fails if `len == 0` or `base + len - 1` overflows.
     pub fn new(base: u64, len: u64) -> Result<Self, BusError> {
         if len == 0 {
             return Err(BusError::ZeroSizedRange);
         }
-        let end = base.checked_add(len - 1).ok_or(BusError::InvalidRange)?;
-        Ok(BusRange { base, end })
+        base.checked_add(len - 1).ok_or(BusError::InvalidRange)?;
+        Ok(BusRange {
+            base: AtomicU64::new(base),
+            len: AtomicU64::new(len),
+        })
     }
 
+    /// Base address of the range.
     pub fn base(&self) -> u64 {
-        self.base
+        self.base.load(Ordering::Acquire)
     }
 
-    pub fn end(&self) -> u64 {
-        self.end
+    /// Length of the range. Zero means empty / in transition.
+    pub fn len(&self) -> u64 {
+        self.len.load(Ordering::Acquire)
     }
 
-    /// Returns true if there is overlap with the given range.
+    /// True when the range is currently empty / in transition.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Reads a consistent `(base, len)` snapshot. Returns `(0, 0)` if the slot
+    /// is empty or currently being updated by a writer.
+    fn snapshot(&self) -> (u64, u64) {
+        loop {
+            let len1 = self.len.load(Ordering::Acquire);
+            if len1 == 0 {
+                return (0, 0);
+            }
+            let base = self.base.load(Ordering::Acquire);
+            let len2 = self.len.load(Ordering::Acquire);
+            if len1 == len2 {
+                return (base, len1);
+            }
+            std::hint::spin_loop();
+        }
+    }
+
+    /// Returns whether `addr` currently falls within this range.
+    pub fn contains(&self, addr: u64) -> bool {
+        let (base, len) = self.snapshot();
+        len != 0 && base <= addr && addr - base < len
+    }
+
+    /// Returns whether this range overlaps with `other`.
     pub fn overlaps(&self, other: &BusRange) -> bool {
-        self.base <= other.end && other.base <= self.end
+        let (a_base, a_len) = self.snapshot();
+        let (b_base, b_len) = other.snapshot();
+        if a_len == 0 || b_len == 0 {
+            return false;
+        }
+        let a_end = a_base + a_len - 1;
+        let b_end = b_base + b_len - 1;
+        a_base <= b_end && b_base <= a_end
+    }
+
+    /// Publish a new `(base, len)` for this range. Writer-only.
+    ///
+    /// Sequence:
+    ///  1. Store `len = 0` — the range becomes invisible to lookups.
+    ///  2. Store the new `base` while the range is still invisible.
+    ///  3. Store the new (non-zero) `len` — republishes with the new base.
+    pub fn set(&self, new_base: u64, new_len: u64) {
+        self.len.store(0, Ordering::Release);
+        self.base.store(new_base, Ordering::Release);
+        self.len.store(new_len, Ordering::Release);
+    }
+
+    /// Hide the range from lookups. Writer-only.
+    pub fn clear(&self) {
+        self.len.store(0, Ordering::Release);
     }
 }
 
-impl Eq for BusRange {}
+/// One slot inside a [`Bus`]: an address range plus the device it points to.
+///
+/// The `Weak` lives in an `UnsafeCell` so the writer can update it through
+/// `&self`. It is only mutated by the writer thread and only while
+/// `range.len == 0`. Readers only touch it after having observed
+/// `range.len != 0` — the release-store that published that `len` also
+/// published the `device` write, so the read is data-race free.
+#[derive(Default)]
+struct Slot {
+    range: BusRange,
+    device: UnsafeCell<Option<Weak<Mutex<dyn BusDevice>>>>,
+}
 
-impl PartialEq for BusRange {
-    fn eq(&self, other: &BusRange) -> bool {
-        self.base == other.base
+impl fmt::Debug for Slot {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Slot").field("range", &self.range).finish()
     }
 }
 
-impl Ord for BusRange {
-    fn cmp(&self, other: &BusRange) -> Ordering {
-        self.base.cmp(&other.base)
-    }
-}
-
-impl PartialOrd for BusRange {
-    fn partial_cmp(&self, other: &BusRange) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
+// SAFETY: access to `device` is coordinated via `range.len`. See the type
+// comment above. Writers only touch it while readers are guaranteed not to,
+// and readers only touch it in a happens-after position relative to the
+// writer's release-store of a non-zero `len`.
+unsafe impl Sync for Slot {}
 
 /// A device container for routing reads and writes over some address space.
 ///
-/// This doesn't have any restrictions on what kind of device or address space this applies to. The
-/// only restriction is that no two devices can overlap in this address space.
-#[derive(Default, Debug)]
+/// Invariants:
+///  * At most one writer thread performs `insert` / `remove` at a time.
+///    Readers may run concurrently with the writer and with each other; none
+///    of them block.
+///  * Currently-visible ranges do not overlap.
+#[derive(Debug)]
 pub struct Bus {
-    // devices: RwLock<BTreeMap<BusRange, Weak<Mutex<dyn BusDevice>>>>,
-    devices: [Option<(BusRange, Weak<Mutex<dyn BusDevice>>)>; 32],
+    slots: [Slot; NUM_SLOTS],
+}
+
+const NUM_SLOTS: usize = 32;
+
+impl Default for Bus {
+    fn default() -> Self {
+        Bus {
+            slots: std::array::from_fn(|_| Slot::default()),
+        }
+    }
 }
 
 impl Bus {
-    /// Constructs an a bus with an empty address space.
+    /// Constructs an empty bus.
     pub fn new() -> Bus {
-        Default::default()
-        // Bus {
-        //     devices: RwLock::new(BTreeMap::new()),
-        // }
+        Bus::default()
     }
 
-    /// Insert a device into the [`Bus`] in the range [`addr`, `addr` + `len`].
+    /// Insert a device into the [`Bus`] in the range `[base, base + len)`.
+    ///
+    /// Must only be called from the (single) writer thread.
     pub fn insert(
         &self,
         device: Arc<Mutex<dyn BusDevice>>,
         base: u64,
         len: u64,
     ) -> Result<(), BusError> {
-        let new_range = BusRange::new(base, len)?;
-
-        // TODO add an assert that only 1 thread acceses this
-
-        // Reject all cases where the new device's range overlaps with an existing device.
-        if self
-            .devices
-            // .read()
-            // .unwrap()
-            .iter()
-            .any(|o| {
-                if let Some((range, _dev)) = o {
-                    range.overlaps(&new_range)
-                } else {
-                    false
-                }
-            })
-        {
-            return Err(BusError::Overlap);
+        if len == 0 {
+            return Err(BusError::ZeroSizedRange);
         }
+        base.checked_add(len - 1).ok_or(BusError::InvalidRange)?;
 
-        #[allow(mutable_transmutes)]
-        let self_mut: &mut Self = unsafe { core::mem::transmute(self) };
-        let mut inserted = false;
-        for d in self_mut.devices.iter_mut() {
-            if d.is_none() {
-                *d = Some((new_range, Arc::downgrade(&device)));
-                inserted = true;
+        // Reject overlap with any currently visible range. Slots with `len == 0`
+        // (empty or transitioning) are ignored.
+        let new_end = base + len - 1;
+        for slot in self.slots.iter() {
+            let (sbase, slen) = slot.range.snapshot();
+            if slen == 0 {
+                continue;
+            }
+            let send = sbase + slen - 1;
+            if base <= send && sbase <= new_end {
+                return Err(BusError::Overlap);
             }
         }
-        if !inserted {
-            // no space
-            return Err(BusError::Overlap);
+
+        // Find first empty slot and publish the device.
+        for slot in self.slots.iter() {
+            if slot.range.len.load(Ordering::Acquire) != 0 {
+                continue;
+            }
+            // SAFETY: writer is single-threaded, and readers never dereference
+            // `device` while `range.len == 0`. It is safe to overwrite the
+            // `Weak` in place here.
+            unsafe {
+                *slot.device.get() = Some(Arc::downgrade(&device));
+            }
+            // Publish the base while the range is still invisible to readers.
+            slot.range.base.store(base, Ordering::Release);
+            // Publish `len` last; the release-store makes both the `base`
+            // above and the `device` write visible to any reader that
+            // acquire-loads this non-zero `len`.
+            slot.range.len.store(len, Ordering::Release);
+            return Ok(());
         }
-
-        // if self
-        //     .devices
-        //     .write()
-        //     .unwrap()
-        //     .insert(new_range, Arc::downgrade(&device))
-        //     .is_some()
-        // {
-        //     return Err(BusError::Overlap);
-        // }
-
-        Ok(())
+        Err(BusError::Overlap)
     }
 
     /// Removes the device at the given address space range.
+    ///
+    /// Must only be called from the (single) writer thread.
     pub fn remove(&self, base: u64, len: u64) -> Result<(), BusError> {
-        let bus_range = BusRange::new(base, len)?;
-
-        // only vmm thread must be able to call this
-
-        #[allow(mutable_transmutes)]
-        let self_mut: &mut Self = unsafe { core::mem::transmute(self) };
-        for d in self_mut.devices.iter_mut() {
-            if let Some(dd) = &d {
-                if dd.0 == bus_range {
-                    *d = None;
-                    break;
-                }
-            }
+        if len == 0 {
+            return Err(BusError::ZeroSizedRange);
         }
+        base.checked_add(len - 1).ok_or(BusError::InvalidRange)?;
 
-        // if self.devices.write().unwrap().remove(&bus_range).is_none() {
-        //     return Err(BusError::MissingAddressRange);
-        // }
-
-        Ok(())
-    }
-
-    // Lock the `devices` behind `read` lock, lock the device mutex and perform an operation on the
-    // device.
-    fn with_device<T>(
-        &self,
-        addr: u64,
-        f: impl FnOnce(&mut dyn BusDevice, u64, u64) -> T,
-    ) -> Result<T, BusError> {
-        // let devices = self.devices.read().unwrap();
-        for d in self.devices.iter() {
-            if let Some(dd) = d {
-                if dd.0.overlaps(&BusRange::new(addr, 1).unwrap()) {
-                    if let Some(device) = dd.1.upgrade() {
-                        let mut device = device.lock().unwrap();
-                        let base = dd.0.base();
-                        let offset = addr - dd.0.base();
-                        let result = f(&mut *device, base, offset);
-                        return Ok(result);
-                    }
-                }
+        for slot in self.slots.iter() {
+            let (sbase, slen) = slot.range.snapshot();
+            if slen == len && sbase == base {
+                slot.range.clear();
+                return Ok(());
             }
         }
         Err(BusError::MissingAddressRange)
+    }
 
-        // if let Some((range, dev)) = devices
-        //     .range(..=BusRange::new(addr, 1).unwrap())
-        //     .next_back()
-        //     && addr <= range.end()
-        //     && let Some(device) = dev.upgrade()
-        // {
-        //     let mut device = device.lock().unwrap();
-        //     let base = range.base();
-        //     let offset = addr - range.base();
-        //     let result = f(&mut *device, base, offset);
-        //     Ok(result)
-        // } else {
-        //     Err(BusError::MissingAddressRange)
-        // }
+    // Locate the device whose range currently contains `addr`, lock it, and
+    // invoke `f`. Never blocks on the bus itself — only on the device mutex.
+    fn with_device<T>(
+        &self,
+        addr: u64,
+        f: impl FnOnce(&mut dyn BusDevice, &BusRange, u64, u64) -> T,
+    ) -> Result<T, BusError> {
+        for slot in self.slots.iter() {
+            if !slot.range.contains(addr) {
+                continue;
+            }
+            // SAFETY: we observed `range.len != 0` via `contains`, which used
+            // an acquire load. That synchronizes-with the writer's release-store
+            // of `len`, which was preceded by the write to `device`, so it is
+            // safe to read the `Weak` here.
+            let weak = unsafe { (*slot.device.get()).as_ref() };
+            if let Some(device) = weak.and_then(|w| w.upgrade()) {
+                let mut device = device.lock().unwrap();
+                let base = slot.range.base();
+                let offset = addr.wrapping_sub(base);
+                return Ok(f(&mut *device, &slot.range, base, offset));
+            }
+        }
+        Err(BusError::MissingAddressRange)
     }
 
     /// Reads data from the device that owns the range containing `addr` and puts it into `data`.
     ///
     /// Returns true on success, otherwise `data` is untouched.
     pub fn read(&self, addr: u64, data: &mut [u8]) -> Result<(), BusError> {
-        self.with_device(addr, |dev, base, offset| dev.read(base, offset, data))
+        self.with_device(addr, |dev, _range, base, offset| {
+            dev.read(base, offset, data)
+        })
     }
 
     /// Writes `data` to the device that owns the range containing `addr`.
     ///
     /// Returns true on success, otherwise `data` is untouched.
     pub fn write(&self, addr: u64, data: &[u8]) -> Result<Option<Arc<Barrier>>, BusError> {
-        self.with_device(addr, |dev, base, offset| dev.write(base, offset, data))
+        self.with_device(addr, |dev, range, base, offset| {
+            dev.write(range, base, offset, data)
+        })
     }
 }
 

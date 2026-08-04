@@ -17,6 +17,8 @@ use std::sync::{Arc, Barrier};
 
 use serde::{Deserialize, Serialize};
 
+use crate::vstate::bus::BusRange;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// Parameters for performing a BAR reprogramming operation
 pub struct BarReprogrammingParams {
@@ -35,6 +37,7 @@ pub trait PciDevice: Send {
     /// * `offset` - Offset into the register.
     fn write_config_register(
         &mut self,
+        range: &BusRange,
         reg_idx: u16,
         offset: u8,
         data: &[u8],
