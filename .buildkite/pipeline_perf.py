@@ -20,6 +20,7 @@ perf_test = {
         "label": "virtio-block-sync",
         "tests": "integration_tests/performance/test_block.py::test_block_performance -k 'not Async'",
         "devtool_opts": "-c 1-10 -m 0",
+        "ab_opts": "--noise-threshold 0.005",
     },
     "virtio-block-async": {
         "label": "virtio-block-async",
