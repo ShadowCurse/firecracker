@@ -641,12 +641,12 @@ impl VirtioBlock {
             if processed.is_multiple_of(USED_PUBLISH_BATCH) {
                 publish_used(queue, active_state.interrupt.as_ref(), &self.metrics);
             }
-            if queue.size <= processed {
-                self.queue_evts[0]
-                    .write(1)
-                    .unwrap_or_else(|_| self.metrics.event_fails.inc());
-                break;
-            }
+            // if queue.size <= processed {
+            //     self.queue_evts[0]
+            //         .write(1)
+            //         .unwrap_or_else(|_| self.metrics.event_fails.inc());
+            //     break;
+            // }
         }
         publish_used(queue, active_state.interrupt.as_ref(), &self.metrics);
 
