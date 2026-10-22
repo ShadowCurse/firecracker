@@ -17,8 +17,8 @@ use super::{FinishedRequest, IoErr, ProcessingResult, Request, VirtioBlockError}
 use crate::EventManager;
 use crate::devices::virtio::device::ActiveState;
 use crate::devices::virtio::persist::QueueState;
-use crate::devices::virtio::queue::InvalidAvailIdx;
-use crate::devices::virtio::transport::VirtioInterruptType;
+use crate::devices::virtio::queue::{InvalidAvailIdx, Queue};
+use crate::devices::virtio::transport::{VirtioInterrupt, VirtioInterruptType};
 use crate::logger::{IncMetric, error, warn};
 use crate::rate_limiter::RateLimiter;
 use crate::seccomp::{BpfProgram, apply_filter};
@@ -93,6 +93,27 @@ pub(crate) enum FlushMode {
     DrainAndFlush,
 }
 
+/// Number of processed requests after which completions are published to the guest.
+const USED_PUBLISH_BATCH: u16 = 16;
+
+/// Publish used descriptors to the guest and notify it if needed.
+fn publish_used(
+    queue: &mut Queue,
+    queue_idx: u16,
+    interrupt: &dyn VirtioInterrupt,
+    metrics: &BlockDeviceMetrics,
+) {
+    if queue.num_added.0 == 0 {
+        return;
+    }
+    queue.advance_used_ring_idx();
+    if queue.prepare_kick() {
+        interrupt
+            .trigger(VirtioInterruptType::Queue(queue_idx))
+            .unwrap_or_else(|_| metrics.event_fails.inc());
+    }
+}
+
 macro_rules! unwrap_async_file_engine_or_return {
     ($file_engine: expr) => {
         match $file_engine {
@@ -133,6 +154,7 @@ impl BlockWorker {
         let rate_limiter = &self.rate_limiter;
         let queue = &mut self.resources.queue;
         let mut used_any = false;
+        let mut processed: u16 = 0;
 
         while let Some(head) = queue.pop_or_enable_notification()? {
             self.metrics.remaining_reqs_count.add(queue.len().into());
@@ -188,20 +210,28 @@ impl BlockWorker {
                                 head.index, err
                             )
                         });
-                    // Publish each completion right away so the guest can refill the queue
-                    // while the device is still processing it.
-                    queue.advance_used_ring_idx();
-                    if queue.prepare_kick() {
-                        self.active_state
-                            .interrupt
-                            .trigger(VirtioInterruptType::Queue(self.resources.queue_idx))
-                            .unwrap_or_else(|_| {
-                                self.metrics.event_fails.inc();
-                            });
-                    }
                 }
             }
+
+            // Publish completions in batches so the guest can refill the queue while it is
+            // processed. Bound the time spent here and resume after other devices had a chance
+            // to run. Notifications are still disabled, so signal the queue event to resume.
+            processed += 1;
+            if processed.is_multiple_of(USED_PUBLISH_BATCH) {
+                publish_used(
+                    queue,
+                    self.resources.queue_idx,
+                    self.active_state.interrupt.as_ref(),
+                    &self.metrics,
+                );
+            }
         }
+        publish_used(
+            queue,
+            self.resources.queue_idx,
+            self.active_state.interrupt.as_ref(),
+            &self.metrics,
+        );
 
         if let FileEngine::Async(ref mut engine) = self.resources.disk.file_engine
             && let Err(err) = engine.kick_submission_queue()
@@ -256,16 +286,12 @@ impl BlockWorker {
                 }
             }
         }
-        queue.advance_used_ring_idx();
-
-        if queue.prepare_kick() {
-            self.active_state
-                .interrupt
-                .trigger(VirtioInterruptType::Queue(self.resources.queue_idx))
-                .unwrap_or_else(|_| {
-                    self.metrics.event_fails.inc();
-                });
-        }
+        publish_used(
+            queue,
+            self.resources.queue_idx,
+            self.active_state.interrupt.as_ref(),
+            &self.metrics,
+        );
     }
 
     pub(crate) fn process_async_completion_event(&mut self) {
