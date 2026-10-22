@@ -24,7 +24,7 @@ BLOCK_DEVICE_SIZE_MB = 2048
 # transient clears by ~6-7s (10s rounding up), while reads are within noise
 # from the first second, so they need no ramp.
 WARMUP_SEC_READ = 0
-WARMUP_SEC_WRITE = 10
+WARMUP_SEC_WRITE = 1
 
 
 def warmup_sec_for(mode: fio.Mode) -> int:
@@ -34,7 +34,7 @@ def warmup_sec_for(mode: fio.Mode) -> int:
 
 
 # Time (in seconds) for which fio runs after warmup is done
-RUNTIME_SEC = 30
+RUNTIME_SEC = 10
 
 # VM guest memory size
 GUEST_MEM_MIB = 1024
