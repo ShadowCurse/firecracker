@@ -614,18 +614,19 @@ impl VirtioBlock {
                                 head.index, err
                             )
                         });
+                    // Publish each completion right away so the guest can refill the queue
+                    // while the device is still processing it.
+                    queue.advance_used_ring_idx();
+                    if queue.prepare_kick() {
+                        active_state
+                            .interrupt
+                            .trigger(VirtioInterruptType::Queue(0))
+                            .unwrap_or_else(|_| {
+                                self.metrics.event_fails.inc();
+                            });
+                    }
                 }
             }
-        }
-        queue.advance_used_ring_idx();
-
-        if used_any && queue.prepare_kick() {
-            active_state
-                .interrupt
-                .trigger(VirtioInterruptType::Queue(0))
-                .unwrap_or_else(|_| {
-                    self.metrics.event_fails.inc();
-                });
         }
 
         if let FileEngine::Async(ref mut engine) = self.disk.file_engine
