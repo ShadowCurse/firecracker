@@ -378,6 +378,22 @@ impl From<VirtioBlockConfig> for BlockDeviceConfig {
     }
 }
 
+/// Number of processed requests after which completions are published to the guest.
+const USED_PUBLISH_BATCH: u16 = 16;
+
+/// Publish used descriptors to the guest and notify it if needed.
+fn publish_used(queue: &mut Queue, interrupt: &dyn VirtioInterrupt, metrics: &BlockDeviceMetrics) {
+    if queue.num_added.0 == 0 {
+        return;
+    }
+    queue.advance_used_ring_idx();
+    if queue.prepare_kick() {
+        interrupt
+            .trigger(VirtioInterruptType::Queue(0))
+            .unwrap_or_else(|_| metrics.event_fails.inc());
+    }
+}
+
 /// Virtio device for exposing block level read/write operations on a host file.
 #[derive(Debug)]
 pub struct VirtioBlock {
@@ -565,6 +581,7 @@ impl VirtioBlock {
 
         let queue = &mut self.queues[queue_index];
         let mut used_any = false;
+        let mut processed: u16 = 0;
 
         while let Some(head) = queue.pop_or_enable_notification()? {
             self.metrics.remaining_reqs_count.add(queue.len().into());
@@ -614,20 +631,24 @@ impl VirtioBlock {
                                 head.index, err
                             )
                         });
-                    // Publish each completion right away so the guest can refill the queue
-                    // while the device is still processing it.
-                    queue.advance_used_ring_idx();
-                    if queue.prepare_kick() {
-                        active_state
-                            .interrupt
-                            .trigger(VirtioInterruptType::Queue(0))
-                            .unwrap_or_else(|_| {
-                                self.metrics.event_fails.inc();
-                            });
-                    }
                 }
             }
+
+            // Publish completions in batches so the guest can refill the queue while it is
+            // processed. Bound the time spent here and resume after other devices had a chance
+            // to run. Notifications are still disabled, so signal the queue event to resume.
+            processed += 1;
+            if processed.is_multiple_of(USED_PUBLISH_BATCH) {
+                publish_used(queue, active_state.interrupt.as_ref(), &self.metrics);
+            }
+            if queue.size <= processed {
+                self.queue_evts[0]
+                    .write(1)
+                    .unwrap_or_else(|_| self.metrics.event_fails.inc());
+                break;
+            }
         }
+        publish_used(queue, active_state.interrupt.as_ref(), &self.metrics);
 
         if let FileEngine::Async(ref mut engine) = self.disk.file_engine
             && let Err(err) = engine.kick_submission_queue()
@@ -681,16 +702,7 @@ impl VirtioBlock {
                 }
             }
         }
-        queue.advance_used_ring_idx();
-
-        if queue.prepare_kick() {
-            active_state
-                .interrupt
-                .trigger(VirtioInterruptType::Queue(0))
-                .unwrap_or_else(|_| {
-                    self.metrics.event_fails.inc();
-                });
-        }
+        publish_used(queue, active_state.interrupt.as_ref(), &self.metrics);
     }
 
     pub fn process_async_completion_event(&mut self) {
