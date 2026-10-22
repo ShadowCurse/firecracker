@@ -225,6 +225,13 @@ impl BlockWorker {
                     &self.metrics,
                 );
             }
+            if queue.config.size <= processed {
+                self.resources
+                    .queue_evt
+                    .write(1)
+                    .unwrap_or_else(|_| self.metrics.event_fails.inc());
+                break;
+            }
         }
         publish_used(
             queue,
