@@ -181,6 +181,16 @@ impl Bus {
         Ok(())
     }
 
+    // Find the range containing `access` and return its base and slot.
+    fn find_range_base_and_device_slot(&self, access: BusRange) -> Result<(u64, usize), BusError> {
+        let ranges = self.ranges.read().unwrap();
+        match ranges.range(..=access).next_back() {
+            // `range` query already guarantees `range.base() <= addr`.
+            Some((range, &slot)) if access.end() <= range.end() => Ok((range.base(), slot)),
+            _ => Err(BusError::MissingAddressRange),
+        }
+    }
+
     // Perform an operation on the device with the devices read lock held.
     // The ranges read lock is only held for resolving the address and is
     // dropped before performing the operation on the device.
@@ -193,17 +203,10 @@ impl Bus {
         let access = BusRange::new(addr, len)?;
 
         let devices = self.devices.read().unwrap();
-        let (base, slot) = {
-            let ranges = self.ranges.read().unwrap();
-            match ranges.range(..=access).next_back() {
-                // `range` query already guarantees `range.base() <= addr`.
-                Some((range, &slot)) if access.end() <= range.end() => (range.base(), slot),
-                _ => return Err(BusError::MissingAddressRange),
-            }
-        };
+        let (_, device_slot) = self.find_range_base_and_device_slot(access)?;
 
         let device = devices
-            .get(slot)
+            .get(device_slot)
             .expect("Bus ranges and devices out of sync");
 
         let Some(device) = device.upgrade() else {
@@ -211,12 +214,23 @@ impl Bus {
         };
 
         let mut locked = device.lock().unwrap();
+
+        // Device might use `move_range` and it can make this access stale/invalid. To mitigate
+        // this, do the range resolution one more time once the device lock is held, so ranges
+        // cannot move under the hood. If the access became stale, just error out as usual.
+        // NOTE: this assumes there are no callers of `move_range` who do not hold the device lock
+        // while calling `move_range`. Otherwise this still can race.
+        let (base, current_device_slot) = self.find_range_base_and_device_slot(access)?;
+        if current_device_slot != device_slot {
+            return Err(BusError::MissingAddressRange);
+        }
         let offset = addr - base;
         Ok(f(&mut *locked, base, offset))
     }
 
     /// Relocate an existing device mapping from `old_base` to `new_base`.
-    /// Only the `ranges` lock is taken, not the `devices` lock.
+    /// Only the `ranges` lock is taken, not the `devices` lock. The caller
+    /// MUST hold the lock of the device owning the mapping.
     pub fn move_range(&self, old_base: u64, new_base: u64, len: u64) -> Result<(), BusError> {
         let old_range = BusRange::new(old_base, len)?;
         let new_range = BusRange::new(new_base, len)?;
@@ -422,6 +436,33 @@ mod tests {
             bus.read(0x2000, &mut []),
             Err(BusError::ZeroSizedRange)
         ));
+    }
+
+    #[test]
+    fn bus_access_racing_move_range() {
+        let bus = Bus::new();
+        let dev_a = Arc::new(Mutex::new(IdDevice(0xa)));
+        let dev_b = Arc::new(Mutex::new(IdDevice(0xb)));
+        bus.insert(dev_a.clone(), 0x1000, 0x100).unwrap();
+        bus.insert(dev_b.clone(), 0x2000, 0x100).unwrap();
+
+        // Hold the device lock like a config space write relocating a BAR
+        // would, while another access to the old base waits for it.
+        let locked = dev_a.lock().unwrap();
+        std::thread::scope(|s| {
+            let reader = s.spawn(|| {
+                let mut data = [0u8; 1];
+                // since the lock is still held, this will wait for the `drop(locked)` line
+                let result = bus.read(0x1000, &mut data);
+                // And then it will error out since the range it got initially will be invalidated
+                assert!(matches!(result.unwrap_err(), BusError::MissingAddressRange));
+            });
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            bus.move_range(0x1000, 0x3000, 0x100).unwrap();
+            bus.move_range(0x2000, 0x1000, 0x100).unwrap();
+            drop(locked);
+            reader.join().unwrap();
+        });
     }
 
     #[test]
