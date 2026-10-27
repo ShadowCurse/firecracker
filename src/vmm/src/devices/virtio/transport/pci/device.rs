@@ -1251,12 +1251,12 @@ impl PciDevice for VirtioPciDevice {
 }
 
 impl BusDevice for VirtioPciDevice {
-    fn read(&mut self, base: u64, offset: u64, data: &mut [u8]) {
-        self.read_bar(base, offset, data)
+    fn read(&mut self, _tag: u8, offset: u64, data: &mut [u8]) {
+        self.read_bar(0, offset, data)
     }
 
-    fn write(&mut self, base: u64, offset: u64, data: &[u8]) -> Option<Arc<Barrier>> {
-        self.write_bar(base, offset, data)
+    fn write(&mut self, _tag: u8, offset: u64, data: &[u8]) -> Option<Arc<Barrier>> {
+        self.write_bar(0, offset, data)
     }
 }
 
