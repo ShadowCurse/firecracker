@@ -7,11 +7,7 @@
 
 //! Handles routing to devices in an address space.
 
-use std::cmp::Ordering;
-use std::collections::btree_map::BTreeMap;
 use std::sync::{Arc, Barrier, Mutex, RwLock, Weak};
-
-use slab::Slab;
 
 use crate::utils::usize_to_u64;
 
@@ -40,72 +36,109 @@ pub enum BusError {
     MissingAddressRange,
     /// The supplied range is invalid.
     InvalidRange,
+    /// The bus has no room for another range.
+    Full,
 }
 
-/// Holds a base and end representing the address space occupied by a `BusDevice`.
-///
-/// * base - The address at which the range start.
-/// * end - The last address of the range (inclusive).
-#[derive(Debug, Copy, Clone)]
-pub struct BusRange {
-    /// base address of a range within a [`Bus`]
-    base: u64,
-    /// last address of a range within a [`Bus`] (inclusive)
-    end: u64,
-}
+/// Ranges on the MMIO bus: 32 PCI slots, each holding a root port and a device
+/// with up to 3 ranges, leave half of it for the MMIO devices.
+pub const MMIO_BUS_ENTRIES_MAX: u16 = 256;
+/// Ranges on the PIO bus: serial, i8042 and PCI config space, with spare room.
+pub const PIO_BUS_ENTRIES_MAX: u16 = 8;
 
-#[allow(missing_docs)]
-impl BusRange {
-    pub fn new(base: u64, len: u64) -> Result<Self, BusError> {
-        if len == 0 {
-            return Err(BusError::ZeroSizedRange);
-        }
-        let end = base.checked_add(len - 1).ok_or(BusError::InvalidRange)?;
-        Ok(BusRange { base, end })
-    }
+/// `size` takes the low bits of [`BusEntry::size_and_tag`] and `tag` the high byte.
+const BUS_ENTRY_SIZE_BITS: u32 = 56;
+const BUS_ENTRY_SIZE_MAX: u64 = (1 << BUS_ENTRY_SIZE_BITS) - 1;
+const _: () = assert!(BUS_ENTRY_SIZE_BITS + u8::BITS == u64::BITS);
 
-    pub fn base(&self) -> u64 {
-        self.base
-    }
-
-    pub fn end(&self) -> u64 {
-        self.end
-    }
-
-    /// Returns true if there is overlap with the given range.
-    pub fn overlaps(&self, other: &BusRange) -> bool {
-        self.base <= other.end && other.base <= self.end
-    }
-}
-
-impl Eq for BusRange {}
-
-impl PartialEq for BusRange {
-    fn eq(&self, other: &BusRange) -> bool {
-        self.base == other.base
-    }
-}
-
-impl Ord for BusRange {
-    fn cmp(&self, other: &BusRange) -> Ordering {
-        self.base.cmp(&other.base)
-    }
-}
-
-impl PartialOrd for BusRange {
-    fn partial_cmp(&self, other: &BusRange) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-/// A device handle and the tag of its range.
+/// A device range [`base`, `base` + `size`) on a [`Bus`].
 #[derive(Debug)]
-struct BusSlot {
+struct BusEntry {
     device: Weak<Mutex<dyn BusDevice>>,
-    /// Identifies the range to the device. Unlike the range base it is fixed
-    /// for the lifetime of the slot, so an access racing [`Bus::move_range`]
-    /// is still routed to the range it was resolved to.
-    tag: u8,
+    base: u64,
+    /// The tag identifies the range to the device. Unlike `base` it is fixed
+    /// for the lifetime of the range, so an access racing a move is still
+    /// routed to the range it was resolved to.
+    size_and_tag: u64,
+}
+// Two entries per cache line.
+const _: () = assert!(std::mem::size_of::<BusEntry>() == 32);
+
+impl BusEntry {
+    fn new(device: Weak<Mutex<dyn BusDevice>>, base: u64, size: u64, tag: u8) -> BusEntry {
+        assert!(0 < size);
+        assert!(size <= BUS_ENTRY_SIZE_MAX);
+        let size_and_tag = (u64::from(tag) << BUS_ENTRY_SIZE_BITS) | size;
+        BusEntry {
+            device,
+            base,
+            size_and_tag,
+        }
+    }
+
+    fn size(&self) -> u64 {
+        self.size_and_tag & BUS_ENTRY_SIZE_MAX
+    }
+
+    fn tag(&self) -> u8 {
+        let tag = self.size_and_tag >> BUS_ENTRY_SIZE_BITS;
+        u8::try_from(tag).unwrap()
+    }
+
+    fn last(&self) -> u64 {
+        let size = self.size();
+        assert!(0 < size);
+        self.base + (size - 1)
+    }
+}
+
+// Return the last address of [`base`, `base` + `size`).
+fn range_last(base: u64, size: u64) -> Result<u64, BusError> {
+    if size == 0 {
+        return Err(BusError::ZeroSizedRange);
+    }
+    base.checked_add(size - 1).ok_or(BusError::InvalidRange)
+}
+
+// Assert `entries` are sorted by base and do not overlap.
+fn entries_assert_valid(entries: &[BusEntry]) {
+    for pair in entries.windows(2) {
+        assert!(pair[0].last() < pair[1].base);
+    }
+}
+
+// Return the index at which [`base`, `last`] keeps `entries` sorted and not overlapping.
+fn entries_free_index(entries: &[BusEntry], base: u64, last: u64) -> Result<usize, BusError> {
+    assert!(base <= last);
+    let index = entries.partition_point(|entry| entry.base < base);
+    if 0 < index {
+        let previous = &entries[index - 1];
+        if base <= previous.last() {
+            return Err(BusError::Overlap);
+        }
+    }
+    if index < entries.len() {
+        let next = &entries[index];
+        if next.base <= last {
+            return Err(BusError::Overlap);
+        }
+    }
+    Ok(index)
+}
+
+// Return the index of the entry registered at [`base`, `base` + `size`).
+fn entries_find_index(entries: &[BusEntry], base: u64, size: u64) -> Result<usize, BusError> {
+    range_last(base, size)?;
+    let Ok(index) = entries.binary_search_by_key(&base, |entry| entry.base) else {
+        return Err(BusError::MissingAddressRange);
+    };
+    assert_eq!(
+        entries[index].size(),
+        size,
+        "Bus mapping at {base:#x} is registered with size {}, not {size}",
+        entries[index].size()
+    );
+    Ok(index)
 }
 
 /// A device container for routing reads and writes over some address space.
@@ -113,162 +146,132 @@ struct BusSlot {
 /// This doesn't have any restrictions on what kind of device or address space this applies to. The
 /// only restriction is that no two devices can overlap in this address space.
 ///
-/// The address ranges and the device handles are held behind two separate
-/// locks. `ranges` maps an address range to the slot holding the owning
-/// device, while `devices` holds the device handles themselves. Decoupling
-/// them lets a bus access - which holds the `devices` read lock - mutate
-/// `ranges` (for example to relocate a device) without needing the `devices`
-/// write lock.
+/// `entries` is only held while resolving an address, never while calling
+/// into a device, so a device can move its own range during an access.
 ///
-/// Lock ordering: whenever both locks are taken, `devices` MUST be acquired
-/// before `ranges`. A bus access holds `devices` (read) and then reaches into
-/// `ranges` (read to resolve the address, or write to relocate a mapping), so
-/// every other path that takes both must use the same order.
-#[derive(Default, Debug)]
+/// Lock ordering: `gate` -> device -> `entries`.
+#[derive(Debug)]
 pub struct Bus {
-    /// Device handles keyed by an opaque slot. Held (read) for the duration of
-    /// an access so that [`Bus::remove`] blocks until any in-flight access to
-    /// the device has finished.
-    ///
-    /// Lock ordering: acquire this *before* `ranges`.
-    devices: RwLock<Slab<BusSlot>>,
-
-    /// Maps each occupied address range to the slot in `devices` holding the
-    /// owning device.
-    ///
-    /// Lock ordering: acquire this *after* `devices`.
-    ranges: RwLock<BTreeMap<BusRange, usize>>,
+    /// Held (read) for the duration of an access so that [`Bus::remove`]
+    /// blocks until any in-flight access to the device has finished.
+    gate: RwLock<()>,
+    /// Device ranges sorted by base. Never grows past its initial capacity.
+    entries: RwLock<Vec<BusEntry>>,
 }
 
 impl Bus {
-    /// Constructs an a bus with an empty address space.
-    pub fn new() -> Bus {
+    /// Constructs a bus with an empty address space for up to `entries_max` ranges.
+    pub fn new(entries_max: u16) -> Bus {
+        assert!(0 < entries_max);
+        let entries = Vec::with_capacity(usize::from(entries_max));
         Bus {
-            devices: RwLock::new(Slab::new()),
-            ranges: RwLock::new(BTreeMap::new()),
+            gate: RwLock::new(()),
+            entries: RwLock::new(entries),
         }
     }
 
-    /// Insert a device into the [`Bus`] in the range [`addr`, `addr` + `len`].
+    /// Insert a device into the [`Bus`] in the range [`base`, `base` + `size`).
     /// Accesses to the range are passed to the device with `tag`.
     pub fn insert(
         &self,
         device: Arc<Mutex<dyn BusDevice>>,
         base: u64,
-        len: u64,
+        size: u64,
         tag: u8,
     ) -> Result<(), BusError> {
-        let new_range = BusRange::new(base, len)?;
-
-        // Acquire both write locks in the right order, to register the device
-        // in both maps atomically.
-        let mut devices = self.devices.write().unwrap();
-        let mut ranges = self.ranges.write().unwrap();
-
-        // Reject all cases where the new device's range overlaps with an existing device.
-        if ranges.keys().any(|range| range.overlaps(&new_range)) {
-            return Err(BusError::Overlap);
+        let last = range_last(base, size)?;
+        if BUS_ENTRY_SIZE_MAX < size {
+            return Err(BusError::InvalidRange);
         }
 
+        let mut entries = self.entries.write().unwrap();
+        if entries.len() == entries.capacity() {
+            return Err(BusError::Full);
+        }
+        let index = entries_free_index(&entries, base, last)?;
         let device = Arc::downgrade(&device);
-        let slot = devices.insert(BusSlot { device, tag });
-        ranges.insert(new_range, slot);
-
+        let entry = BusEntry::new(device, base, size, tag);
+        entries.insert(index, entry);
+        entries_assert_valid(&entries);
         Ok(())
     }
 
     /// Removes the device at the given address space range.
-    pub fn remove(&self, base: u64, len: u64) -> Result<(), BusError> {
-        let bus_range = BusRange::new(base, len)?;
-
-        // Acquire both write locks in the right order, to remove the device
-        // from both maps atomically.
-        let mut devices = self.devices.write().unwrap();
-        let mut ranges = self.ranges.write().unwrap();
-
-        let slot = ranges
-            .remove(&bus_range)
-            .ok_or(BusError::MissingAddressRange)?;
-        devices.remove(slot);
-
+    pub fn remove(&self, base: u64, size: u64) -> Result<(), BusError> {
+        let _gate = self.gate.write().unwrap();
+        let mut entries = self.entries.write().unwrap();
+        let index = entries_find_index(&entries, base, size)?;
+        entries.remove(index);
         Ok(())
     }
 
-    // Perform an operation on the device with the devices read lock held.
-    // The ranges read lock is only held for resolving the address and is
-    // dropped before performing the operation on the device.
+    // Perform `operation` on the device owning [`address`, `address` + `size`).
     fn with_device<T>(
         &self,
-        addr: u64,
-        len: u64,
-        f: impl FnOnce(&mut dyn BusDevice, u8, u64) -> T,
+        address: u64,
+        size: u64,
+        operation: impl FnOnce(&mut dyn BusDevice, u8, u64) -> T,
     ) -> Result<T, BusError> {
-        let access = BusRange::new(addr, len)?;
+        let last = range_last(address, size)?;
 
-        let devices = self.devices.read().unwrap();
-        let (base, slot) = {
-            let ranges = self.ranges.read().unwrap();
-            match ranges.range(..=access).next_back() {
-                // `range` query already guarantees `range.base() <= addr`.
-                Some((range, &slot)) if access.end() <= range.end() => (range.base(), slot),
-                _ => return Err(BusError::MissingAddressRange),
-            }
-        };
+        // Declared before `device`, so it is released after it.
+        let _gate = self.gate.read().unwrap();
+        let entries = self.entries.read().unwrap();
+        let index = entries.partition_point(|entry| entry.base <= address);
+        if index == 0 {
+            return Err(BusError::MissingAddressRange);
+        }
+        let entry = &entries[index - 1];
+        assert!(entry.base <= address);
+        if entry.last() < last {
+            return Err(BusError::MissingAddressRange);
+        }
+        let tag = entry.tag();
+        let offset = address - entry.base;
+        let device = entry.device.upgrade();
+        drop(entries);
 
-        let bus_slot = devices
-            .get(slot)
-            .expect("Bus ranges and devices out of sync");
-
-        let Some(device) = bus_slot.device.upgrade() else {
+        let Some(device) = device else {
             return Err(BusError::MissingAddressRange);
         };
-
-        let mut locked = device.lock().unwrap();
-        let offset = addr - base;
-        Ok(f(&mut *locked, bus_slot.tag, offset))
+        let mut device_locked = device.lock().unwrap();
+        Ok(operation(&mut *device_locked, tag, offset))
     }
 
-    /// Relocate an existing device mapping from `old_base` to `new_base`.
-    /// Only the `ranges` lock is taken, not the `devices` lock.
-    pub fn move_range(&self, old_base: u64, new_base: u64, len: u64) -> Result<(), BusError> {
-        let old_range = BusRange::new(old_base, len)?;
-        let new_range = BusRange::new(new_base, len)?;
+    /// Relocate an existing device range from `base_old` to `base_new`.
+    pub fn move_range(&self, base_old: u64, base_new: u64, size: u64) -> Result<(), BusError> {
+        let last_new = range_last(base_new, size)?;
+        let mut entries = self.entries.write().unwrap();
+        let index_old = entries_find_index(&entries, base_old, size)?;
 
-        let mut ranges = self.ranges.write().unwrap();
-
-        // Remove first because the new range might overlap the old range
-        let (registered, slot) = ranges
-            .remove_entry(&old_range)
-            .ok_or(BusError::MissingAddressRange)?;
-
-        assert_eq!(
-            registered.end(),
-            old_range.end(),
-            "Bus mapping at {old_base:#x} is registered with length {}, not {len}",
-            registered.end() - registered.base() + 1
-        );
-
-        // Reject if the destination overlaps another device
-        if ranges.keys().any(|range| range.overlaps(&new_range)) {
-            ranges.insert(old_range, slot);
-            return Err(BusError::Overlap);
-        }
-
-        ranges.insert(new_range, slot);
+        // Removed first because the new range might overlap the old range.
+        let mut entry = entries.remove(index_old);
+        let index_new = match entries_free_index(&entries, base_new, last_new) {
+            Ok(index_new) => index_new,
+            Err(error) => {
+                entries.insert(index_old, entry);
+                return Err(error);
+            }
+        };
+        entry.base = base_new;
+        entries.insert(index_new, entry);
+        entries_assert_valid(&entries);
         Ok(())
     }
 
-    /// Reads data from the device that owns the range containing `addr` and puts it into `data`.
-    pub fn read(&self, addr: u64, data: &mut [u8]) -> Result<(), BusError> {
-        self.with_device(addr, usize_to_u64(data.len()), |dev, tag, offset| {
-            dev.read(tag, offset, data)
+    /// Reads data from the device that owns the range containing `address` and puts it into `data`.
+    pub fn read(&self, address: u64, data: &mut [u8]) -> Result<(), BusError> {
+        let size = usize_to_u64(data.len());
+        self.with_device(address, size, |device, tag, offset| {
+            device.read(tag, offset, data)
         })
     }
 
-    /// Writes `data` to the device that owns the range containing `addr`.
-    pub fn write(&self, addr: u64, data: &[u8]) -> Result<Option<Arc<Barrier>>, BusError> {
-        self.with_device(addr, usize_to_u64(data.len()), |dev, tag, offset| {
-            dev.write(tag, offset, data)
+    /// Writes `data` to the device that owns the range containing `address`.
+    pub fn write(&self, address: u64, data: &[u8]) -> Result<Option<Arc<Barrier>>, BusError> {
+        let size = usize_to_u64(data.len());
+        self.with_device(address, size, |device, tag, offset| {
+            device.write(tag, offset, data)
         })
     }
 }
@@ -300,46 +303,24 @@ mod tests {
     }
 
     #[test]
-    fn bus_range_new() {
-        // Zero length is invalid.
-        assert!(matches!(BusRange::new(0, 0), Err(BusError::ZeroSizedRange)));
+    fn bus_range_last() {
+        assert!(matches!(range_last(0, 0), Err(BusError::ZeroSizedRange)));
         assert!(matches!(
-            BusRange::new(u64::MAX, 0),
+            range_last(u64::MAX, 0),
             Err(BusError::ZeroSizedRange)
         ));
-
-        // Overflow is invalid.
         assert!(matches!(
-            BusRange::new(u64::MAX, 2),
+            range_last(u64::MAX, 2),
             Err(BusError::InvalidRange)
         ));
         assert!(matches!(
-            BusRange::new(2, u64::MAX),
+            range_last(2, u64::MAX),
             Err(BusError::InvalidRange)
         ));
-
-        // Ranges that exactly reach u64::MAX are valid.
-        let r = BusRange::new(u64::MAX, 1).unwrap();
-        assert_eq!(r.base(), u64::MAX);
-        assert_eq!(r.end(), u64::MAX);
-
-        let r = BusRange::new(1, u64::MAX).unwrap();
-        assert_eq!(r.base(), 1);
-        assert_eq!(r.end(), u64::MAX);
-
-        let r = BusRange::new(u64::MAX - 4095, 4096).unwrap();
-        assert_eq!(r.base(), u64::MAX - 4095);
-        assert_eq!(r.end(), u64::MAX);
-
-        // One sized valid range.
-        let r = BusRange::new(0, 1).unwrap();
-        assert_eq!(r.base(), 0);
-        assert_eq!(r.end(), 0);
-
-        // Normal valid range.
-        let r = BusRange::new(0x1000, 0x400).unwrap();
-        assert_eq!(r.base(), 0x1000);
-        assert_eq!(r.end(), 0x13ff);
+        assert_eq!(range_last(u64::MAX, 1).unwrap(), u64::MAX);
+        assert_eq!(range_last(1, u64::MAX).unwrap(), u64::MAX);
+        assert_eq!(range_last(0, 1).unwrap(), 0);
+        assert_eq!(range_last(0x1000, 0x400).unwrap(), 0x13ff);
     }
 
     /// A device that answers every read with its own id, so that a test can
@@ -353,7 +334,7 @@ mod tests {
 
     #[test]
     fn bus_multiple_devices() {
-        let bus = Bus::new();
+        let bus = Bus::new(16);
         let dev_a = Arc::new(Mutex::new(IdDevice(0xa)));
         let dev_b = Arc::new(Mutex::new(IdDevice(0xb)));
         let dev_c = Arc::new(Mutex::new(IdDevice(0xc)));
@@ -364,13 +345,6 @@ mod tests {
             let mut data = [0u8; 1];
             bus.read(addr, &mut data).unwrap();
             data[0]
-        };
-        let slot_of = |base| {
-            *bus.ranges
-                .read()
-                .unwrap()
-                .get(&BusRange::new(base, 0x100).unwrap())
-                .unwrap()
         };
 
         bus.insert(dev_a.clone(), 0x1000, 0x100, 0).unwrap();
@@ -387,17 +361,14 @@ mod tests {
 
         // Removing the middle device leaves its range undecoded and does not
         // disturb the routing of the others.
-        let slot_b = slot_of(0x2000);
         bus.remove(0x2000, 0x100).unwrap();
         bus.read(0x2000, &mut [0; 1]).unwrap_err();
         assert_eq!(read(0x1000), 0xa);
         assert_eq!(read(0x3000), 0xc);
 
-        // The next insertion recycles the slot freed above. The new device
-        // must only answer within its own range, and the removed range must
-        // stay dead.
+        // The new device must only answer within its own range, and the
+        // removed range must stay dead.
         bus.insert(dev_d.clone(), 0x4000, 0x100, 0).unwrap();
-        assert_eq!(slot_of(0x4000), slot_b);
         assert_eq!(read(0x4000), 0xd);
         bus.read(0x2000, &mut [0; 1]).unwrap_err();
         assert_eq!(read(0x1000), 0xa);
@@ -449,7 +420,7 @@ mod tests {
 
     #[test]
     fn bus_access_racing_move_range() {
-        let bus = Bus::new();
+        let bus = Bus::new(16);
         let dev_a = Arc::new(Mutex::new(TagDevice(0xa)));
         let dev_b = Arc::new(Mutex::new(TagDevice(0xb)));
         bus.insert(dev_a.clone(), 0x1000, 0x100, 1).unwrap();
@@ -475,8 +446,31 @@ mod tests {
     }
 
     #[test]
+    fn bus_large_range() {
+        let bus = Bus::new(16);
+        let device = Arc::new(Mutex::new(TagDevice(0xa)));
+
+        // A range larger than 4 GiB keeps both its size and its tag.
+        bus.insert(device.clone(), 0x1_0000_0000, 0x4_0000_0000, 0xff)
+            .unwrap();
+        let mut data = [0u8; 3];
+        bus.read(0x3_0000_0004, &mut data).unwrap();
+        assert_eq!(data, [0xa, 0xff, 4]);
+        bus.read(0x4_ffff_fffd, &mut data).unwrap();
+        bus.read(0x4_ffff_fffe, &mut data).unwrap_err();
+
+        // Sizes not fitting in the entry are rejected.
+        assert!(matches!(
+            bus.insert(device.clone(), 0, BUS_ENTRY_SIZE_MAX + 1, 0),
+            Err(BusError::InvalidRange)
+        ));
+        bus.insert(device, 0x10_0000_0000, BUS_ENTRY_SIZE_MAX, 0)
+            .unwrap();
+    }
+
+    #[test]
     fn bus_insert() {
-        let bus = Bus::new();
+        let bus = Bus::new(16);
         let dummy = Arc::new(Mutex::new(DummyDevice));
         bus.insert(dummy.clone(), 0x10, 0, 0).unwrap_err();
         bus.insert(dummy.clone(), 0x10, 0x10, 0).unwrap();
@@ -495,8 +489,29 @@ mod tests {
     }
 
     #[test]
+    fn bus_full() {
+        let bus = Bus::new(2);
+        let dummy = Arc::new(Mutex::new(DummyDevice));
+        let capacity = bus.entries.read().unwrap().capacity();
+        for index in 0..capacity {
+            let base = usize_to_u64(index) * 0x10;
+            bus.insert(dummy.clone(), base, 0x10, 0).unwrap();
+        }
+        let base = usize_to_u64(capacity) * 0x10;
+        assert!(matches!(
+            bus.insert(dummy.clone(), base, 0x10, 0),
+            Err(BusError::Full)
+        ));
+        assert_eq!(bus.entries.read().unwrap().capacity(), capacity);
+
+        // Removing a range makes room for another one.
+        bus.remove(0, 0x10).unwrap();
+        bus.insert(dummy, base, 0x10, 0).unwrap();
+    }
+
+    #[test]
     fn bus_remove() {
-        let bus = Bus::new();
+        let bus = Bus::new(16);
         let dummy = Arc::new(Mutex::new(DummyDevice));
 
         bus.remove(0x42, 0x0).unwrap_err();
@@ -510,7 +525,7 @@ mod tests {
 
     #[test]
     fn bus_move_range() {
-        let bus = Bus::new();
+        let bus = Bus::new(16);
         let dev = Arc::new(Mutex::new(ConstantDevice));
         bus.insert(dev.clone(), 0x10, 0x10, 0).unwrap();
 
@@ -562,9 +577,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "is registered with length")]
+    #[should_panic(expected = "is registered with size")]
     fn bus_move_range_wrong_len() {
-        let bus = Bus::new();
+        let bus = Bus::new(16);
         let dev = Arc::new(Mutex::new(DummyDevice));
         bus.insert(dev, 0x10, 0x10, 0).unwrap();
         let _ = bus.move_range(0x10, 0x30, 0x20);
@@ -573,7 +588,7 @@ mod tests {
     #[test]
     #[allow(clippy::redundant_clone)]
     fn bus_read_write() {
-        let bus = Bus::new();
+        let bus = Bus::new(16);
         let dummy = Arc::new(Mutex::new(DummyDevice));
         bus.insert(dummy.clone(), 0x10, 0x10, 0).unwrap();
         bus.read(0x10, &mut [0, 0, 0, 0]).unwrap();
@@ -595,7 +610,7 @@ mod tests {
     #[test]
     #[allow(clippy::redundant_clone)]
     fn bus_read_write_values() {
-        let bus = Bus::new();
+        let bus = Bus::new(16);
         let dummy = Arc::new(Mutex::new(ConstantDevice));
         bus.insert(dummy.clone(), 0x10, 0x10, 0).unwrap();
 
@@ -609,36 +624,24 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::redundant_clone)]
-    fn busrange_cmp() {
-        let range = BusRange::new(0x10, 2).unwrap();
-        assert_eq!(range, BusRange::new(0x10, 3).unwrap());
-        assert_eq!(range, BusRange::new(0x10, 2).unwrap());
-
-        assert!(range < BusRange::new(0x12, 1).unwrap());
-        assert!(range < BusRange::new(0x12, 3).unwrap());
-
-        assert_eq!(range, range.clone());
-
-        let bus = Bus::new();
-        let mut data = [1, 2, 3, 4];
-        let device = Arc::new(Mutex::new(DummyDevice));
-        bus.insert(device.clone(), 0x10, 0x10, 0).unwrap();
-        bus.write(0x10, &data).unwrap();
-        bus.read(0x10, &mut data).unwrap();
-        assert_eq!(data, [1, 2, 3, 4]);
-    }
-
-    #[test]
-    fn bus_range_overlap() {
-        let a = BusRange::new(0x1000, 0x400).unwrap();
-        assert!(a.overlaps(&BusRange::new(0x1000, 0x400).unwrap()));
-        assert!(a.overlaps(&BusRange::new(0xf00, 0x400).unwrap()));
-        assert!(a.overlaps(&BusRange::new(0x1000, 0x01).unwrap()));
-        assert!(a.overlaps(&BusRange::new(0xfff, 0x02).unwrap()));
-        assert!(a.overlaps(&BusRange::new(0x1100, 0x100).unwrap()));
-        assert!(a.overlaps(&BusRange::new(0x13ff, 0x100).unwrap()));
-        assert!(!a.overlaps(&BusRange::new(0x1400, 0x100).unwrap()));
-        assert!(!a.overlaps(&BusRange::new(0xf00, 0x100).unwrap()));
+    fn bus_overlap() {
+        let bus = Bus::new(16);
+        let dummy = Arc::new(Mutex::new(DummyDevice));
+        bus.insert(dummy.clone(), 0x1000, 0x400, 0).unwrap();
+        for (base, len) in [
+            (0x1000, 0x400),
+            (0xf00, 0x400),
+            (0x1000, 0x01),
+            (0xfff, 0x02),
+            (0x1100, 0x100),
+            (0x13ff, 0x100),
+        ] {
+            assert!(matches!(
+                bus.insert(dummy.clone(), base, len, 0),
+                Err(BusError::Overlap)
+            ));
+        }
+        bus.insert(dummy.clone(), 0x1400, 0x100, 0).unwrap();
+        bus.insert(dummy, 0xf00, 0x100, 0).unwrap();
     }
 }

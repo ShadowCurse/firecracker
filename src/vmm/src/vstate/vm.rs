@@ -33,7 +33,7 @@ use crate::pci::PciSBDF;
 use crate::pci::msix::MsixTableEntry;
 use crate::persist::CreateSnapshotError;
 use crate::vmm_config::snapshot::SnapshotType;
-use crate::vstate::bus::Bus;
+use crate::vstate::bus::{Bus, MMIO_BUS_ENTRIES_MAX};
 use crate::vstate::interrupts::{InterruptError, MsixVector, MsixVectorGroup};
 use crate::vstate::kvm::Kvm;
 use crate::vstate::memory::{
@@ -190,7 +190,7 @@ impl KvmVm {
             next_kvm_slot: AtomicU32::new(0),
             interrupts: Mutex::new(HashMap::with_capacity(GSI_MSI_END as usize + 1)),
             resource_allocator: Mutex::new(ResourceAllocator::new()),
-            mmio_bus: Arc::new(Bus::new()),
+            mmio_bus: Arc::new(Bus::new(MMIO_BUS_ENTRIES_MAX)),
             kvm,
             uffd: None,
             vcpus_handles: Mutex::new(Vec::new()),

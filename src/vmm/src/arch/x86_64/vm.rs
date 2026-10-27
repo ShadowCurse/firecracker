@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::arch::x86_64::msr::MsrError;
 use crate::snapshot::Persist;
 use crate::utils::u64_to_usize;
-use crate::vstate::bus::Bus;
+use crate::vstate::bus::{Bus, PIO_BUS_ENTRIES_MAX};
 use crate::vstate::kvm::Kvm;
 use crate::vstate::memory::{GuestMemoryExtension, GuestMemoryState};
 use crate::vstate::resources::{ResourceAllocator, ResourceAllocatorState};
@@ -103,7 +103,7 @@ impl KvmVm {
             .set_tss_address(u64_to_usize(crate::arch::x86_64::layout::KVM_TSS_ADDRESS))
             .map_err(KvmVmError::SetTssAddress)?;
 
-        let pio_bus = Arc::new(Bus::new());
+        let pio_bus = Arc::new(Bus::new(PIO_BUS_ENTRIES_MAX));
 
         Ok(KvmVm {
             common,

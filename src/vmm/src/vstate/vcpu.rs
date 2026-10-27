@@ -811,7 +811,7 @@ pub(crate) mod tests {
             )
         );
 
-        let bus = Arc::new(Bus::new());
+        let bus = Arc::new(Bus::new(16));
         let dummy = Arc::new(Mutex::new(DummyDevice));
         bus.insert(dummy, 0x10, 0x10, 0).unwrap();
         vcpu.set_mmio_bus(bus);
@@ -958,7 +958,7 @@ pub(crate) mod tests {
     fn test_set_mmio_bus() {
         let (_, mut vcpu) = setup_vcpu(0x1000);
         assert!(vcpu.kvm_vcpu.peripherals.mmio_bus.is_none());
-        vcpu.set_mmio_bus(Arc::new(Bus::new()));
+        vcpu.set_mmio_bus(Arc::new(Bus::new(16)));
         assert!(vcpu.kvm_vcpu.peripherals.mmio_bus.is_some());
     }
 

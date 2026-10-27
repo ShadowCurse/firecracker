@@ -83,5 +83,9 @@ harness = false
 name = "memory_access"
 harness = false
 
+[[bench]]
+name = "bus"
+harness = false
+
 [lints]
 workspace = true
