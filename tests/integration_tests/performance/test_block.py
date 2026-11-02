@@ -9,10 +9,10 @@ import pytest
 
 import framework.utils_fio as fio
 import host_tools.drive as drive_tools
-from framework.artifacts import ACPI_GUEST_KERNELS, pin_guest_kernel
+from framework.artifacts import ACPI_GUEST_KERNELS, pin_guest_kernel, pin_pci
 from framework.utils import check_output, track_cpu_utilization
 
-pytestmark = pin_guest_kernel(ACPI_GUEST_KERNELS)
+pytestmark = [pin_guest_kernel(ACPI_GUEST_KERNELS), pin_pci(True)]
 
 # size of the block device used in the test, in MB
 BLOCK_DEVICE_SIZE_MB = 2048
