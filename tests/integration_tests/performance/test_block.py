@@ -117,7 +117,8 @@ def emit_fio_metrics(logs_dir, metrics):
 
 
 @pytest.mark.nonci
-@pytest.mark.parametrize("vcpus", [1, 2], ids=["1vcpu", "2vcpu"])
+@pytest.mark.parametrize("vcpus", [1, 2, 4], ids=["1vcpu", "2vcpu", "4vcpu"])
+@pytest.mark.parametrize("threaded", [False, True], ids=["inline", "threaded"])
 @pytest.mark.parametrize("fio_mode", [fio.Mode.RANDREAD, fio.Mode.RANDWRITE])
 @pytest.mark.parametrize("fio_block_size", [4096], ids=["bs4096"])
 @pytest.mark.parametrize("fio_engine", [fio.Engine.LIBAIO, fio.Engine.PSYNC])
@@ -128,6 +129,7 @@ def test_block_performance(
     fio_block_size,
     fio_engine,
     io_engine,
+    threaded,
     metrics,
     results_dir,
 ):
@@ -142,13 +144,16 @@ def test_block_performance(
     fs = drive_tools.FilesystemFile(
         os.path.join(vm.fsfiles, "scratch"), BLOCK_DEVICE_SIZE_MB
     )
-    vm.add_drive("scratch", fs.path, io_engine=io_engine)
+    # Threaded device gets a worker thread per vCPU, inline one runs on the VMM thread.
+    num_queues = vcpus if threaded else None
+    vm.add_drive("scratch", fs.path, io_engine=io_engine, num_queues=num_queues)
     vm.start()
 
     metrics.set_dimensions(
         {
             "performance_test": "test_block_performance",
             "io_engine": io_engine,
+            "num_queues": str(num_queues),
             "fio_mode": fio_mode,
             "fio_block_size": str(fio_block_size),
             "fio_engine": fio_engine,
