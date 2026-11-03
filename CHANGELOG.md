@@ -28,6 +28,18 @@ and this project adheres to
 - [#6237](https://github.com/firecracker-microvm/firecracker/pull/6237): Added
   balloon and virtio-mem memory reclamation for shared memfd-backed guest
   memory, such as memory shared with vhost-user devices.
+- [#6042](https://github.com/firecracker-microvm/firecracker/pull/6042),
+  [#6068](https://github.com/firecracker-microvm/firecracker/pull/6068),
+  [#6085](https://github.com/firecracker-microvm/firecracker/pull/6085),
+  [#6114](https://github.com/firecracker-microvm/firecracker/pull/6114),
+  [#6183](https://github.com/firecracker-microvm/firecracker/pull/6183),
+  [#6219](https://github.com/firecracker-microvm/firecracker/pull/6219),
+  [#6241](https://github.com/firecracker-microvm/firecracker/pull/6241),
+  [#6252](https://github.com/firecracker-microvm/firecracker/pull/6252),
+  [#6316](https://github.com/firecracker-microvm/firecracker/pull/6316),
+  [#6356](https://github.com/firecracker-microvm/firecracker/pull/6356): Add
+  basic VFIO support allowing for PCIe device passthrough into VM. See
+  [documentation](docs/vfio.md) for instructions and current limitations.
 
 ### Changed
 
