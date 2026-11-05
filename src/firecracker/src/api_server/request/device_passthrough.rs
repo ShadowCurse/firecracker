@@ -40,7 +40,10 @@ pub(crate) fn parse_put_device_passthrough(
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use vmm::pci::PciSBDF;
+    use vmm::vmm_config::device_passthrough::DevicePassthroughHost;
 
     use super::*;
     use crate::api_server::parsed_request::tests::vmm_action_from_request;
@@ -65,6 +68,14 @@ mod tests {
         }"#;
         parse_put_device_passthrough(&Body::new(body), Some("dev0")).unwrap_err();
 
+        // Both host identifiers
+        let body = r#"{
+            "id": "dev0",
+            "sbdf": "0000:00:1f.0",
+            "path": "/sys/bus/mdev/devices/uuid"
+        }"#;
+        parse_put_device_passthrough(&Body::new(body), Some("dev0")).unwrap_err();
+
         // Valid request
         let body = r#"{
             "id": "dev0",
@@ -76,7 +87,22 @@ mod tests {
 
         let expected_config = DevicePassthroughConfig {
             id: "dev0".to_string(),
-            sbdf: PciSBDF::new(0x0, 0x0, 0x1f, 0x0),
+            host: DevicePassthroughHost::Sbdf(PciSBDF::new(0x0, 0x0, 0x1f, 0x0)),
+        };
+        assert_eq!(r, VmmAction::InsertPassthroughDevice(expected_config));
+
+        // Valid request with path
+        let body = r#"{
+            "id": "dev0",
+            "path": "/sys/bus/mdev/devices/uuid"
+        }"#;
+        let r = vmm_action_from_request(
+            parse_put_device_passthrough(&Body::new(body), Some("dev0")).unwrap(),
+        );
+
+        let expected_config = DevicePassthroughConfig {
+            id: "dev0".to_string(),
+            host: DevicePassthroughHost::Path(PathBuf::from("/sys/bus/mdev/devices/uuid")),
         };
         assert_eq!(r, VmmAction::InsertPassthroughDevice(expected_config));
     }

@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use event_manager::{MutEventSubscriber, SubscriberOps};
@@ -40,7 +41,7 @@ use crate::resources::VmResources;
 use crate::snapshot::Persist;
 use crate::vfio::{
     VfioContainer, VfioDevice, VfioError, vfio_create_kvm_vfio_device_and_vfio_container,
-    vfio_dma_map_guest_memory,
+    vfio_dma_map_guest_memory, vfio_sysfs_path,
 };
 use crate::vmm_config::device_passthrough::DevicePassthroughConfig;
 use crate::vmm_config::machine_config::MAX_PCIE_HOTPLUG_PORTS;
@@ -114,8 +115,8 @@ pub enum PciManagerError {
     Vfio(#[from] VfioError),
     /// Trying to add a device with duplicate id: {0}
     DeviceIdDuplicate(String),
-    /// Trying to add a device with duplicate SBDF: {0}
-    DeviceSBDFDuplicate(PciSBDF),
+    /// Trying to add a device with duplicate host device: {0:?}
+    DeviceHostDuplicate(PathBuf),
     /// Device with id: {0} not found
     DeviceNotFound(String),
     /// Device '{0}' is not removable because it's not plugged to a PCIe root port.
@@ -400,17 +401,18 @@ impl PciDevices {
         config: DevicePassthroughConfig,
         placement: PciPlacement,
     ) -> Result<PciSBDF, PciManagerError> {
+        let pci_device_bdf = self.next_sbdf(placement)?;
+        let sysfs_path = vfio_sysfs_path(&config.host)?;
         for device in self.vfio_devices.iter() {
             let device = device.lock().unwrap();
             if device.config.id == config.id {
                 return Err(PciManagerError::DeviceIdDuplicate(config.id));
             }
-            if device.config.sbdf == config.sbdf {
-                return Err(PciManagerError::DeviceSBDFDuplicate(config.sbdf));
+            if device.sysfs_path == sysfs_path {
+                return Err(PciManagerError::DeviceHostDuplicate(sysfs_path));
             }
         }
 
-        let pci_device_bdf = self.next_sbdf(placement)?;
         debug!("VFIO: Allocating BDF: {pci_device_bdf:?} for device");
 
         // KVM allows a single KVM VFIO device per VM and older host kernels destroy it only
@@ -421,7 +423,7 @@ impl PciDevices {
         }
         let container = self.vfio_container.as_ref().unwrap();
 
-        let device = VfioDevice::new(container, vm, config, pci_device_bdf)?;
+        let device = VfioDevice::new(container, vm, config, sysfs_path, pci_device_bdf)?;
         // The kernel drops the DMA mappings once the last group leaves the container, and a
         // container without groups cannot map anything, so map the guest memory after the first
         // device joins it

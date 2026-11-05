@@ -1,6 +1,8 @@
 // Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::path::PathBuf;
+
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::pci::PciSBDF;
@@ -8,8 +10,8 @@ use crate::pci::PciSBDF;
 /// Errors for device passthrough configuration.
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
 pub enum DevicePassthroughConfigError {
-    /// Duplicate device passthrough SBDF: {0}
-    DuplicateSBDF(PciSBDF),
+    /// Duplicate device passthrough host device: {0:?}
+    DuplicateHost(DevicePassthroughHost),
     /// Invalid device passthrough SBDF: {0}
     InvalidSBDF(String),
 }
@@ -28,18 +30,31 @@ fn deserialize_sbdf_from_str<'de, D: Deserializer<'de>>(
     })
 }
 
+/// Host device to pass through
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DevicePassthroughHost {
+    /// SBDF of the host PCI device
+    Sbdf(
+        #[serde(
+            serialize_with = "serialize_sbdf_as_str",
+            deserialize_with = "deserialize_sbdf_from_str"
+        )]
+        PciSBDF,
+    ),
+    /// Sysfs path of the host device (e.g. `/sys/bus/mdev/devices/<uuid>`)
+    Path(PathBuf),
+}
+
 /// Config for device passthrough
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DevicePassthroughConfig {
     /// ID of the device
     pub id: String,
-    /// Host identifier for the PCI device
-    #[serde(
-        serialize_with = "serialize_sbdf_as_str",
-        deserialize_with = "deserialize_sbdf_from_str"
-    )]
-    pub sbdf: PciSBDF,
+    /// Host device
+    #[serde(flatten)]
+    pub host: DevicePassthroughHost,
 }
 
 /// Configs for device passthrough
@@ -59,12 +74,12 @@ impl DevicePassthroughConfigs {
         if self
             .configs
             .iter()
-            .any(|b| b.sbdf == config.sbdf && b.id != config.id)
+            .any(|b| b.host == config.host && b.id != config.id)
         {
-            return Err(DevicePassthroughConfigError::DuplicateSBDF(config.sbdf));
+            return Err(DevicePassthroughConfigError::DuplicateHost(config.host));
         }
         if let Some(old_config) = self.configs.iter_mut().find(|b| b.id == config.id) {
-            old_config.sbdf = config.sbdf;
+            old_config.host = config.host;
         } else {
             self.configs.push(config);
         }
@@ -78,47 +93,47 @@ mod tests {
 
     #[test]
     fn test_add_device_passthrough_config_and_overwrite() {
-        let id1 = PciSBDF::new_from_str("01:00.0").unwrap();
-        let id2 = PciSBDF::new_from_str("02:00.0").unwrap();
+        let id1 = DevicePassthroughHost::Sbdf(PciSBDF::new_from_str("01:00.0").unwrap());
+        let id2 = DevicePassthroughHost::Path(PathBuf::from("/sys/bus/mdev/devices/uuid"));
 
         let mut configs = DevicePassthroughConfigs::default();
 
         configs
             .add(DevicePassthroughConfig {
                 id: "dev0".to_string(),
-                sbdf: id1,
+                host: id1.clone(),
             })
             .unwrap();
         assert_eq!(configs.configs.len(), 1);
-        assert_eq!(configs.configs[0].sbdf, id1);
+        assert_eq!(configs.configs[0].host, id1);
 
         configs
             .add(DevicePassthroughConfig {
                 id: "dev0".to_string(),
-                sbdf: id2,
+                host: id2.clone(),
             })
             .unwrap();
         assert_eq!(configs.configs.len(), 1);
-        assert_eq!(configs.configs[0].sbdf, id2);
+        assert_eq!(configs.configs[0].host, id2);
 
         configs
             .add(DevicePassthroughConfig {
                 id: "dev1".to_string(),
-                sbdf: id1,
+                host: id1.clone(),
             })
             .unwrap();
         assert_eq!(configs.configs.len(), 2);
-        assert_eq!(configs.configs[0].sbdf, id2);
-        assert_eq!(configs.configs[1].sbdf, id1);
+        assert_eq!(configs.configs[0].host, id2);
+        assert_eq!(configs.configs[1].host, id1);
 
         configs
             .add(DevicePassthroughConfig {
                 id: "dev1".to_string(),
-                sbdf: id2,
+                host: id2.clone(),
             })
             .unwrap_err();
         assert_eq!(configs.configs.len(), 2);
-        assert_eq!(configs.configs[0].sbdf, id2);
-        assert_eq!(configs.configs[1].sbdf, id1);
+        assert_eq!(configs.configs[0].host, id2);
+        assert_eq!(configs.configs[1].host, id1);
     }
 }

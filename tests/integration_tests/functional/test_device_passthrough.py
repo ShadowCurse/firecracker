@@ -123,10 +123,17 @@ def test_api_device_passthrough(uvm):
     vm.spawn()
     vm.basic_config()
 
-    # Missing required field 'sbdf'
-    expected_msg = re.escape("missing field `sbdf`")
+    # Missing host device
+    expected_msg = re.escape("no variant of enum DevicePassthroughHost found")
     with pytest.raises(RuntimeError, match=expected_msg):
         vm.api.device_passthrough.put(id="dev0")
+
+    # Both host device identifiers
+    expected_msg = re.escape("unknown field `path`")
+    with pytest.raises(RuntimeError, match=expected_msg):
+        vm.api.device_passthrough.put(
+            id="dev0", sbdf="01:02.03", path="/sys/bus/mdev/devices/uuid"
+        )
 
     # Unknown field
     expected_msg = re.escape("unknown field `foo`")
@@ -147,7 +154,7 @@ def test_api_device_passthrough(uvm):
     vm.api.device_passthrough.put(id="nvme0", sbdf="01:02.03")
 
     # Duplicate SBDF
-    expected_msg = re.escape("Duplicate device passthrough SBDF")
+    expected_msg = re.escape("Duplicate device passthrough host device")
     with pytest.raises(RuntimeError, match=expected_msg):
         vm.api.device_passthrough.put(id="nvme1", sbdf="01:02.03")
 

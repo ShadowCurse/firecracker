@@ -3,7 +3,7 @@
 
 use std::ops::DerefMut;
 use std::os::fd::AsRawFd;
-use std::path::Path;
+use std::path::PathBuf;
 use std::sync::{Arc, Barrier};
 
 use arrayvec::ArrayVec;
@@ -33,7 +33,7 @@ use crate::utils::{
     align_down_host_page, align_up_host_page, is_host_page_aligned, offset_from_lower_host_page,
     u64_to_usize, usize_to_u64,
 };
-use crate::vmm_config::device_passthrough::DevicePassthroughConfig;
+use crate::vmm_config::device_passthrough::{DevicePassthroughConfig, DevicePassthroughHost};
 use crate::vstate::bus::{BusDevice, BusError};
 use crate::vstate::interrupts::InterruptError;
 use crate::vstate::memory::{GuestMemoryMmap, GuestRegionType};
@@ -87,6 +87,8 @@ pub enum VfioError {
     SparseMmapAreaOutOfRange(u8, u64, u64, u64),
     /// BAR{0} sparse mmap area at gpa {1:#x} size {2:#x} overlaps MSI-X at gpa {3:#x} size {4:#x}
     SparseMmapAreaOverlapsMsixTable(u8, u64, u64, u64, u64),
+    /// Cannot resolve device sysfs path {0:?}: {1}
+    SysfsPath(PathBuf, std::io::Error),
 }
 
 /// Each used BAR has exactly one emulated area covering the whole BAR.
@@ -176,6 +178,8 @@ struct VfioRegisterMask {
 pub struct VfioDevice {
     /// Configuration with which the device was created
     pub config: DevicePassthroughConfig,
+    /// Canonical sysfs path of the host device
+    pub sysfs_path: PathBuf,
     /// SBDF of the device in the configuration space
     pub sbdf: PciSBDF,
     device: InternalVfioDevice,
@@ -203,9 +207,10 @@ impl VfioDevice {
         container: &Arc<VfioContainer>,
         vm: &Arc<KvmVm>,
         config: DevicePassthroughConfig,
+        sysfs_path: PathBuf,
         sbdf: PciSBDF,
     ) -> Result<VfioDevice, VfioError> {
-        vfio_init_device(container, vm, config, sbdf)
+        vfio_init_device(container, vm, config, sysfs_path, sbdf)
     }
 
     fn maybe_relocate_all_bars(&mut self) {
@@ -1256,25 +1261,28 @@ fn vfio_unmap_bar_mapping(vm: &KvmVm, mapping: &VfioBarMapping) {
     }
 }
 
+/// Returns the canonical sysfs path of the host device
+pub fn vfio_sysfs_path(host: &DevicePassthroughHost) -> Result<PathBuf, VfioError> {
+    let path = match host {
+        DevicePassthroughHost::Sbdf(sbdf) => PathBuf::from(format!("/sys/bus/pci/devices/{sbdf}")),
+        DevicePassthroughHost::Path(path) => path.clone(),
+    };
+    std::fs::canonicalize(&path).map_err(|err| VfioError::SysfsPath(path, err))
+}
+
 /// This will open a VFIO device, attach its group both to the KVM VFIO device and to the VFIO
 /// container. It will setup MSIx irqs and BAR DMAs.
 fn vfio_init_device(
     container: &Arc<VfioContainer>,
     vm: &Arc<KvmVm>,
     config: DevicePassthroughConfig,
+    sysfs_path: PathBuf,
     sbdf: PciSBDF,
 ) -> Result<VfioDevice, VfioError> {
-    let sysfs_path = format!(
-        "/sys/bus/pci/devices/{:04x}:{:02x}:{:02x}.{:x}",
-        config.sbdf.segment(),
-        config.sbdf.bus(),
-        config.sbdf.device(),
-        config.sbdf.function()
-    );
-    debug!("Opening device at path: {}", sysfs_path);
+    debug!("Opening device at path: {sysfs_path:?}");
 
     let device = InternalVfioDevice::new(
-        Path::new(&sysfs_path),
+        &sysfs_path,
         container.clone() as Arc<dyn vfio_ioctls::VfioOps>,
     )?;
     // Disable I/O sapce, memory space, bus master and INTx bits in the device command register.
@@ -1363,6 +1371,7 @@ fn vfio_init_device(
 
     let vfio_device = VfioDevice {
         config,
+        sysfs_path,
         sbdf,
         device,
         bars,

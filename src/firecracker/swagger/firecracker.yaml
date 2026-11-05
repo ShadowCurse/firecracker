@@ -1497,9 +1497,10 @@ definitions:
 
   DevicePassthrough:
     type: object
+    description:
+      Exactly one of `sbdf` or `path` must be specified.
     required:
       - id
-      - sbdf
     properties:
       id:
         type: string
@@ -1510,6 +1511,11 @@ definitions:
         description:
           Host PCI device identifier. Accepted formats - full SBDF ("0000:01:02.3") or
           short BDF ("01:02.3").
+      path:
+        type: string
+        description:
+          Sysfs path of the host device, e.g. "/sys/bus/mdev/devices/<uuid>" for
+          mediated devices.
 
   Error:
     type: object

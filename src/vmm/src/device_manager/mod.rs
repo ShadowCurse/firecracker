@@ -918,6 +918,7 @@ pub(crate) mod tests {
     use crate::pci::PciSBDF;
     use crate::rpc_interface::VmmActionError;
     use crate::vmm_config::HotplugDeviceConfig;
+    use crate::vmm_config::device_passthrough::DevicePassthroughHost;
     use crate::vmm_config::drive::{BlockDeviceConfig, DriveError};
     use crate::vmm_config::net::{NetworkInterfaceConfig, NetworkInterfaceError};
     use crate::vmm_config::pmem::{PmemConfig, PmemConfigError};
@@ -1231,7 +1232,7 @@ pub(crate) mod tests {
     fn test_hotplug_passthrough_rejected() {
         let cfg = DevicePassthroughConfig {
             id: "dev0".to_string(),
-            sbdf: PciSBDF::new(0, 1, 0, 0),
+            host: DevicePassthroughHost::Sbdf(PciSBDF::new(0, 1, 0, 0)),
         };
 
         let mut vmm = default_vmm();
