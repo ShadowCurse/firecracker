@@ -59,6 +59,17 @@ const PCI_CONFIG_COMMAND_DISABLE_MASK: u32 = COMMAND_IO_SPACE_ENABLE
     | COMMAND_MEMORY_SPACE_ENABLE
     | COMMAND_BUS_MASTER_ENABLE
     | COMMAND_INTERRUPT_DISABLE_ENABLE;
+// PCIe spec revision 6.0: 7.7.1.2 Message Control Register for MSI
+const PCI_MSI_FLAGS_ENABLE: u16 = 1 << 0;
+const PCI_MSI_FLAGS_64BIT: u16 = 1 << 7;
+const PCI_MSI_FLAGS_MASKBIT: u16 = 1 << 8;
+// MSI Message Control bits hidden from the guest: Enable (emulated), Multiple Message
+// Capable/Enable (single vector only) and Extended Message Data Capable/Enable
+const PCI_MSI_FLAGS_HIDDEN: u16 = 0x067f;
+// MSI-X Message Control Enable bit
+const PCI_MSIX_FLAGS_ENABLE: u16 = 1 << 15;
+// Reserved MSI-X table BIR which never matches a BAR. Used for MSI only devices.
+const VFIO_MSI_TABLE_BIR: u32 = 7;
 
 /// VfioError
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
@@ -77,7 +88,7 @@ pub enum VfioError {
     VfioIoctls(#[from] vfio_ioctls::VfioError),
     /// Cannot create Msix vector group: {0}
     MsixConfig(#[from] InterruptError),
-    /// Device does not provide MSIx irq
+    /// Device does not provide MSIx or MSI irq
     NoMsixIrq,
     /// KVM failed to create KVM_DEV_TYPE_VFIO device: {0}
     KvmCreateVfioDevice(kvm_ioctls::Error),
@@ -159,6 +170,9 @@ struct VfioMsixState {
     /// Register idx where the capability is in the configuration space
     register: u8,
     cap: MsixCap,
+    /// Message Control of the MSI capability if the device only supports MSI. The single MSI
+    /// vector is emulated with a single entry MSI-X table.
+    msi_msg_ctl: Option<u16>,
     config: MsixConfig,
 }
 
@@ -387,6 +401,37 @@ fn vfio_device_disable(device: &InternalVfioDevice) {
     );
 }
 
+/// Merge `data` written at `offset` into the register value `reg`
+fn vfio_merge_register_write(reg: u32, offset: u8, data: &[u8]) -> u32 {
+    let mut bytes = reg.to_le_bytes();
+    bytes[offset as usize..][..data.len()].copy_from_slice(data);
+    u32::from_le_bytes(bytes)
+}
+
+/// Map the config space register `reg_idx` of the MSI capability at `register` to the offset of
+/// the emulating MSI-X table entry field and the mask of the bits it backs.
+/// PCIe spec revision 6.0: 7.7.1 MSI Capability Structures
+fn vfio_msi_table_entry_field(
+    msi_msg_ctl: Option<u16>,
+    register: u8,
+    reg_idx: u16,
+) -> Option<(u64, u32)> {
+    let msg_ctl = msi_msg_ctl?;
+    let is_64bit = msg_ctl & PCI_MSI_FLAGS_64BIT != 0;
+    let has_mask = msg_ctl & PCI_MSI_FLAGS_MASKBIT != 0;
+    match (reg_idx.wrapping_sub(u16::from(register)), is_64bit) {
+        // Message Address
+        (1, _) => Some((0x0, 0xffff_fffc)),
+        // Message Upper Address
+        (2, true) => Some((0x4, 0xffff_ffff)),
+        // Message Data
+        (2, false) | (3, true) => Some((0x8, 0xffff)),
+        // Mask Bits
+        (3, false) | (4, true) if has_mask => Some((0xc, 0x1)),
+        _ => None,
+    }
+}
+
 impl PciDevice for VfioDevice {
     fn write_config_register(
         &mut self,
@@ -430,11 +475,33 @@ impl PciDevice for VfioDevice {
                 self.config.id
             );
         } else if reg_idx == u16::from(self.msix_state.register) {
-            // offset is within a 4-byte PCI config register (0..3).
-            self.msix_state.config.write_msg_ctl_register(offset, data);
+            if self.msix_state.msi_msg_ctl.is_some() {
+                let reg =
+                    vfio_merge_register_write(self.read_config_register(reg_idx), offset, data);
+                let msg_ctl = if (reg >> 16) as u16 & PCI_MSI_FLAGS_ENABLE != 0 {
+                    PCI_MSIX_FLAGS_ENABLE
+                } else {
+                    0
+                };
+                self.msix_state.config.set_msg_ctl(msg_ctl);
+            } else {
+                // offset is within a 4-byte PCI config register (0..3).
+                self.msix_state.config.write_msg_ctl_register(offset, data);
+            }
             // Don't set `handled` since we need to passthrough write
             // to the msg_ctl register to the device, so it will enable Msix
             // interrupts
+        } else if let Some((field, mask)) = vfio_msi_table_entry_field(
+            self.msix_state.msi_msg_ctl,
+            self.msix_state.register,
+            reg_idx,
+        ) {
+            let mut value: u32 = 0;
+            self.msix_state
+                .config
+                .read_table(field, value.as_mut_bytes());
+            let value = vfio_merge_register_write(value, offset, data) & mask;
+            self.msix_state.config.write_table(field, value.as_bytes());
         } else if reg_idx == COMMAND_REG {
             // This is special write that can force us to relocate BARs
             handled = true;
@@ -482,9 +549,24 @@ impl PciDevice for VfioDevice {
             if reg_idx == u16::from(self.msix_state.register) {
                 // Since we emulate the MsixCap, we need to set the Mask and Msix enable bits to
                 // values we have, and not what device has.
-                let msg_ctl = self.msix_state.config.as_msg_ctl();
+                let msg_ctl = match self.msix_state.msi_msg_ctl {
+                    Some(_) => {
+                        ((result >> 16) as u16 & !PCI_MSI_FLAGS_HIDDEN)
+                            | u16::from(self.msix_state.config.enabled)
+                    }
+                    None => self.msix_state.config.as_msg_ctl(),
+                };
                 result &= 0x0000ffff;
                 result |= u32::from(msg_ctl) << 16;
+            } else if let Some((field, mask)) = vfio_msi_table_entry_field(
+                self.msix_state.msi_msg_ctl,
+                self.msix_state.register,
+                reg_idx,
+            ) {
+                self.msix_state
+                    .config
+                    .read_table(field, result.as_mut_bytes());
+                result &= mask;
             }
             if let Some(mask) = self.masks.iter().find(|mask| mask.register == reg_idx) {
                 result = (result & mask.mask) | mask.value;
@@ -494,13 +576,19 @@ impl PciDevice for VfioDevice {
     }
 }
 
-/// Go through the PCI config space and reads all legacy and PCIe capabilities. Find the MSIx
-/// cap if present and construct an array of masks which should be used to overwrite values in the
-/// config space during read operations.
+/// Go through the PCI config space and reads all legacy and PCIe capabilities. Find the MSIx and
+/// MSI caps if present and construct an array of masks which should be used to overwrite values in
+/// the config space during read operations.
+#[allow(clippy::type_complexity)]
 fn vfio_get_pci_capabilities(
     config_space: &[u32; PCI_CONFIG_SPACE_REGS as usize],
-) -> (Option<(MsixCap, u8)>, Vec<VfioRegisterMask>) {
-    let (msix_cap_and_register, has_pci_express_cap) = vfio_read_legacy_caps(config_space);
+) -> (
+    Option<(MsixCap, u8)>,
+    Option<(u16, u8)>,
+    Vec<VfioRegisterMask>,
+) {
+    let (msix_cap_and_register, msi_msg_ctl_and_register, has_pci_express_cap) =
+        vfio_read_legacy_caps(config_space);
 
     // PCIe extended capabilities only exist if the device exposes a PCI Express capability.
     let masks = if has_pci_express_cap {
@@ -509,7 +597,7 @@ fn vfio_get_pci_capabilities(
         Vec::new()
     };
 
-    (msix_cap_and_register, masks)
+    (msix_cap_and_register, msi_msg_ctl_and_register, masks)
 }
 
 /// Minor utility function to read `bytes.len()` bytes from `config_space` starting at `offset`.
@@ -524,11 +612,13 @@ fn vfio_config_space_read_bytes(
     bytes.copy_from_slice(&reg.as_bytes()[in_reg_offset as usize..][0..bytes.len()]);
 }
 
-/// Walk the legacy PCI capability list. Return the MSI-X capability together with the register it
-/// resides in (if present) and whether the device exposes a PCI Express capability.
+/// Walk the legacy PCI capability list. Return the MSI-X capability and the MSI Message Control
+/// together with the registers they reside in (if present) and whether the device exposes a PCI
+/// Express capability.
+#[allow(clippy::type_complexity)]
 fn vfio_read_legacy_caps(
     config_space: &[u32; PCI_CONFIG_SPACE_REGS as usize],
-) -> (Option<(MsixCap, u8)>, bool) {
+) -> (Option<(MsixCap, u8)>, Option<(u16, u8)>, bool) {
     let mut next_cap_offset: u8 = 0;
     vfio_config_space_read_bytes(
         config_space,
@@ -538,6 +628,7 @@ fn vfio_read_legacy_caps(
     debug!("PCI CAPS offset: {}", next_cap_offset);
 
     let mut msix_cap_and_register = None;
+    let mut msi_msg_ctl_and_register = None;
     let mut has_pci_express_cap = false;
     // The legacy region with PCI cap is 256 bytes long and
     // split into 4 byte registers.
@@ -572,6 +663,15 @@ fn vfio_read_legacy_caps(
         match cap {
             PciCapabilityId::PciExpress => {
                 has_pci_express_cap = true;
+            }
+            PciCapabilityId::MessageSignalledInterrupts => {
+                let mut msg_ctl: u16 = 0;
+                vfio_config_space_read_bytes(
+                    config_space,
+                    (current_cap_offset as u32) + 2,
+                    msg_ctl.as_mut_bytes(),
+                );
+                msi_msg_ctl_and_register = Some((msg_ctl, register));
             }
             PciCapabilityId::MsiX => {
                 // PCIe spec revision 6.0: 7.7.2 MSI-X Capability and Table Structure
@@ -609,7 +709,11 @@ fn vfio_read_legacy_caps(
         };
     }
 
-    (msix_cap_and_register, has_pci_express_cap)
+    (
+        msix_cap_and_register,
+        msi_msg_ctl_and_register,
+        has_pci_express_cap,
+    )
 }
 
 /// Walk the PCIe extended capability list and construct an array of masks which should be used to
@@ -1290,29 +1394,48 @@ fn vfio_init_device(
     vfio_device_disable(&device);
     device.reset();
 
-    let Some(msix_irq_info) = device.get_irq_info(VFIO_PCI_MSIX_IRQ_INDEX) else {
-        return Err(VfioError::NoMsixIrq);
-    };
-    if msix_irq_info.count == 0 {
-        return Err(VfioError::NoMsixIrq);
-    }
-
     let mut config_space = [0_u32; PCI_CONFIG_SPACE_REGS as usize];
     device.region_read(VFIO_PCI_CONFIG_REGION_INDEX, config_space.as_mut_bytes(), 0);
-    let (msix_cap_and_register, masks) = vfio_get_pci_capabilities(&config_space);
+    let (msix_cap_and_register, msi_msg_ctl_and_register, masks) =
+        vfio_get_pci_capabilities(&config_space);
 
-    // Only devices with MSI-X cap and irqs are supported
-    let Some((msix_cap, msix_register)) = msix_cap_and_register else {
+    // Only devices with MSI-X or MSI cap and irqs are supported. MSI is only used if there is no
+    // MSI-X and is emulated with a single vector MSI-X table which is not located in any BAR.
+    let (msix_cap, msix_register, msi_msg_ctl, irq_index) =
+        match (msix_cap_and_register, msi_msg_ctl_and_register) {
+            (Some((cap, register)), _) => (cap, register, None, VFIO_PCI_MSIX_IRQ_INDEX),
+            (None, Some((msg_ctl, register))) => {
+                let cap = MsixCap {
+                    msg_ctl: 0,
+                    table: VFIO_MSI_TABLE_BIR,
+                    pba: VFIO_MSI_TABLE_BIR,
+                };
+                (cap, register, Some(msg_ctl), VFIO_PCI_MSI_IRQ_INDEX)
+            }
+            (None, None) => return Err(VfioError::NoMsixIrq),
+        };
+    let Some(irq_info) = device.get_irq_info(irq_index) else {
         return Err(VfioError::NoMsixIrq);
     };
+    if irq_info.count == 0 {
+        return Err(VfioError::NoMsixIrq);
+    }
 
     // SAFETY: maximum msix table size is 1 << 11 = 2048 (it has 10 bits in the control register
     // and encoded as N - 1). This fits into u16 without issues.
     #[allow(clippy::cast_possible_truncation)]
-    let msix_num = msix_irq_info.count as u16;
+    let msix_num = if msi_msg_ctl.is_some() {
+        1
+    } else {
+        irq_info.count as u16
+    };
     let msix_vectors =
         KvmVm::create_msix_group(vm.clone(), msix_num).map_err(VfioError::MsixConfig)?;
-    let msix_config = MsixConfig::new(Arc::new(msix_vectors), sbdf);
+    let mut msix_config = MsixConfig::new(Arc::new(msix_vectors), sbdf);
+    if msi_msg_ctl.is_some() {
+        // MSI vectors are unmasked after reset
+        msix_config.table_entries[0].vector_ctl = 0;
+    }
 
     // We set VFIO irqs here on device setup. There is no reason to add additional tracking
     // for driver MSIx configuration since those are handled by the MsixState.
@@ -1324,28 +1447,40 @@ fn vfio_init_device(
         .iter()
         .map(|v| &v.event_fd)
         .collect();
-    device.enable_msix(fds)?;
+    device.enable_irq(irq_index, fds)?;
 
     // There is no direct access to `regions` in `VfioDevice`, so need to work around this
     let bar_infos: [VfioBarInfo; NUM_BAR_REGS as usize] = std::array::from_fn(|i| {
         let bar_offset = PCI_CONFIG_BAR_OFFSET as usize / std::mem::size_of::<u32>() + i;
         let bar_value = config_space[bar_offset];
         #[allow(clippy::cast_possible_truncation)]
+        let i = i as u32;
+        let caps = device.get_region_caps(i);
+        let mut flags = device.get_region_flags(i);
+        // vfio-ioctls keeps the flags of the region info query without capabilities. The kernel
+        // may omit the mmap flag from it for regions with sparse mmap areas (e.g. NVIDIA vGPU BAR0).
+        if caps
+            .iter()
+            .any(|cap| matches!(cap, VfioRegionInfoCap::SparseMmap(_)))
+        {
+            flags |= VFIO_REGION_INFO_FLAG_MMAP;
+        }
         VfioBarInfo {
             bar_value,
-            flags: device.get_region_flags(i as u32),
-            size: device.get_region_size(i as u32),
-            offset: device.get_region_offset(i as u32),
-            caps: device.get_region_caps(i as u32),
+            flags,
+            size: device.get_region_size(i),
+            offset: device.get_region_offset(i),
+            caps,
         }
     });
 
     let bars = VfioBars::new(vm.clone(), &bar_infos)?;
 
     let (areas, emulated_areas) = vfio_calculate_bar_areas(&bars.vmm_bars, &bar_infos, &msix_cap)?;
-    if !emulated_areas
-        .iter()
-        .any(|area| area.bar_idx == msix_cap.table_bir())
+    if msi_msg_ctl.is_none()
+        && !emulated_areas
+            .iter()
+            .any(|area| area.bar_idx == msix_cap.table_bir())
     {
         return Err(VfioError::NoMsixIrq);
     }
@@ -1366,6 +1501,7 @@ fn vfio_init_device(
     let msix_state = VfioMsixState {
         register: msix_register,
         cap: msix_cap,
+        msi_msg_ctl,
         config: msix_config,
     };
 
@@ -1557,7 +1693,7 @@ mod tests {
     #[test]
     fn test_vfio_read_legacy_caps_none() {
         let config_space = [0u32; 1024];
-        let (msix, has_pci_express_cap) = vfio_read_legacy_caps(&config_space);
+        let (msix, _, has_pci_express_cap) = vfio_read_legacy_caps(&config_space);
         assert!(msix.is_none());
         assert!(!has_pci_express_cap);
     }
@@ -1574,7 +1710,7 @@ mod tests {
             0x00,
         );
 
-        let (msix, has_pci_express_cap) = vfio_read_legacy_caps(&config_space);
+        let (msix, _, has_pci_express_cap) = vfio_read_legacy_caps(&config_space);
         assert!(msix.is_none());
         assert!(has_pci_express_cap);
     }
@@ -1593,7 +1729,7 @@ mod tests {
         config_space[0x40 / 4 + 2] = pba;
         config_space_add_legacy_cap(&mut config_space, 0x40, PciCapabilityId::MsiX as u8, 0x00);
 
-        let (msix, has_pci_express_cap) = vfio_read_legacy_caps(&config_space);
+        let (msix, _, has_pci_express_cap) = vfio_read_legacy_caps(&config_space);
         assert!(!has_pci_express_cap);
 
         let (cap, register) = msix.unwrap();
@@ -1609,6 +1745,100 @@ mod tests {
     }
 
     #[test]
+    fn test_vfio_read_legacy_caps_msi() {
+        let mut config_space = [0u32; 1024];
+
+        config_space_write_u8(&mut config_space, PCI_CONFIG_CAPABILITY_OFFSET, 0x40);
+        let msg_ctl: u16 = PCI_MSI_FLAGS_64BIT | PCI_MSI_FLAGS_MASKBIT;
+        config_space[0x40 / 4] = (msg_ctl as u32) << 16;
+        config_space_add_legacy_cap(
+            &mut config_space,
+            0x40,
+            PciCapabilityId::MessageSignalledInterrupts as u8,
+            0x00,
+        );
+
+        let (msix, msi, has_pci_express_cap) = vfio_read_legacy_caps(&config_space);
+        assert!(msix.is_none());
+        assert_eq!(msi, Some((msg_ctl, 0x40 / 4)));
+        assert!(!has_pci_express_cap);
+    }
+
+    #[test]
+    fn test_vfio_merge_register_write() {
+        assert_eq!(
+            vfio_merge_register_write(0x1122_3344, 0, &[0xaa]),
+            0x1122_33aa
+        );
+        assert_eq!(
+            vfio_merge_register_write(0x1122_3344, 2, &[0xaa, 0xbb]),
+            0xbbaa_3344
+        );
+        assert_eq!(
+            vfio_merge_register_write(0x1122_3344, 0, &[0xaa, 0xbb, 0xcc, 0xdd]),
+            0xddcc_bbaa
+        );
+    }
+
+    #[test]
+    fn test_vfio_msi_table_entry_field() {
+        let reg = 0x10;
+        let field = |msg_ctl, reg_idx| vfio_msi_table_entry_field(Some(msg_ctl), reg, reg_idx);
+
+        // Not an MSI device
+        assert_eq!(vfio_msi_table_entry_field(None, reg, 0x11), None);
+
+        // 32-bit address without mask bits
+        assert_eq!(field(0, 0x0f), None);
+        assert_eq!(field(0, 0x10), None);
+        assert_eq!(field(0, 0x11), Some((0x0, 0xffff_fffc)));
+        assert_eq!(field(0, 0x12), Some((0x8, 0xffff)));
+        assert_eq!(field(0, 0x13), None);
+
+        // 32-bit address with mask bits
+        let msg_ctl = PCI_MSI_FLAGS_MASKBIT;
+        assert_eq!(field(msg_ctl, 0x12), Some((0x8, 0xffff)));
+        assert_eq!(field(msg_ctl, 0x13), Some((0xc, 0x1)));
+        assert_eq!(field(msg_ctl, 0x14), None);
+
+        // 64-bit address without mask bits
+        let msg_ctl = PCI_MSI_FLAGS_64BIT;
+        assert_eq!(field(msg_ctl, 0x11), Some((0x0, 0xffff_fffc)));
+        assert_eq!(field(msg_ctl, 0x12), Some((0x4, 0xffff_ffff)));
+        assert_eq!(field(msg_ctl, 0x13), Some((0x8, 0xffff)));
+        assert_eq!(field(msg_ctl, 0x14), None);
+
+        // 64-bit address with mask bits
+        let msg_ctl = PCI_MSI_FLAGS_64BIT | PCI_MSI_FLAGS_MASKBIT;
+        assert_eq!(field(msg_ctl, 0x14), Some((0xc, 0x1)));
+        assert_eq!(field(msg_ctl, 0x15), None);
+    }
+
+    #[test]
+    fn test_vfio_distribute_emulated_access_msi() {
+        let area = VfioBarEmulatedArea {
+            bar_idx: 0,
+            gpa: 0x1000,
+            size: 0x1000,
+        };
+        let cap = MsixCap {
+            msg_ctl: 0,
+            table: VFIO_MSI_TABLE_BIR,
+            pba: VFIO_MSI_TABLE_BIR,
+        };
+
+        // There is no MSI-X table, so all accesses go to the device
+        let result = vfio_distribute_emulated_access(&[area], &cap, 0x1000, 0x0, 4);
+        assert!(matches!(
+            result,
+            HandleBarAccessResult::Device {
+                bar_idx: 0,
+                offset: 0
+            }
+        ));
+    }
+
+    #[test]
     fn test_vfio_read_legacy_caps_iteration_limit() {
         let mut config_space = [0u32; 1024];
 
@@ -1617,7 +1847,7 @@ mod tests {
         // the loop
         config_space_add_legacy_cap(&mut config_space, 0x40, 0x0, 0x40);
 
-        let (msix, has_pci_express_cap) = vfio_read_legacy_caps(&config_space);
+        let (msix, _, has_pci_express_cap) = vfio_read_legacy_caps(&config_space);
         assert!(msix.is_none());
         assert!(!has_pci_express_cap);
     }
@@ -1709,7 +1939,7 @@ mod tests {
         config_space_add_ext_cap(&mut config_space, 0x100, sriov_id, 0);
 
         // Extended capabilities must not be scanned without a PCI Express capability.
-        let (msix, masks) = vfio_get_pci_capabilities(&config_space);
+        let (msix, _, masks) = vfio_get_pci_capabilities(&config_space);
         assert!(msix.is_none());
         assert!(masks.is_empty());
     }
@@ -1730,7 +1960,7 @@ mod tests {
         let sriov_id = PciExpressCapabilityId::SingleRootIoVirtualization as u16;
         config_space_add_ext_cap(&mut config_space, 0x100, sriov_id, 0);
 
-        let (msix, masks) = vfio_get_pci_capabilities(&config_space);
+        let (msix, _, masks) = vfio_get_pci_capabilities(&config_space);
         assert!(msix.is_some());
         assert_eq!(masks.len(), 1);
     }
