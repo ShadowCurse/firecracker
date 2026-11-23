@@ -3,7 +3,7 @@
 
 use std::ops::DerefMut;
 use std::os::fd::AsRawFd;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Barrier};
 
 use arrayvec::ArrayVec;
@@ -58,6 +58,10 @@ const PCI_CONFIG_BAR_PREFETCHABLE: u32 = 1 << 3;
 /// VfioError
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
 pub enum VfioError {
+    /// Cannot resolve IOMMU group {0:?}: {1}
+    IommuGroup(PathBuf, std::io::Error),
+    /// KVM failed to create KVM_DEV_TYPE_VFIO device: {0}
+    KvmCreateVfioDevice(kvm_ioctls::Error),
     /// Failed to allocate guest address for BAR
     BarAllocation,
     /// Mmap failed: {0:?}
@@ -74,8 +78,6 @@ pub enum VfioError {
     MsixConfig(#[from] InterruptError),
     /// Device does not provide MSIx irq
     NoMsixIrq,
-    /// KVM failed to create KVM_DEV_TYPE_VFIO device: {0}
-    KvmCreateVfioDevice(kvm_ioctls::Error),
     /// BAR{0} MSI-X table at offset {1:#x} size {2:#x} does not fit in region of size {3:#x}
     MsixTableOutOfRange(u8, u64, u64, u64),
     /// BAR{0} sparse mmap area at offset {1:#x} size {2:#x} does not fit in region of size {3:#x}
@@ -1257,6 +1259,17 @@ fn vfio_unmap_bar_mapping(vm: &KvmVm, mapping: &VfioBarMapping) {
     }
 }
 
+/// Returns the sysfs path of the host PCI device
+pub fn vfio_sysfs_path(sbdf: PciSBDF) -> PathBuf {
+    PathBuf::from(format!("/sys/bus/pci/devices/{}", sbdf))
+}
+
+/// Returns the canonical sysfs path of the IOMMU group of the host device
+pub fn vfio_iommu_group(sysfs_path: &Path) -> Result<PathBuf, VfioError> {
+    let path = sysfs_path.join("iommu_group");
+    std::fs::canonicalize(&path).map_err(|err| VfioError::IommuGroup(path, err))
+}
+
 /// This will open a VFIO device, attach its group both to the KVM VFIO device and to the VFIO
 /// container. It will setup MSIx irqs and BAR DMAs.
 fn vfio_init_device(
@@ -1265,17 +1278,11 @@ fn vfio_init_device(
     config: DevicePassthroughConfig,
     sbdf: PciSBDF,
 ) -> Result<VfioDevice, VfioError> {
-    let sysfs_path = format!(
-        "/sys/bus/pci/devices/{:04x}:{:02x}:{:02x}.{:x}",
-        config.sbdf.segment(),
-        config.sbdf.bus(),
-        config.sbdf.device(),
-        config.sbdf.function()
-    );
-    debug!("Opening device at path: {}", sysfs_path);
+    let sysfs_path = vfio_sysfs_path(config.sbdf);
+    debug!("Opening device at path: {sysfs_path:?}");
 
     let device = InternalVfioDevice::new(
-        Path::new(&sysfs_path),
+        &sysfs_path,
         container.clone() as Arc<dyn vfio_ioctls::VfioOps>,
     )?;
     vfio_device_reset_command_reg(&device);

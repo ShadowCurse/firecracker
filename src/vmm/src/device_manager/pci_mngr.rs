@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use event_manager::{MutEventSubscriber, SubscriberOps};
@@ -40,7 +41,7 @@ use crate::seccomp::BpfProgram;
 use crate::snapshot::Persist;
 use crate::vfio::{
     VfioContainer, VfioDevice, VfioError, vfio_create_kvm_vfio_device_and_vfio_container,
-    vfio_dma_map_guest_memory,
+    vfio_dma_map_guest_memory, vfio_iommu_group, vfio_sysfs_path,
 };
 use crate::vmm_config::device_passthrough::DevicePassthroughConfig;
 use crate::vmm_config::machine_config::MAX_PCIE_HOTPLUG_PORTS;
@@ -118,6 +119,8 @@ pub enum PciManagerError {
     DeviceIdDuplicate(String),
     /// Trying to add a device with duplicate SBDF: {0}
     DeviceSBDFDuplicate(PciSBDF),
+    /// Trying to add a device from an already used IOMMU group: {0:?}
+    DeviceIommuGroupDuplicate(PathBuf),
     /// Device with id: {0} not found
     DeviceNotFound(String),
     /// Device '{0}' is not removable because it's not plugged to a PCIe root port
@@ -370,6 +373,7 @@ impl PciDevices {
         config: DevicePassthroughConfig,
         placement: PciPlacement,
     ) -> Result<PciSBDF, PciManagerError> {
+        let iommu_group = vfio_iommu_group(&vfio_sysfs_path(config.sbdf))?;
         for device in self.vfio_devices.iter() {
             let device = device.lock().unwrap();
             if device.config.id == config.id {
@@ -377,6 +381,14 @@ impl PciDevices {
             }
             if device.config.sbdf == config.sbdf {
                 return Err(PciManagerError::DeviceSBDFDuplicate(config.sbdf));
+            }
+
+            // Work around a bug in the upstream vfio-ioctl crate where it detaches the group from
+            // KVM and the container when the first of its devices is dropped, which breaks the
+            // other devices of the group
+            // Can be dropped once the fix is merged: https://github.com/rust-vmm/vfio/pull/181
+            if vfio_iommu_group(&vfio_sysfs_path(device.config.sbdf))? == iommu_group {
+                return Err(PciManagerError::DeviceIommuGroupDuplicate(iommu_group));
             }
         }
 
